@@ -341,7 +341,9 @@ class Session(unittest.TestCase):
             with self.subTest(source=src):
                 s = self._session(src)
                 s.calibrate(PATH[0], H0)
-                rows = self._walk(s)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    rows = self._walk(s)
                 fol = [r for r in rows if r["tool"] == "dog.follow"]
                 self.assertEqual(len(fol), 1)
                 fol = fol[0]
@@ -351,6 +353,7 @@ class Session(unittest.TestCase):
                 samples = [r for r in rows if r["tool"] == "pose.sample"]
                 counts = {x: sum(r["args"]["source"] == x for r in samples) for x in drift.SOURCES}
                 self.assertEqual(fol["state_after"]["samples"], counts)
+                self.assertIn(f"pose samples on this walk sport={counts['sport']} utlidar={counts['utlidar']} seconds=", err.getvalue())
                 for r in samples:
                     self.assertEqual(sorted(r["args"]), ["shift_id", "source", "x", "y", "yaw"])
                     self.assertIsNotNone(r["state_after"]["map"], r)
