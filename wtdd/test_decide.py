@@ -6,7 +6,10 @@ failure is a row with ok=False and is raised, never a canned decision), the CLI'
 ordering law: the local detector's watch.boxes row lands before the decided row.
 
 The scratch ledger is set through WTDD_LEDGER before wtdd.ledger is imported, so the real file is never touched.
-JEV_API_KEY is forced empty here (a real environment or .env value must not turn these into live calls).
+JEV_API_KEY is forced empty here (a real environment or .env value must not turn these into live calls), and so are
+the other keys the module reads: config._load() setdefault()s every <repo>/.env key on the first config.maybe(), so a
+popped key comes back from the file (a threshold tuned in .env would fail these checks); an empty value blocks that
+and reads as unset.
 wtdd/fixtures/stop_state.txt is hand-written prose from the take's first stop (docs/evidence/ledger-take-2026-09-13.jsonl:
 the watch.boxes row said couch, the vision.check row said someone on the couch, a blanket and a cup, and that the
 detector's couch was really a person); the box geometry below is chosen to word that frame as large and tall, it is not
@@ -24,10 +27,8 @@ from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="wtdd-decide-test-")
 os.environ["WTDD_LEDGER"] = str(Path(_TMP) / "ledger.jsonl")
-os.environ["JEV_API_KEY"] = ""            # the stub path; config.maybe() reads an empty value as unset
-os.environ.pop("JEV_LIVE", None)
-os.environ.pop("WTDD_DECIDE_THRESHOLD", None)
-os.environ.pop("WTDD_SHIFT", None)
+for _k in ("JEV_API_KEY", "JEV_MODEL", "JEV_LIVE", "WTDD_DECIDE_THRESHOLD", "WTDD_SHIFT"):
+    os.environ[_k] = ""                   # the stub path and the defaults; config.maybe() reads an empty value as unset
 
 from wtdd import config, decide, ledger  # noqa: E402
 
@@ -131,7 +132,7 @@ class Stub(unittest.TestCase):
 
 class Threshold(unittest.TestCase):
     def tearDown(self):
-        os.environ.pop("WTDD_DECIDE_THRESHOLD", None)
+        os.environ["WTDD_DECIDE_THRESHOLD"] = ""
 
     def test_default_is_point_seven(self):
         self.assertEqual(decide.threshold(), 0.7)
@@ -155,7 +156,7 @@ class Threshold(unittest.TestCase):
 
 class Row(unittest.TestCase):
     def tearDown(self):
-        os.environ.pop("WTDD_SHIFT", None)
+        os.environ["WTDD_SHIFT"] = ""
 
     def test_decided_row_shape(self):
         state = _state()
@@ -190,9 +191,8 @@ class Live(unittest.TestCase):
     an endpoint that refuses the connection: the failure is raised and is a row, never a stub decision."""
 
     def _run(self, **env):
-        e = {**os.environ, "WTDD_LEDGER": str(Path(_TMP) / "cli-ledger.jsonl"), "JEV_API_KEY": "", **env}
-        e.pop("JEV_LIVE", None)
-        e.update({k: v for k, v in env.items()})
+        e = {**os.environ, "WTDD_LEDGER": str(Path(_TMP) / "cli-ledger.jsonl"), "JEV_API_KEY": "", "JEV_LIVE": "",
+             "WTDD_DECIDE_THRESHOLD": "", **env}
         return subprocess.run([PY, "-m", "wtdd.decide", "--state", str(FIXTURE)], capture_output=True, text=True, cwd=ROOT, env=e, timeout=60)
 
     def test_no_key_exits_two_with_a_clear_message(self):
