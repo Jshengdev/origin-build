@@ -1,0 +1,100 @@
+{
+ "note": "the map the scout eval grades against (wtdd/fixtures/evals/make_scout.py): nogo-1 from the scout's z1, confirmed by name; nogo-2 drawn by hand",
+ "zones": [
+  {
+   "name": "nogo-1",
+   "label": "table \u00b7 0.71 \u00b7 scout",
+   "poly": [
+    [
+     404,
+     690
+    ],
+    [
+     494,
+     690
+    ],
+    [
+     494,
+     726
+    ],
+    [
+     404,
+     726
+    ]
+   ],
+   "nogo": true,
+   "source": "scout",
+   "cells": [
+    [
+     2.0,
+     -0.25
+    ],
+    [
+     2.0,
+     -0.2
+    ],
+    [
+     2.0,
+     -0.15
+    ],
+    [
+     2.0,
+     -0.1
+    ],
+    [
+     2.0,
+     -0.05
+    ],
+    [
+     2.0,
+     0.0
+    ],
+    [
+     2.0,
+     0.05
+    ],
+    [
+     2.0,
+     0.1
+    ],
+    [
+     2.0,
+     0.15
+    ],
+    [
+     2.0,
+     0.2
+    ],
+    [
+     2.0,
+     0.25
+    ]
+   ],
+   "proposal": "z1",
+   "by": "Sam Stand-in"
+  },
+  {
+   "name": "nogo-2",
+   "label": "no-go 2",
+   "poly": [
+    [
+     450,
+     1040
+    ],
+    [
+     510,
+     1040
+    ],
+    [
+     510,
+     1250
+    ],
+    [
+     450,
+     1250
+    ]
+   ],
+   "nogo": true
+  }
+ ]
+}

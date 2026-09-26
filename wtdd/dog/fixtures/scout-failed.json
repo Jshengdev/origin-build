@@ -1,0 +1,14 @@
+{
+ "n": 0,
+ "proposals": [],
+ "failed": [
+  {
+   "object_id": "o1",
+   "kind": "chair",
+   "error": "RuntimeError: jev 401: (fixture) no auth credentials found",
+   "ts": "2026-09-26T03:00:00"
+  }
+ ],
+ "source": "wtdd/dog/fixtures/scout-failed.json",
+ "why": "no proposal: 1 model call failed"
+}
