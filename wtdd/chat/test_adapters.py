@@ -27,6 +27,8 @@ Fixtures. wtdd/chat/fixtures/sms-thread.jsonl: three Twilio Message resources (t
 read-back sent, the inbound reply) in the documented 2010-04-01 shape, hand-written from the docs, UNVERIFIED against
 a live account. wtdd/chat/fixtures/sms-shift.jsonl: the ledger rows one stub flag round writes, every row labeled."""
 from __future__ import annotations
+import contextlib
+import io
 import json
 import os
 import re
@@ -389,6 +391,17 @@ class Replies(Offline):
         self.assertFalse(self.l.allowed({"rowid": 1, "guid": "x", "text": "x", "is_from_me": 1, "sender": "", "ts_utc": "", "attachments": [], "chat": SMS}))
         self.assertIsNotNone(m)
 
+    def test_two_replies_in_one_second_both_reach_the_listener_with_a_warn(self):
+        when = "Sun, 27 Sep 2026 12:18:22 +0000"
+        self.a.receive(HANDLE, "on it", when)
+        self.a.receive(HANDLE, "wait its a tarp", when)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            got = self.a.replies_since(SMS, 0)
+        self.assertEqual([m["text"] for m in got], ["on it", "wait its a tarp"])   # both handed out, oldest first
+        self.assertEqual({m["rowid"] for m in got}, {1790511502})                  # one rowid (seconds): memory.db keeps one
+        self.assertIn("WARN same-second sms replies", err.getvalue())             # said, never silent
+
     def test_verdict_round_trip_through_the_stub(self):
         l = L.Listener(GROUP, cli.post, listen_s=60)   # the real poster: "ok, standing down" goes through the stub adapter
         l.marks[SMS] = 0
@@ -491,6 +504,23 @@ class Live(unittest.TestCase):
             self.assertIs(a.stub, False)
             self.assertEqual(_adapters().label(SMS), {})
 
+    def test_one_twilio_key_set_means_all_three_and_the_post_stops_at_the_gate(self):
+        with self.assertRaises(RuntimeError) as cm:
+            _sms().Sms(self.SID, self.TOKEN, None)
+        self.assertIn("TWILIO_FROM", str(cm.exception))
+        with mock.patch.dict(os.environ, {"TWILIO_ACCOUNT_SID": self.SID}), \
+             mock.patch.object(requests, "post", side_effect=_no_http), mock.patch.object(requests, "get", side_effect=_no_http):
+            _sms().reset()
+            with self.assertRaises(RuntimeError) as cm:
+                _adapters().for_target(SMS)                  # never the stub: a half-set live channel is a config failure
+            self.assertIn("TWILIO_AUTH_TOKEN", str(cm.exception))
+            with self.assertRaises(RuntimeError):
+                cli.post(SMS, "alarm:partial-keys", "escalate", "who dis?!")
+        gate = ledger.rows()[-1]                             # the failure is the gate's own row, before any claim
+        self.assertEqual((gate["tool"], gate["ok"], gate["app"], gate["args"]), ("chat.gate", False, "sms", {"guid": SMS}))
+        self.assertIn("TWILIO_AUTH_TOKEN", gate["response_or_error"])
+        self.assertEqual([r for r in ledger.rows() if r["tool"] == "chat.claim" and r["args"].get("trigger") == "alarm:partial-keys"], [])
+
     def test_post_text_posts_to_twilio_and_reads_the_status_back(self):
         a = self._live()
         with mock.patch.object(requests, "post", return_value=_Resp(201, self.thread[0])) as p, \
@@ -539,6 +569,9 @@ class Live(unittest.TestCase):
         self.assertEqual(g.call_args.args[0], self.URL + ".json")
         params = g.call_args.kwargs["params"]
         self.assertEqual((params["From"], params["To"]), (HANDLE, FROM))
+        self.assertEqual(params["DateSent>"], "2026-09-27")   # twilio-python's key for date_sent_after, the date as the value
+        self.assertIn("DateSent%3E=2026-09-27", requests.Request("GET", self.URL + ".json", params=params).prepare().url)
+        # ^ on the wire: DateSent>=2026-09-27 once decoded, the doc's ">=YYYY-MM-DD" (on and after); UNVERIFIED live
         self.assertEqual([m["guid"] for m in got], ["SM00000000000000000000000000000002"])   # the dog's own outbound row is not a reply
         self.assertEqual(got[0]["ts_utc"], "2026-09-27 12:18:22")
         with mock.patch.object(requests, "get", return_value=_Resp(200, listing)):
