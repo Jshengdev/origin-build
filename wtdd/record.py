@@ -22,9 +22,10 @@ shift's opener exist, the window closes at whichever comes first, so a shift sig
 takes the next one's looks.
 
 A stop is a dog.look row plus the rows up to the next look (so a look pressed by hand shows too); its map index is
-read from its say:<wake>:<n> post, and a correction joins it when its args.corrects.at is that post's ledger ts. A
-refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every other ok=false row
-is a failure. Both are listed, never hidden.
+read from its say:<wake>:<n> post, its model call is the llm.generate of agent watch (dog_say's; a chat turn after the
+round is agent central and never lands on the last stop), and a correction joins it when its args.corrects.at is that
+post's ledger ts. A refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every
+other ok=false row is a failure. Both are listed, never hidden.
 
 Honest edges. A shift with no chat.wake (a round started from the page) opens at the nearest earlier unstamped wake
 when no stamped row lies between, else at its first stamped row: on a ledger that still holds pre-03 rows, the first
@@ -119,7 +120,7 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         elif r["tool"] == "vision.check":
             cur.update(sentence=r.get("response_or_error"), person=after.get("person"), out_of_place=after.get("out_of_place"),
                        detector_check=after.get("detector_check"))
-        elif r["tool"] == "llm.generate":
+        elif r["tool"] == "llm.generate" and r.get("agent") == "watch":   # dog_say's call; a chat turn's is agent central
             cur.update(model=after.get("model"), model_ms=r.get("latency_ms"), tokens=(after.get("usage") or {}).get("total_tokens"))
         elif r["tool"] == "chat.post" and str(a.get("trigger") or "").startswith("say:"):
             cur.update(index=_index(a["trigger"]), posted={"rowid": after.get("rowid"), "ts": after.get("ts"), "file": a.get("file")},
