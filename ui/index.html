@@ -63,6 +63,11 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 20 · mode-vocabulary */
+  .modechip { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 3px 10px; border-radius: var(--r-pill); background: var(--card-bg); box-shadow: 0 0 0 1px var(--card-edge); margin: 0 0 var(--gap-group); }
+  .modechip.warn { background: #fff3c4; box-shadow: 0 0 0 1px var(--warn); } .modechip.bad { color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+  .modechip.line { display: block; border-radius: var(--r-card); padding: 0; background: none; box-shadow: none; opacity: .7; margin: 0 0 var(--gap-in); }
+  .modechip.line.warn, .modechip.line.bad { opacity: 1; padding: 4px 8px; } .modechip.line.warn { background: #fff3c4; }
 </style>
 </head>
 <body>
@@ -196,6 +201,7 @@ function App() {
 
   return html`<div class="wrap">
     <div class="top"><h1>what the dog doin <span class="mono">· ${admin ? "admin" : "demo"}</span></h1><a href=${admin ? "#" : "#admin"} class="mono" style=${{ color: "inherit" }}>${admin ? "demo view" : "admin view"}</a></div>
+    <${ModeVocab} dog=${dog}/>
     <div class="status-row">
       ${(() => {
         const age = dog?.state?.age_ms;
@@ -302,6 +308,7 @@ function App() {
       <div>
         <div class="panel">
           <h2>The eye · what it sees</h2>
+          <${ModeVocab} dog=${dog} line/>
           ${live && html`<img src=${live} onLoad=${() => next(150)} onError=${() => next(2000)} style=${{ width: "100%", borderRadius: 2, display: "block", marginBottom: "var(--gap-group)" }}/>`}
           ${(() => {
             const fresh = watch && watch.age_ms != null && watch.age_ms < 3000;
@@ -365,6 +372,18 @@ function App() {
     </div>
   </div>`;
 }
+// 20 · mode-vocabulary · start
+// The mode and the words the eye is told to name things from (WTDD_MODE; ui/map.json `vocab`; wtdd/vocab.py), read off
+// App's own GET /dog/state poll: mode, vocab, vocab_error as the API serves them (the page computes nothing). A list
+// missing on the map is the API's vocab_error in yellow; no mode on /dog/state is red. The chip's title lists the words;
+// `line` is the one vocab line in the eye's panel.
+function ModeVocab({ dog, line }) {
+  const cls = k => `modechip${k ? " " + k : ""}${line ? " line" : ""}`;
+  if (!dog?.mode) return html`<div class=${cls("bad")}>mode unknown: /dog/state not answering</div>`;
+  if (dog.vocab_error) return html`<div class=${cls("warn")} title=${dog.vocab_error}>${line ? dog.vocab_error : `mode: ${dog.mode} · ${dog.vocab_error}`}</div>`;
+  return html`<div class=${cls("")} title=${dog.vocab.join(", ")}>${line ? `vocab · ${dog.vocab.join(", ")}` : `mode · ${dog.mode}`}</div>`;
+}
+// 20 · mode-vocabulary · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
