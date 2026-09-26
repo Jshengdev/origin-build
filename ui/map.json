@@ -556,5 +556,37 @@
       "say": true,
       "ask": false
     }
+  },
+  "vocab": {
+    "house": [
+      "person",
+      "cup",
+      "sock",
+      "clothes",
+      "backpack",
+      "bag",
+      "chair",
+      "couch",
+      "laptop",
+      "bottle",
+      "blanket",
+      "trash"
+    ],
+    "site": [
+      "person",
+      "traffic cone",
+      "ladder",
+      "pallet",
+      "cable",
+      "spill",
+      "open cover",
+      "trench",
+      "fire extinguisher",
+      "hard hat",
+      "shovel",
+      "hose",
+      "barrier tape",
+      "puddle"
+    ]
   }
 }
