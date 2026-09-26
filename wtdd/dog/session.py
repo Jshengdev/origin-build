@@ -33,6 +33,8 @@ un-receipted newest frame's one shared encode (Body.jpeg_cached) behind GET /dog
 GET /dog/stream.mjpg, the remote's live view at the rate the dog delivers: one part per new frame number, ended when the
 newest frame is older than FRAME_STALE_S. state() carries video (Body.video: fps, age, bytes, size, sha, stale). lidar(on)
 is the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+WTDD_VIDEO_STUB=<fps> (DEMO_CACHE, wtdd/dog/video_stub.py) installs a body with no dog that cycles one synthetic frame, for
+the dry screenshots only; WTDD_VIDEO_STUB_FREEZE_S=<s> stops it after s seconds (the stall). Never set on a live run.
 """
 from __future__ import annotations
 import asyncio
@@ -43,6 +45,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .. import config
 from ..ledger import log, step
 from . import body, lidar, nav
 from .body import MOVE_HZ, Body
@@ -92,6 +95,7 @@ class DogSession:
         self._follower: asyncio.Task | None = None
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
+        if config.maybe("WTDD_VIDEO_STUB"): from . import video_stub; video_stub.install(self)   # DEMO_CACHE: a synthetic frame at WTDD_VIDEO_STUB fps and no dog, for the dry screenshots; live: leave the key unset
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
