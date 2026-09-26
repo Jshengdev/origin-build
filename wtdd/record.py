@@ -24,8 +24,11 @@ takes the next one's looks.
 A stop is a dog.look row plus the rows up to the next look (so a look pressed by hand shows too); its map index is
 read from its say:<wake>:<n> post, its model call is the llm.generate of agent watch (dog_say's; a chat turn after the
 round is agent central and never lands on the last stop), and a correction joins it when its args.corrects.at is that
-post's ledger ts. A refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every
-other ok=false row is a failure. Both are listed, never hidden.
+post's ledger ts. A say post with no dog.look of its own before it (the stop before already has its post, or there is
+no stop yet) is a look that never reached the dog (README: "the dog drops or is unreachable ... the look posts the
+error"; the API is down, so no dog.look row exists): it opens its own stop, ok false, kind none, its error the post's
+text, never joined to the stop before. A refusal is an ok=false row whose error is a PermissionError or whose tool
+ends in .refused; every other ok=false row is a failure. Both are listed, never hidden.
 
 Honest edges. A shift with no chat.wake (a round started from the page) opens at the nearest earlier unstamped wake
 when no stamped row lies between, else at its first stamped row: on a ledger that still holds pre-03 rows, the first
@@ -105,24 +108,32 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
                    for r in members if ok(r, "chat.correction") for a in [r.get("args") or {}]]
     stops: list[dict] = []
     cur = None
+
+    def stop(r: dict, **kv: Any) -> dict:
+        stops.append({"n": len(stops) + 1, "index": None, "ts": r["ts"], "kind": None, "ok": False, "fired": None, "pitch_deg": None, "error": None,
+                      "classes": None, "sentence": None, "person": None, "out_of_place": None, "detector_check": None,
+                      "model": None, "model_ms": None, "tokens": None, "posted": None, "pinged": False, "correction": None, **kv})
+        return stops[-1]
+
     for r in members:
         a, after = r.get("args") or {}, r.get("state_after") or {}
+        say = ok(r, "chat.post") and str(a.get("trigger") or "").startswith("say:")
         if r.get("tool") == "dog.look":
-            cur = {"n": len(stops) + 1, "index": None, "ts": r["ts"], "kind": a.get("kind"), "ok": bool(r.get("ok")),
-                   "fired": after.get("fired"), "pitch_deg": after.get("pitch_deg"), "error": None if r.get("ok") else r.get("response_or_error"),
-                   "classes": None, "sentence": None, "person": None, "out_of_place": None, "detector_check": None,
-                   "model": None, "model_ms": None, "tokens": None, "posted": None, "pinged": False, "correction": None}
-            stops.append(cur)
-        elif cur is None or not r.get("ok"):
+            cur = stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"), pitch_deg=after.get("pitch_deg"),
+                       error=None if r.get("ok") else r.get("response_or_error"))
             continue
-        elif r["tool"] == "watch.boxes":
+        if say and (cur is None or cur["posted"] is not None):   # a look that never reached the dog: no dog.look row, only its post
+            cur = stop(r, error=f"no dog.look row before this post: {a.get('text')}")
+        if cur is None or not r.get("ok"):
+            continue
+        if r["tool"] == "watch.boxes":
             cur["classes"] = after.get("classes")
         elif r["tool"] == "vision.check":
             cur.update(sentence=r.get("response_or_error"), person=after.get("person"), out_of_place=after.get("out_of_place"),
                        detector_check=after.get("detector_check"))
         elif r["tool"] == "llm.generate" and r.get("agent") == "watch":   # dog_say's call; a chat turn's is agent central
             cur.update(model=after.get("model"), model_ms=r.get("latency_ms"), tokens=(after.get("usage") or {}).get("total_tokens"))
-        elif r["tool"] == "chat.post" and str(a.get("trigger") or "").startswith("say:"):
+        elif say:
             cur.update(index=_index(a["trigger"]), posted={"rowid": after.get("rowid"), "ts": after.get("ts"), "file": a.get("file")},
                        correction=next((c["text"] for c in corrections if c["at"] == r["ts"]), None))
         elif r["tool"] == "chat.post" and a.get("kind") == "escalate":
