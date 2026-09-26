@@ -224,7 +224,8 @@ class DogSession:
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if self.body is None:
-            return {"on": False, "n": 0, "errors": 0, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
+            return {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "grid_frames": g.frames if (g := self.grid) is not None else 0,
+                    "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
         lp = self.body.lidar_points()
         out = {k: lp[k] for k in ("on", "n", "errors", "cb_errors", "age_ms", "frame", "utlidar_pose")}
         out["grid_frames"] = g.frames if (g := self.grid) is not None else 0
