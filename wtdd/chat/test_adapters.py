@@ -114,6 +114,17 @@ class _Resp:
         return json.dumps(self._body)
 
 
+class _Html(_Resp):
+    """A non-JSON body (an edge's 502 page, a captive portal): json() raises as requests' Response.json() does."""
+
+    def json(self) -> dict:
+        raise requests.exceptions.JSONDecodeError("Expecting value", self._body, 0)
+
+    @property
+    def text(self) -> str:
+        return self._body
+
+
 class Offline(unittest.TestCase):
     """Nothing in this module may reach osascript or the network; the stub path is asserted against both."""
 
@@ -561,6 +572,16 @@ class Live(unittest.TestCase):
                 a.post_text(SMS, "who dis?!")
         self.assertIn("21608", str(cm.exception))
         self.assertIn("unverified", str(cm.exception))
+
+    def test_a_non_json_body_is_the_error_with_its_status_and_body_and_nothing_is_read_back(self):
+        a = self._live()
+        with mock.patch.object(requests, "post", return_value=_Html(502, "<html>Bad Gateway</html>")) as p, \
+             mock.patch.object(requests, "get", side_effect=_no_http):
+            with self.assertRaises(RuntimeError) as cm:
+                a.post_text(SMS, "who dis?!")
+        p.assert_called_once()                                 # never retried
+        self.assertIn("502", str(cm.exception))                # the receipt says what came back, not a JSONDecodeError
+        self.assertIn("Bad Gateway", str(cm.exception))
 
     def test_replies_since_lists_inbound_after_the_mark(self):
         a = self._live()
