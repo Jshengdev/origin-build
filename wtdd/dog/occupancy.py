@@ -96,7 +96,8 @@ class Grid:
 
     def update(self, points, z_min: float | None = None, z_max: float | None = None) -> int:
         """(N, 3) absolute metres (or (N, 2) already in the band) -> +1 per distinct cell; returns the cells touched.
-        Every call is one frame. 0 cells in the band is a WARN with the counts, never hidden."""
+        Every call the grid takes is one frame (an empty one too: 0 cells in the band is a WARN with the counts, never
+        hidden); a call refused past MAX_SIDE (ValueError) is not counted and changes nothing."""
         p = np.asarray(points, dtype=np.float64)
         if p.ndim != 2 or p.shape[1] not in (2, 3):
             raise ValueError(f"points must be (N, 3) or (N, 2) metres, got shape {p.shape}")
@@ -104,14 +105,15 @@ class Grid:
             lo = self.z_band[0] if z_min is None else z_min
             hi = self.z_band[1] if z_max is None else z_max
             p = p[(p[:, 2] >= lo) & (p[:, 2] <= hi)]
-        self.frames += 1
         if len(p) == 0:
+            self.frames += 1
             log("occupancy", "WARN frame with 0 cells in the band", frames=self.frames, z_band=list(self.z_band), grid=self.shape)
             return 0
         ix, iy = self._index(p)
         cells = np.unique(np.column_stack([ix, iy]), axis=0)
         sx, sy = self._grow(int(cells[:, 0].min()), int(cells[:, 0].max()), int(cells[:, 1].min()), int(cells[:, 1].max()))
         self.counts[cells[:, 1] + sy, cells[:, 0] + sx] += 1
+        self.frames += 1   # after _grow: a frame refused past MAX_SIDE is not one the grid took
         return int(len(cells))
 
     def update_frame(self, d: dict) -> int:
