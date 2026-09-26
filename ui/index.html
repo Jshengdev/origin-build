@@ -70,6 +70,13 @@
   svg.cam rect.box { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 2; vector-effect: non-scaling-stroke; }
   svg.cam text { font: 600 12px var(--mono, monospace); fill: var(--live, #0b0dc4); paint-order: stroke; stroke: #fff; stroke-width: 3px; }
   /* 09 · fixed-cam · end */
+  /* 23 · camera-placement · start */
+  .camglyph { pointer-events: none; }
+  .camglyph rect { fill: #fff; stroke: var(--live, #0b0dc4); stroke-width: 3; } .camglyph .lens { fill: var(--live, #0b0dc4); }
+  .camglyph.nozone rect { fill: #fff4c2; stroke: #d4a200; } .camglyph.nozone .lens { fill: #d4a200; }
+  .camglyph.nozone text { fill: #b58900; } .camwarn { color: #b58900; opacity: 1; }
+  .camglyph.unsaved rect { stroke-dasharray: 5 4; }
+  /* 23 · camera-placement · end */
 </style>
 </head>
 <body>
@@ -122,7 +129,7 @@ function App() {
   const run = async (name, args) => { setBusy(name); const out = await call(name, args); setLast(out); setBusy(null); if (name === "lights_status" && out.ok) setStatus(out.result); return out; };
   const toMap = e => { const svg = svgRef.current, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse()); return [Math.round(p.x), Math.round(p.y)]; };
   const withRooms = m => ({ ...m, lights: (m.lights || []).map(L => ({ ...L, room: roomOf(L.kind === "line" ? [(L.pts[0][0] + L.pts[1][0]) / 2, (L.pts[0][1] + L.pts[1][1]) / 2] : L.pts[0], m.rooms) })) });
-  const saveMap = async () => { const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays
+  const saveMap = async () => { const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, ...(r.cameras ? { cameras: r.cameras } : {}), _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays · 23 · camera-placement: the saved cameras carry the API's zones
   const setEnt = (k, v) => setMap({ ...map, entity: { ...map.entity, [k]: v } });
 
   // ---------- the dog: hold-to-drive (W A S D, Q E to turn) and the looks. Velocities refresh every 200 ms while a key
@@ -156,7 +163,7 @@ function App() {
     if (!map || playing.current || map.path.length < 2) return;
     playing.current = true;
     const m = withRooms(map); const r = await (await putMap(m)).json(); if (!r.ok) { setLast({ ...r, tool: "save map" }); playing.current = false; return; }
-    setMap({ ...m, _version: r._version });
+    setMap({ ...m, ...(r.cameras ? { cameras: r.cameras } : {}), _version: r._version });   // 23 · camera-placement
     const source = dog?.calibrated ? "dog" : "entity";   // the real dog drives the route when it knows where it is; else the simulated entity
     const out = await call("walk_path", { source, avoid }); setLast(out);
     playing.current = false;
@@ -175,8 +182,10 @@ function App() {
     if (mode === "here") { setMode(null); post("/dog/calibrate", { p, heading_deg: dog?.map?.heading_deg ?? 0 }).then(r => r.json()).then(setLast); }
     if (mode === "dot" && placing) placeLight("dot", [p]);
     if (mode === "line" && placing) { if (!pending) setPending(p); else placeLight("line", [pending, p]); }
+    if (mode === "camera" && placing) placeCamera(p);   // 23 · camera-placement
   };
   const placeLight = (kind, pts) => { setMap({ ...map, lights: [...(map.lights || []).filter(l => l.id !== placing.id), { ...placing, kind, pts }] }); setPending(null); setPlacing(null); setMode(null); };
+  const placeCamera = p => { setMap({ ...map, cameras: (map.cameras || []).map(c => c.id === placing.id ? { ...c, pt: p, zone: undefined } : c) }); setPlacing(null); setMode(null); };   // 23 · camera-placement: zone undefined = unsaved; the API recomputes it on save
   const onDown = (kind, li, pi) => e => { e.stopPropagation(); drag.current = { kind, li, pi }; moved.current = false; e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId); };
   const onMove = e => {
     if (!drag.current) return;
@@ -268,6 +277,7 @@ function App() {
                 <circle class="lamp" cx=${x} cy=${y} r="14" fill=${lv ? "#ffe08a" : "#fff"} onPointerDown=${onDown("light", li, 0)} onClick=${e => { e.stopPropagation(); identify(L); }} onDoubleClick=${() => relabel(L)}/>
                 <text class="lbl" x=${x} y=${y - 22} text-anchor="middle">${L.label}${lv ? ` · ${lv}%` : ""}</text></g>`;
             })}
+            <${CamGlyphs} cameras=${map.cameras}/>
             ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
@@ -331,7 +341,7 @@ function App() {
                 </div></div>` : html`<div class="hint">no look yet · python -m wtdd dog_say</div>`}`;
           })()}
         </div>
-        <${Cams} cameras=${map?.cameras}/>
+        <${Cams} cameras=${map?.cameras} place=${c => startPlace(c, "camera")} placing=${mode === "camera" ? placing : null}/>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
@@ -378,13 +388,14 @@ function App() {
 // The fixed cameras (python -m wtdd.cam on a laptop -> POST /cam/<id>/frame): each one's newest frame with the detector's
 // boxes over it. GET /cam every second; the rectangles are the detector's xyxy and the words its class and conf, drawn
 // as served (the page computes nothing). Stale after 3 s, the detector card's rule; a failed detection shows FAILED.
-function Cams({ cameras }) {
+function Cams({ cameras, place, placing }) {
   const [cams, setCams] = useState(null);
   const [err, setErr] = useState(null);
   const [size, setSize] = useState({});   // camera id -> [naturalWidth, naturalHeight] of its frame: the boxes' pixel space
   useEffect(() => { const f = () => fetch(`${API}/cam`).then(r => r.json()).then(c => { setCams(c); setErr(null); }).catch(e => setErr(String(e))); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
   const ids = Object.keys(cams || {});
   return html`<div class="panel"><h2>Fixed cameras · one more eye</h2>
+    ${place && html`<${CamPlace} cameras=${cameras} place=${place} placing=${placing}/>`}
     ${err ? html`<div class="mono bad">GET /cam FAILED · ${err}</div>` : !cams ? html`<div class="mono">…</div>`
       : !ids.length ? html`<div class="hint">no camera yet · python -m wtdd.cam --server http://127.0.0.1:7788 --cam lap1</div>`
       : ids.map(id => {
@@ -399,12 +410,31 @@ function Cams({ cameras }) {
               ${(c.boxes || []).map((b, i) => html`<g key=${i}><rect class="box" x=${b.xyxy[0]} y=${b.xyxy[1]} width=${b.xyxy[2] - b.xyxy[0]} height=${b.xyxy[3] - b.xyxy[1]}/><text x=${b.xyxy[0] + 3} y=${b.xyxy[1] + 13}>${b.name} ${b.conf}</text></g>`)}
             </svg>`}
           </div>
-          <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${where ? `${where.label} · zone ${where.zone}` : "not on the map (ui/map.json cameras)"} · ${c.model} · ${c.shift_id}</div>
+          <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${where ? `${where.label} · ${where.zone ? `zone ${where.zone}` : "no zone"}` : "not on the map (ui/map.json cameras)"} · ${c.model} · ${c.shift_id}</div>
         </div>`;
       })}
   </div>`;
 }
 // 09 · fixed-cam · end
+// 23 · camera-placement · start
+// A fixed camera is placed on the map like a lamp: `place camera` enters the page's placing mode, the next map click is
+// its pt, and save sends cameras[] through POST /map, which recomputes the zone (wtdd/cam validate_cameras). The page
+// computes no zone: until the API answers, a moved camera reads "unsaved". No zone is a saved null, drawn in yellow.
+const camWhere = c => c.zone === undefined ? "placed · save to read its zone" : c.zone === null ? "no zone · the roster will refuse" : `zone ${c.zone}`;
+function CamPlace({ cameras, place, placing }) {
+  if (!(cameras || []).length) return html`<div class="hint">no camera on the map (ui/map.json cameras)</div>`;
+  return html`<div>${cameras.map(c => html`<div class="row tight" key=${c.id}><span class="name">${c.id}</span>
+    <span class=${"mono" + (c.zone === null ? " camwarn" : "")}>${c.pt ? `${c.pt[0]}, ${c.pt[1]} · ` : ""}${camWhere(c)}</span>
+    <button class=${"small" + (placing?.id === c.id ? " on" : "")} onClick=${() => place(c)}>${placing?.id === c.id ? "click the map where it sits" : "place camera"}</button></div>`)}</div>`;
+}
+function CamGlyphs({ cameras }) {
+  return html`<g>${(cameras || []).filter(c => Array.isArray(c.pt)).map(c => { const [x, y] = c.pt;
+    return html`<g key=${c.id} class=${"camglyph" + (c.zone === null ? " nozone" : c.zone === undefined ? " unsaved" : "")}>
+      <rect x=${x - 14} y=${y - 10} width="28" height="20" rx="5"/>
+      <path class="lens" d=${`M ${x - 5} ${y} a 5 5 0 1 0 10 0 a 5 5 0 1 0 -10 0`}/>
+      <text class="lbl" x=${x} y=${y + 34} text-anchor="middle">${c.id} · ${c.zone ? `zone ${c.zone}` : c.zone === null ? "no zone" : "unsaved"}</text></g>`; })}</g>`;
+}
+// 23 · camera-placement · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
