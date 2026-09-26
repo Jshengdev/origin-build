@@ -40,7 +40,9 @@ that stop drops the disputed label; no correction is a fail (the failure shot is
 llm.generate or decided row inside a stop before the stop's detector row (watch.boxes, watch.detect, cam.detect).
 Without --ledger the four grade wtdd/fixtures/evals/<s>.jsonl (DEMO_CACHE, every row cached true, detail "dry: ...");
 with --ledger PATH [--shift ID] they grade that ledger's rows from the first to the last carrying args.shift_id == ID.
-They are not in "all": they grade a ledger and drive nothing.
+They are not in "all": they grade a ledger and drive nothing. --write refuses dry trials (SystemExit; README.md and
+evals.json untouched): the README's table is device grades only. evals.json is gitignored, so on a fresh clone merge()
+seeds from docs/evidence/trials-2026-09-13.json (same shape) and --write on the dog keeps the measured rows.
 UNVERIFIED: no live ledger has been graded by the four; 02's decided and 04's route.refused shapes come from their
 branches (not on this base), and 03's from its code and fixtures, never from a run on the dog."""
 from __future__ import annotations
@@ -57,6 +59,7 @@ from .ledger import log
 
 README = config.ROOT / "README.md"
 EVALS = config.ROOT / "evals.json"   # every scenario's newest rows (the remote reads it at GET /evals)
+SNAPSHOT = config.ROOT / "docs" / "evidence" / "trials-2026-09-13.json"   # the measured trials the README shows; merge()'s seed without evals.json
 START, END = "<!-- trials:start -->", "<!-- trials:end -->"
 ORDER = ["twice", "walk", "look", "person", "follow", "decide", "escalate", "refuse", "correct"]   # merge() sorts on it
 API = "http://127.0.0.1:7788"
@@ -502,8 +505,12 @@ def table(res: list[dict[str, Any]]) -> str:
 
 
 def merge(res: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """evals.json keeps every scenario's newest trials: this run's scenarios replace their old rows, the rest stay."""
-    old = json.loads(EVALS.read_text())["rows"] if EVALS.exists() else []
+    """evals.json keeps every scenario's newest trials: this run's scenarios replace their old rows, the rest stay.
+    evals.json is gitignored and absent on a fresh clone; the snapshot is the same shape and holds the measured rows the
+    README shows, so the first --write there keeps them instead of erasing them."""
+    src = EVALS if EVALS.exists() else SNAPSHOT
+    old = json.loads(src.read_text())["rows"] if src.exists() else []
+    log("evals", f"{'WARN ' if not old else ''}merge: {len(old)} old row(s) from {src.name}", new=len(res))
     done = {r["scenario"] for r in res}
     rows = [r for r in old if r["scenario"] not in done] + res
     rows.sort(key=lambda r: (ORDER.index(r["scenario"]), r["trial"]))
@@ -555,7 +562,10 @@ def main(argv: list[str] | None = None) -> int:
         r["ran"] = ran
     print(table(res))
     if a.write:
-        write_readme(table(merge(res)))
+        if any(r.get("dry") for r in res):
+            raise SystemExit("--write refuses dry (fixture) trials: the README's trials table is device grades only; "
+                             "run with --ledger ledger.jsonl --shift <id>")
+        write_readme(table(merge([{k: v for k, v in r.items() if k != "dry"} for r in res])))   # evals.json keeps the 7-key row
     return 0 if all(r["grade"] == "pass" for r in res) else 1
 
 
