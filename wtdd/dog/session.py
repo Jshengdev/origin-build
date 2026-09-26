@@ -20,6 +20,11 @@ replay there, record(False) returns the thinned trace as {path, stops, actions} 
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
 row; a failed or cancelled follow says so in state().follow.error.
 
+Two poses (wtdd/dog/drift.py): the sport odometry above and the LiDAR odometry rt/utlidar/robot_pose. A drag ties each
+source that has a pose (cals); env WTDD_POSE_SOURCE (sport | utlidar, absent = sport) picks the one the follower, the
+drag's requirement and "map" use; every follow writes pose.sample rows for both every POSE_SAMPLE_S, so
+`python -m wtdd.dog.drift --ledger ledger.jsonl` can say which drifted less. self.cal stays the sport tie (lidar()).
+
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
   tilt:  BalanceStand, Pose on, Euler y=+0.3 (nose down, +15 deg at 0.7 s): frame look-down.jpg (the floor) at 0.7 s,
@@ -41,8 +46,8 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from ..ledger import log, step
-from . import lidar, nav
+from ..ledger import append, log, step
+from . import drift, lidar, nav
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -57,6 +62,7 @@ WP_TIMEOUT_S = 30.0                           # a waypoint not reached in this l
 REC_HZ, REC_MIN_PX, REC_STEP_PX = 5.0, 10, 45   # route recording: sample rate, min move per sample, waypoint spacing (about 0.4 m)
 START_PX = 90                                 # a dog this close to the path's first point replays from the start (a loop's end is also its start)
 STOP_TIMEOUT_S = 180.0                        # a stop without resume for this long fails the follow
+POSE_SAMPLE_S = 1.0                           # 05a: one pose.sample row per source this often while following (drift.py)
 
 
 class DogSession:
@@ -80,11 +86,14 @@ class DogSession:
         self.vel_t = 0.0
         self.moving = False
         self._driver: asyncio.Task | None = None
-        self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.cal: dict[str, Any] | None = None       # the SPORT odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.cals: dict[str, dict] = {}              # 05a: one tie per pose source (drift.SOURCES); the selected one steers
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
-            self.cal = json.loads(CAL_FILE.read_text())
+            data = json.loads(CAL_FILE.read_text())
+            self.cals = data.get("cals") or {"sport": {k: data[k] for k in ("odom", "map", "heading")}}   # a pre-05a file is the sport tie
+            self.cal = {**self.cals["sport"], "at": data.get("at")} if "sport" in self.cals else None
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
-            log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=self.cal.get("map"), at=self.cal.get("at"))
+            log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=data.get("map"), at=data.get("at"), sources=sorted(self.cals))
         self.follow_state: dict[str, Any] = {}       # the follower's live status (GET /dog/state .follow)
         self._follower: asyncio.Task | None = None
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
@@ -130,8 +139,10 @@ class DogSession:
 
     def state(self) -> dict[str, Any]:
         st = self.body.state() if self.body else None
+        source = drift.selected_source()
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
-                "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
+                "map": self.map_pose(st, source), "calibrated": self.cals.get(source) is not None, "follow": self.follow_state,
+                "pose_source": source, "poses": {s: self.map_pose(st, s) for s in drift.SOURCES},
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
@@ -227,28 +238,59 @@ class DogSession:
         return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, st["position"], st["rpy"][2])}
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
-    def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        st = st if st is not None else (self.body.state() if self.body else None)
-        if not self.cal or not st or not st.get("position") or not st.get("rpy"):
+    @staticmethod
+    def _raw_pose(source: str, st: dict[str, Any] | None) -> tuple[float, float, float] | None:
+        """(x, y, yaw) of one pose source in its own odometry frame, None when it has none now. utlidar comes from
+        Body.state()["utpose"]; one older than STALE_MS is none (a silent topic must stop the follower, not steer it)."""
+        if not st:
             return None
-        px, py, h = nav.to_map(self.cal, st["position"], st["rpy"][2])
+        if source == "sport":
+            pos, rpy = st.get("position"), st.get("rpy")
+            return (float(pos[0]), float(pos[1]), float(rpy[2])) if pos and rpy else None
+        if source == "utlidar":
+            ut = st.get("utpose")
+            return (ut["x"], ut["y"], ut["yaw"]) if ut and ut["age_ms"] <= STALE_MS else None
+        raise ValueError(f"pose source must be one of {drift.SOURCES}, got {source!r}")
+
+    def map_pose(self, st: dict[str, Any] | None = None, source: str | None = None) -> dict[str, Any] | None:
+        """Where `source` (default: WTDD_POSE_SOURCE) puts the dog on the map through its own tie; None without either."""
+        source = source or drift.selected_source()
+        st = st if st is not None else (self.body.state() if self.body else None)
+        cal, raw = self.cals.get(source), self._raw_pose(source, st)
+        if not cal or raw is None:
+            return None
+        px, py, h = nav.to_map(cal, raw[:2], raw[2])
         return {"p": [round(px), round(py)], "heading_deg": round(math.degrees(h), 1)}
 
     def calibrate(self, p, heading: float) -> dict[str, Any]:
-        """Ties the odometry pose right now to map point p facing `heading` (radians). One dog.calibrate row."""
+        """Ties every pose source that has a pose right now to map point p facing `heading` (radians); the selected
+        source (WTDD_POSE_SOURCE) must be one of them, another missing one keeps its old tie, logged. One dog.calibrate row."""
         st = self.run(self.with_body(lambda b: b.fresh_state(required=True)))
-        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1)}, self.map_pose(st)) as r:
-            self.cal = {**nav.calibration(st["position"], st["rpy"][2], p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1)}) as r:
+            source = drift.selected_source()   # inside the step: a bad WTDD_POSE_SOURCE is a failed row, not a silent refusal
+            r["state_before"] = self.map_pose(st, source)
+            raws = {s: self._raw_pose(s, st) for s in drift.SOURCES}
+            if raws[source] is None:
+                raise RuntimeError(f"no {source} pose now: cannot tie the follower's source (WTDD_POSE_SOURCE)"
+                                   + (" (state().utpose is None or stale: is rt/utlidar/robot_pose publishing?)" if source == "utlidar" else ""))
+            for s in drift.SOURCES:
+                if raws[s] is None:
+                    log("dog", f"WARN no {s} pose at this drag: {s} keeps its old tie", had_tie=s in self.cals)
+            ties = {s: nav.calibration(v[:2], v[2], p, heading) for s, v in raws.items() if v is not None}
+            self.cals.update(ties)
+            if "sport" in ties:
+                self.cal = {**ties["sport"], "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
             self.recheck = False
-            CAL_FILE.write_text(json.dumps(self.cal))
-            r["state_after"] = {"cal": self.cal, "map": self.map_pose(st)}
-        log("dog", "calibrated", p=list(p), heading_deg=round(math.degrees(heading), 1))
+            CAL_FILE.write_text(json.dumps({**(self.cal or {}), "source": source, "cals": self.cals}))
+            r["state_after"] = {"cal": self.cal, "cals": self.cals, "map": self.map_pose(st)}
+        log("dog", "calibrated", p=list(p), heading_deg=round(math.degrees(heading), 1), tied=sorted(ties), source=source)
         return self.map_pose(st)
 
     # ---- following the drawn path
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
-        if self.cal is None:
-            raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
+        source = drift.selected_source()
+        if self.cals.get(source) is None:
+            raise RuntimeError(f"not calibrated for {source}: tell the dog where it is first (POST /dog/calibrate)")
         if self._follower and not self._follower.done():
             raise RuntimeError("already following; POST /dog/stop first")
         if len(path) < 2:
@@ -259,11 +301,13 @@ class DogSession:
         elif not avoid:                      # a person's explicit choice (the service is down): loud, and on the row
             log("dog", "WARN following WITHOUT obstacle avoidance, by explicit request")
         pose = self.map_pose()
+        if pose is None:
+            raise RuntimeError(f"no {source} pose: not calibrated for it, or the topic is silent (GET /dog/state .poses)")
         near_start = math.dist(path[0], pose["p"]) <= START_PX
         start = 0 if (near_start or not from_nearest) else nav.nearest_index(path, pose["p"])   # at the start of a loop: replay it, not the end
         log("dog", "follow from waypoint", start=start, n=len(path), near_start=near_start, dist_to_start_px=round(math.dist(path[0], pose["p"])))
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
-                             "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid)}
+                             "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid), "pose_source": source}
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -278,7 +322,8 @@ class DogSession:
         """Waypoint by waypoint from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume().
         One dog.follow row at the end with the waypoints reached and the error, if any. Never retries a waypoint."""
         fs = self.follow_state
-        args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
+        args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid), "pose_source": fs["pose_source"]}
+        fs["samples"], t_sample = {s: 0 for s in drift.SOURCES}, 0.0
         try:
             with step("dog", "dog.follow", "map", args, self.map_pose()) as r:
                 try:
@@ -286,6 +331,9 @@ class DogSession:
                         fs["i"] = i
                         t_wp = time.monotonic()
                         while True:
+                            if time.monotonic() - t_sample >= POSE_SAMPLE_S:   # 05a: both poses, side by side (drift.py)
+                                self._sample_poses(fs)
+                                t_sample = time.monotonic()
                             pose = self.map_pose()
                             if pose is None:
                                 raise RuntimeError("no pose (state stream stopped)")
@@ -314,13 +362,29 @@ class DogSession:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
                     await self._halt()
                     fs["active"] = False
-                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose()}
+                    self._sample_poses(fs)   # the last sample of each source lands right before this row: the walk's end, per source
+                    for s, n in fs["samples"].items():
+                        if n == 0:
+                            log("dog", f"WARN 0 {s} pose samples on this walk")
+                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose(),
+                                        "samples": dict(fs["samples"])}
         except asyncio.CancelledError:
             fs["error"] = "stopped"
             log("dog", "follow cancelled (stop)")
         except Exception as e:  # noqa: BLE001  (the row above has it; the state carries it for the page)
             fs["error"] = f"{type(e).__name__}: {e}"
             log("dog", "follow FAILED", err=fs["error"][:120])
+
+    def _sample_poses(self, fs: dict[str, Any]) -> None:
+        """One pose.sample row per source that has a pose now (drift.sample, through that source's tie). A silent source
+        writes no row; its count stays and lands on the dog.follow row (zero = WARN there). Not sampled while hand-driving."""
+        st, sid = self.body.state(), drift.shift_id()
+        for s in drift.SOURCES:
+            raw = self._raw_pose(s, st)
+            if raw is None:
+                continue
+            append(drift.sample(s, *raw, self.cals.get(s), sid))
+            fs["samples"][s] += 1
 
     def close(self) -> None:
         if self.body is not None:
