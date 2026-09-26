@@ -22,8 +22,11 @@ right of the optical axis positive. The ray starts at the dog's odometry positio
 up to MAX_RANGE_M; the pin is the first sample whose cell (np.rint onto the grid's lattice, exactly Grid.cell's rule)
 was seen threshold+ times, at that cell's lattice point (the dots' convention), projected to map pixels through the same
 calibration as the dots (occupancy.to_map_px). The store matches a box to an object with the same label whose pin is
-within MATCH_PX (an unplaced box to an unplaced object), else the box is a new object "o<n>"; an object unseen for
-STALE_WINDOWS detector windows is stale, and comes back (seen_again) when a box matches it again. Label and p are the
+within MATCH_PX, else to a fresh (not stale) one of that label still waiting for its first pin; an unplaced box (no
+pose, no blob, no frame for one window) takes an unplaced object of its label, else the fresh one of its label seen
+last, which keeps its last pin: a window that cannot place a thing is not a new thing. Otherwise the box is a new
+object "o<n>"; an object unseen for STALE_WINDOWS detector windows is stale, and comes back (seen_again) when a box
+matches it again (a stale pin only by a placement within MATCH_PX of it). Label and p are the
 detector's own name and confidence (label_source "detector") unless a decide hook is given (label_source "decide").
 One object.seen row per event: new, drafted, stale, seen_again, never per frame; a matched object whose p or pin moves
 is updated in place without a row. Draft: WTDD_OBJECTS_DRAFT=live (default) is one llm.generate per new object with the
@@ -236,12 +239,15 @@ class Store:
                       "box": list(b["xyxy"]), "bearing_deg": None if brg is None else round(math.degrees(brg), 1),
                       "hit_m": hit["xy"] if hit else None, "dist_m": hit["dist_m"] if hit else None, "pos_px": pos_px, "why": why}
             same = [o for o in self.objs.values() if o["label"] == label and o["id"] not in matched]
-            if pos_px is not None:
+            fresh = [o for o in same if not o["stale"]]   # with no pin to compare, identity rides on continuity alone
+            if pos_px is not None:   # the nearest pin within MATCH_PX, else a fresh object still waiting for its first pin
                 near = [(math.dist(o["pos_px"], pos_px), o) for o in same if o["pos_px"] is not None]
                 near = [c for c in near if c[0] <= MATCH_PX]
-                o = min(near, key=lambda c: c[0])[1] if near else None
-            else:
-                o = next((o for o in same if o["pos_px"] is None), None)
+                o = min(near, key=lambda c: c[0])[1] if near else next((o for o in fresh if o["pos_px"] is None), None)
+            else:   # an unplaced object, else the fresh one seen last: a blind window (pose, ray, frame) is not a new thing
+                o = next((o for o in same if o["pos_px"] is None), None) or max(fresh, key=lambda o: o["last_seen"], default=None)
+                if o is not None and o["pos_px"] is not None:   # its last pin stays until a window places it again
+                    fields = {k: v for k, v in fields.items() if k not in ("hit_m", "dist_m", "pos_px")}
             if o is not None:
                 before = {k: v for k, v in o.items() if k != "thumb"}
                 was_stale = o["stale"]
