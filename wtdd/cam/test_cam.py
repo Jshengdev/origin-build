@@ -79,6 +79,9 @@ class Case(unittest.TestCase):
         self.detector = mock.patch.object(cam, "detect_file", fake_detect)
         self.detector.start()
         self.addCleanup(self.detector.stop)
+        disarmed = mock.patch.object(cam, "ARMED", _TMP / "never-armed")   # the checkout's intruder.on may be armed; only Person arms
+        disarmed.start()
+        self.addCleanup(disarmed.stop)
 
     def tearDown(self):
         self.assertNotIn("cv2", sys.modules, "cv2 loaded in the API process (wtdd/watch.py: it never does; its ffmpeg clashes with PyAV's)")
