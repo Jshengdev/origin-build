@@ -9,7 +9,8 @@ or when it came past DRAG_WINDOW_S) or, without one, from the taught route end, 
 the lower-drift source from the drag-referenced walks only (none when there is none); a ledger without pose.sample rows
 fails loud. Session drives the real wtdd/dog/session.py (calibrate, follow, _follow, _sample_poses,
 state) with FakeBody in place of the dog on a three-waypoint route: both ties on the drag row, both poses on every
-follow, the driver and the counts on the follow row, a silent utlidar as a zero and a WARN, a refused drag as a row.
+follow, the driver and the counts on the follow row, a silent utlidar as a zero and a WARN, a tie dropped (not kept) when
+its source is silent at a drag, a refused drag as a row.
 WTDD_LEDGER and session.CAL_FILE are pointed at a scratch dir before anything runs, so nothing real is written."""
 from __future__ import annotations
 import contextlib
@@ -371,6 +372,28 @@ class Session(unittest.TestCase):
         self.assertGreater(fol["state_after"]["samples"]["sport"], 0)
         self.assertIn("WARN 0 utlidar pose samples on this walk", err.getvalue())
         self.assertFalse([r for r in rows if r["tool"] == "pose.sample" and r["args"]["source"] == "utlidar"])
+
+    def test_a_source_silent_at_a_drag_loses_its_old_tie(self):
+        # After a dog power cycle utlidar is silent at the drag: its old tie is in a dead frame. Kept, every later utlidar
+        # sample would project through it and drift.py would print a valid-looking number. It is dropped instead.
+        s = self._session("sport")
+        s.calibrate(PATH[0], H0)
+        s.body.ut = False
+        n0 = len(ledger.rows())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            s.calibrate(PATH[0], H0)
+        row = [r for r in ledger.rows()[n0:] if r["tool"] == "dog.calibrate"][-1]
+        self.assertIs(row["ok"], True)
+        self.assertEqual(sorted(row["state_after"]["cals"]), ["sport"])
+        self.assertEqual(sorted(json.loads(session.CAL_FILE.read_text())["cals"]), ["sport"])
+        self.assertIn("WARN no utlidar pose at this drag: utlidar is untied until a drag sees it", err.getvalue())
+        self.assertIn("had_tie=True", err.getvalue())
+        s.body.ut = True   # the topic comes back, in its new frame, with no drag since
+        ut = [r for r in self._walk(s) if r["tool"] == "pose.sample" and r["args"]["source"] == "utlidar"]
+        self.assertTrue(ut)
+        for r in ut:
+            self.assertEqual(r["state_after"], {"map": None, "why": "no calibration for utlidar"})
 
     def test_utlidar_selected_without_a_utlidar_pose_is_a_failed_drag_row_and_no_follow(self):
         s = self._session("utlidar", ut=False)
