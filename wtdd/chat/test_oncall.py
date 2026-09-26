@@ -216,6 +216,7 @@ class Escalate(unittest.TestCase):
         self.addCleanup(lambda: (ROOT / "pending.json").unlink(missing_ok=True))   # the tool writes the listener's pending file
         confirmed = {"guid": "P-W", "rowid": 60011, "ts": "2026-09-27 12:30:10",
                      "caption": {"guid": "P-Wc", "rowid": 60012, "ts": "2026-09-27 12:30:11"}}
+        before = len(ledger.rows())   # only this tool's rows are read below: another test's group post is not its post
         with mock.patch("wtdd.commands.look", return_value={"file": "/tmp/look-level.jpg", "pitch_deg": 0.4}), \
              mock.patch("wtdd.tools.dog_say.boxed", return_value={"file": "/tmp/look-level-boxed.jpg", "n": 1, "classes": {"person": 1}}), \
              mock.patch.object(db, "chat_members", side_effect=_members), \
@@ -228,12 +229,13 @@ class Escalate(unittest.TestCase):
         post = [r for r in ledger.rows() if r["tool"] == "chat.post" and r["args"]["trigger"] == "alarm:watch-1"][-1]
         self.assertEqual((post["args"]["guid"], post["args"]["kind"], post["args"]["text"], post["args"]["file"]),
                          (ONCALL, "escalate", "who dis?!", "/tmp/look-level-boxed.jpg"))
-        self.assertFalse(any(r["tool"] == "chat.post" and r["args"]["guid"] == GROUP for r in ledger.rows()))
+        self.assertFalse(any(r["tool"] in ("chat.gate", "chat.post") and r["args"]["guid"] == GROUP for r in ledger.rows()[before:]))
         self.assertEqual(json.loads((ROOT / "pending.json").read_text())["trigger"], "alarm:watch-1")
 
     def test_no_on_call_configured_is_posted_as_the_error_not_faked(self):
         # Fail loud, round goes on: like "couldn't look:", a flag with nobody to send it to is posted to the group as its
-        # error under the same alarm: key (consumed, never retried), no question is opened, the dog does not hold 45 s.
+        # error under its own escalate-fail: key (alarm: can already be claimed by a flag whose send failed, see the next
+        # test), no question is opened, the dog does not hold 45 s.
         seen = {"text": "someone by the trench cover", "file": "/tmp/look-level-boxed.jpg", "person": True,
                 "detector": {"classes": ["person"]}}
         with mock.patch.dict(os.environ), \
@@ -245,10 +247,53 @@ class Escalate(unittest.TestCase):
         self.assertEqual(len(self.posts), 2)
         self.assertEqual(self.posts[0][:2], (GROUP, "say:g5"))
         guid, key, kind, text, file = self.posts[1]
-        self.assertEqual((guid, key, file), (GROUP, "alarm:g5", None))
+        self.assertEqual((guid, key, file), (GROUP, "escalate-fail:g5", None))
         self.assertTrue(text.startswith("couldn't escalate: RuntimeError:"), text)
         self.assertIn("WTDD_ON_CALL_HANDLE", text)
         self.assertFalse((_TMP / "pending-5.json").exists())
+        av.assert_not_called()
+
+    def test_a_failed_flag_send_is_posted_under_its_own_key_and_the_round_goes_on(self):
+        # The case the first live send checks: the gate and the claim pass, then osascript cannot resolve the 1:1 ("Can't
+        # get chat id"). That claim consumed alarm:<k>, so the error goes to the group under escalate-fail:<k>, the real
+        # error stays on the failed chat.post row, and look_and_say returns (field.walk's on_stop has no try around it):
+        # no question opened, no hold, the round goes on.
+        seen = {"text": "someone by the trench cover", "file": "/tmp/look-level-boxed.jpg", "person": True,
+                "detector": {"classes": ["person"]}}
+        rowids = iter(range(60100, 60200))
+
+        def confirmed(ts: str) -> dict:
+            r = next(rowids)
+            return {"guid": f"G-{r}", "rowid": r, "ts": ts, "caption": {"guid": f"G-{r}c", "rowid": r + 1000, "ts": ts}}
+
+        def send_file(guid, file, text=None):
+            if guid == ONCALL:
+                raise RuntimeError('osascript rc=1: Messages got an error: Can\'t get chat id "any;-;+15550002222". (-1728)')
+            return confirmed("2026-09-27 12:40:00")
+
+        with mock.patch.object(db, "max_rowid", return_value=60000):
+            l = L.Listener(GROUP, cli.post, listen_s=60)
+        with mock.patch("wtdd.tools.dog_say.look_and_see", return_value=seen), \
+             mock.patch.object(L, "PENDING", _TMP / "pending-9.json"), \
+             mock.patch.object(l, "await_verdict", return_value=False) as av, \
+             mock.patch.object(db, "chat_members", side_effect=_members), \
+             mock.patch.object(db, "chat_name", side_effect=lambda g: send.TARGET_NAME if g == GROUP else None), \
+             mock.patch.object(db, "max_rowid", return_value=60000), \
+             mock.patch.object(send, "_osascript", _no_osascript), \
+             mock.patch.object(send, "send_file", side_effect=send_file), \
+             mock.patch.object(send, "send_text", side_effect=lambda g, t: confirmed("2026-09-27 12:40:05")) as st:
+            l.look_and_say({"guid": "g9", "sender": HANDLE, "text": "what the dog doin"})   # returns: does not raise
+        st.assert_called_once()
+        self.assertEqual(st.call_args.args[0], GROUP)
+        self.assertTrue(st.call_args.args[1].startswith("couldn't escalate: RuntimeError: osascript rc=1"), st.call_args.args[1])
+        rows = ledger.rows()
+        flag = [r for r in rows if r["tool"] == "chat.post" and r["args"]["trigger"] == "alarm:g9"]
+        self.assertEqual([(r["ok"], r["args"]["guid"], r["args"]["kind"]) for r in flag], [(False, ONCALL, "escalate")])
+        self.assertIn("Can't get chat id", flag[0]["response_or_error"])
+        self.assertEqual([r["ok"] for r in rows if r["tool"] == "chat.claim" and r["args"]["trigger"] == "alarm:g9"], [True])
+        err = [r for r in rows if r["tool"] == "chat.post" and r["args"]["trigger"] == "escalate-fail:g9"]
+        self.assertEqual([(r["ok"], r["args"]["guid"]) for r in err], [(True, GROUP)])
+        self.assertFalse((_TMP / "pending-9.json").exists())
         av.assert_not_called()
 
     def test_poll_reads_the_on_call_chat_and_tags_the_chat(self):
