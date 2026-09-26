@@ -195,8 +195,8 @@ def plan(a, b, grid=None, cal: dict | None = None, threshold: int | None = None,
         out = _route(matrix, a, b, info)
         r["state_after"] = {k: v for k, v in out.items() if k != "path"} | {"waypoints": len(out["path"])}
     out |= {k: info[k] for k in ("cost_map", "why") if k in info}
-    log("plan", "route planned", cost_map=info["cost_map"], walls=info["walls"], nogo=len(info["nogo"]), waypoints=len(out["path"]),
-        cells=out["cells"], searched=out["searched"], length_m=out["length_m"])
+    log("plan", "route planned", cost_map=info["cost_map"], source=r.get("source", "live"), walls=info["walls"], nogo=len(info["nogo"]),
+        waypoints=len(out["path"]), cells=out["cells"], searched=out["searched"], length_m=out["length_m"])
     return out
 
 
