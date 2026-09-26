@@ -41,9 +41,10 @@ drawn through it. Rejected past the cap: a pose.corrected row with ok false, not
 them is a WARN: after a power cycle, clear the grid). Unmatched below MIN_SCORE or skipped under MIN_CELLS: no row, a
 rate-limited WARN, drawn through the correction held. Counts and the last verdict are on GET /dog/lidar .localize.
 map_pose() is the odometry pose through self.corr, then nav.to_map; calibrate() ties that corrected pose and keeps the
-correction (the grid is drawn through it); grid_clear() resets it. The match runs inline on the driver's dispatcher,
-as the grid's accumulate does, measured on every row (latency_ms, a WARN over BUDGET_MS); if the dog's windows blow the
-budget the fallback is a queue and one worker thread (not built: the first live run reads the ms).
+correction (the grid is drawn through it); grid_clear() resets it and, with a calibration, sets recheck (the dot moves
+by the dropped correction, so the remote asks for the drag). The match runs inline on the driver's dispatcher, as the
+grid's accumulate does, measured on every row (latency_ms, a WARN over BUDGET_MS); if the dog's windows blow the budget
+the fallback is a queue and one worker thread (not built: the first live run reads the ms).
 """
 from __future__ import annotations
 import asyncio
@@ -374,16 +375,20 @@ class DogSession:
     def grid_clear(self, why: str) -> dict[str, Any]:
         """POST /dog/grid {clear: true, why}: drops the session grid (after a power cycle the odometry frame reset, so the
         old counts belong to another frame), and the scan-to-map correction with it (it was measured against that grid).
-        One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
+        With a calibration, dropping a correction moves the dot by it, so recheck is set and the remote asks for the
+        drag. One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
         with self._grid_lock:
             g = self.grid
             before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0,
                       "corr_before": localize.describe(self.corr)}
             with step("dog", "dog.grid_clear", "map", {"why": why, **before}) as r:
+                if self.cal is not None and tuple(self.corr) != localize.IDENTITY:   # the dot is drawn through it: dropping it moves the dot
+                    self.recheck = True
+                    log("dog", "WARN grid cleared under a correction: the dot moved by it, drag the dog to where it is", corr=before["corr_before"])
                 self.grid = None
                 self.corr = localize.IDENTITY
                 self.loc.update(applied=0, rejected=0, unmatched=0, skipped=0, rejected_streak=0, last=None)
-                r["state_after"] = {"cleared": True, "corr_reset": True}
+                r["state_after"] = {"cleared": True, "corr_reset": True, "recheck": self.recheck}
         return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
