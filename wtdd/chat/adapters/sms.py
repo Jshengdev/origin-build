@@ -91,22 +91,27 @@ def _ok(r: Any) -> dict[str, Any]:
 # the inbound list, replayed in memory (sent, inbox, stub_status, stub_error; receive() stands in for the person's
 # phone). Why: no Twilio account in a worktree, and the on-call person's phone type is unknown until Sunday. Live: set
 # WTDD_ON_CALL_CHANNEL=sms and TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM in .env (TWILIO_MEDIA_BASE for the
-# photo). Keys unset = this stub: one WARN at construction naming the missing keys, and every row of a stub post or
-# reply is labeled cached: true, source: "stub" (adapters.label).
+# photo). All three keys unset = this stub: one WARN at construction, and every row of a stub post or reply is labeled
+# cached: true, source: "stub" (adapters.label). One key set = all three required: one or two set is a RuntimeError
+# naming the missing ones (a half-set live channel stops the post at its chat.gate row), never this stub.
 
 class Sms:
     app = "sms"
 
     def __init__(self, sid: str | None = None, token: str | None = None, from_: str | None = None, media_base: str | None = None):
         self.sid, self.token, self.from_, self.media_base = sid, token, from_, media_base
-        self.stub = not (sid and token and from_)
+        keys = (sid, token, from_)
+        if any(keys) and not all(keys):   # a mistyped key must not quietly become the stub that sends nothing
+            raise RuntimeError("[wtdd:config] " + ", ".join(k for k, v in zip(KEYS, keys) if not v) + " required: one Twilio "
+                               f"key set means all three. Set them in {config.ROOT / '.env'} (see .env.example), or none for the stub")
+        self.stub = not any(keys)
         self.sent: list[dict[str, Any]] = []      # stub: what would have gone to Twilio
         self.inbox: list[dict[str, Any]] = []     # stub: what Twilio would list as received (receive())
         self.seen: set[str] = set()               # sids already handed out by replies_since
         self.stub_status, self.stub_error = "sent", None   # stub: the status the read-back replays, (code, message) on failure
         if self.stub:
             log("chat", "WARN sms adapter is the DEMO_CACHE stub: nothing leaves this process, every row cached/stub",
-                missing=",".join(k for k, v in zip(KEYS, (sid, token, from_)) if not v))
+                missing=",".join(KEYS))
 
     def _url(self, suffix: str) -> str:
         return API.format(sid=self.sid) + suffix
@@ -213,7 +218,8 @@ _ADAPTER: Sms | None = None
 
 
 def adapter() -> Sms:
-    """The process's SMS adapter, built once from .env: live with the three keys, else the labeled stub."""
+    """The process's SMS adapter, built once from .env: live with the three keys, the labeled stub with none of them,
+    a RuntimeError naming the missing ones with one or two (and built again on the next call)."""
     global _ADAPTER
     if _ADAPTER is None:
         _ADAPTER = Sms(*(config.maybe(k) for k in (*KEYS, "TWILIO_MEDIA_BASE")))

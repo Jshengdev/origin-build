@@ -60,9 +60,10 @@ def _trigger(a: argparse.Namespace) -> str:
 
 def gate(guid: str) -> None:
     """The target gate as its own receipt: a refused target is a ledger row with ok=False, then PermissionError. The
-    receipt names who was verified: the group's name, or the on-call person's name for their 1:1."""
-    a = adapters.for_target(guid)
-    with ledger.step("central", "chat.gate", a.app, {"guid": guid}) as r:
+    receipt names who was verified: the group's name, or the on-call person's name for their 1:1. The adapter is built
+    inside the row, so a half-set Twilio config (sms.Sms) is this gate's failed row, before anything is claimed."""
+    with ledger.step("central", "chat.gate", adapters.app(guid), {"guid": guid}) as r:
+        a = adapters.for_target(guid)
         r.update(adapters.label(guid))
         r["state_after"] = {"guid": guid, "name": a.gate(guid)}
 

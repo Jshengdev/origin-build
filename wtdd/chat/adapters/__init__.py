@@ -35,9 +35,15 @@ class Adapter(Protocol):
     def replies_since(self, target: str, after: int) -> list[dict[str, Any]]: ...
 
 
+def app(target: str) -> str:
+    """The ledger's app column for a target, known before its adapter is built (building the sms one can raise)."""
+    return sms.Sms.app if target.startswith(sms.PREFIX) else imessage.IMessage.app
+
+
 def for_target(target: str) -> Adapter:
-    """sms:<E.164> is the SMS adapter (live with its keys, else the labeled stub); every other target is iMessage."""
-    return sms.adapter() if target.startswith(sms.PREFIX) else imessage.ADAPTER
+    """sms:<E.164> is the SMS adapter (live with all three keys, the labeled stub with none, a RuntimeError naming the
+    missing ones with one or two); every other target is iMessage."""
+    return sms.adapter() if app(target) == sms.Sms.app else imessage.ADAPTER
 
 
 def label(target: str) -> dict[str, Any]:
