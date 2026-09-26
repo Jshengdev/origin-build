@@ -13,6 +13,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from wtdd.dog.fixtures import make_pose_rows as gen  # noqa: E402
 FIX = Path(__file__).resolve().parent / "fixtures" / "pose_rows.jsonl"
 ROUTE = Path(__file__).resolve().parents[2] / "ui" / "route-saved.json"
 ROUTE_END = json.loads(ROUTE.read_text())["path"][-1]   # [436, 586], the taught route's end
+ROUTE_START = json.loads(ROUTE.read_text())["path"][0]  # [448, 455]
 REACH_M = 30.0 / nav.PX_PER_M                            # the follower's reach_px in metres: the driver's own end error is under this
 
 
@@ -150,6 +152,36 @@ class Report(unittest.TestCase):
         for w in rep["walks"]:
             self.assertLessEqual(w["end"][w["drove"]]["err_m"], REACH_M + 0.01)   # the driver stopped where it believed the end was
         self.assertEqual(rep["route_end"], ROUTE_END)
+
+    def test_a_drag_after_the_dog_moved_is_not_the_walks_reference(self):
+        # The truth drag skipped; the dog hand-driven back to the start and dragged there 30 s after the walk (inside
+        # DRAG_WINDOW_S) for the next replay. That drag is the next walk's start, not this walk's end: read as the end it
+        # would report the start-to-end distance as drift. It is refused, loud, and the walk falls back to the route end.
+        rows, follow_t = [], None
+        for r in _rows():
+            if r["tool"] == "dog.calibrate" and r["state_before"] is not None:
+                continue
+            if r["tool"] == "dog.calibrate" and follow_t is not None:
+                r = {**r, "ts": time.strftime(drift.TS, time.localtime(follow_t + 30)),
+                     "state_before": {"p": list(ROUTE_START), "heading_deg": r["args"]["heading_deg"]}}
+                follow_t = None
+            if r["tool"] == "dog.follow":
+                follow_t = drift._t(r)
+            rows.append(r)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rep = drift.report(rows, ROUTE_END)
+        self.assertEqual([w["truth"] for w in rep["walks"]], ["route end"] * len(gen.DROVE))
+        self.assertEqual(err.getvalue().count("not this walk's reference"), len(gen.DROVE) - 1, err.getvalue())   # walk 6 has no drag after it
+        self.assertIn("WARN walk 1", err.getvalue())
+
+    def test_a_drag_without_the_belief_at_the_drag_is_not_trusted(self):
+        rows = [{**r, "state_before": None} if r["tool"] == "dog.calibrate" else r for r in _rows()]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rep = drift.report(rows, ROUTE_END)
+        self.assertEqual({w["truth"] for w in rep["walks"]}, {"route end"})
+        self.assertIn("WARN walk 1", err.getvalue())
 
     def test_no_pose_samples_fails_loud(self):
         rows = [r for r in _rows() if r["tool"] != "pose.sample"]
