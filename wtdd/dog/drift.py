@@ -9,14 +9,16 @@ follower steers on, the drag requires and GET /dog/state calls "map"; the dog.fo
 
 How. `python -m wtdd.dog.drift --ledger ledger.jsonl` cuts any ledger into walks at the dog.follow rows (the samples
 before a follow row are that walk's) and measures, per source, how far the walk's last sample is from where the dog
-really stood. The reference is the first dog.calibrate after the walk, within DRAG_WINDOW_S: the drag on the remote,
-the shipped correction ("the dot is dragged on camera and the correction is a row"), and only if the dog had not moved
-since: the drag's state_before (the steering source's belief at the drag) must sit within the walk's reach_px of that
-source's last sample, else it is a later drag (hand-driven back to the start, say) and is refused, WARN. Without
-one it is the taught route end (ui/route-saved.json path[-1]); then the driving source's error is only under reach_px
-by construction (the follower stops where its own source believes the end is) and the other's is only the
-disagreement, so every walk says which reference it used and who drove. A walk that did not reach the end and has no
-drag has no reference: no number. The report names the source with the lower mean end error.
+really stood. The reference is the first dog.calibrate after the walk, within DRAG_WINDOW_S (a later first drag is
+refused, WARN): the drag on the remote, the shipped correction ("the dot is dragged on camera and the correction is a
+row"), and only if the dog had not moved since: the drag's state_before (the steering source's belief at the drag) must
+sit within the walk's reach_px of that source's last sample, else it is a later drag (hand-driven back to the start,
+say) and is refused, WARN. Without one it is the taught route end (ui/route-saved.json path[-1]); then the driving
+source's error is only under reach_px by construction (the follower stops where its own source believes the end is)
+and the other's is only the disagreement, so every walk says which reference it used and who drove. A walk that did
+not reach the end and has no drag has no reference: no number. The report names the source with the lower mean end
+error over the drag-referenced walks only: a route-end number is printed on its walk's line and never summarized (a
+belief, not a drift); with no drag-referenced walk no source is named, WARN.
 
 UNVERIFIED on this dog (the first live run confirms; the PR's Needs the dog): the shape of rt/utlidar/robot_pose
 (utpose_xyyaw reads a ROS PoseStamped, a guess: the driver names the topic and parses nothing); whether the dog publishes
@@ -115,7 +117,11 @@ def report(rows: list[dict], route_end) -> dict:
             if q.get("tool") == "dog.follow":
                 break
             if q.get("tool") == "dog.calibrate" and q.get("ok"):
-                drag = q if _t(q) - _t(r) <= DRAG_WINDOW_S else None
+                drag, dt = q, _t(q) - _t(r)
+                if dt > DRAG_WINDOW_S:
+                    log("drift", f"WARN walk {len(walks) + 1}: the first drag came {dt:.0f} s after the walk, past "
+                        f"DRAG_WINDOW_S={DRAG_WINDOW_S}: not this walk's reference")
+                    drag = None
                 break
         if drag is not None:   # the walk's end only if the driver's belief at the drag is still where the walk left it
             at, was = (drag.get("state_before") or {}).get("p"), last.get(args.get("pose_source"))
@@ -140,19 +146,22 @@ def report(rows: list[dict], route_end) -> dict:
         log("drift", f"WARN {trailing} pose.sample rows after the last dog.follow row: a walk in progress is not a walk")
     if uncal:
         log("drift", f"WARN {uncal} pose.sample rows without a map projection (their source was not calibrated)")
-    sources = {}
+    sources, dragged = {}, [w for w in walks if w["truth"] == "drag"]   # a route-end number is a belief, not a drift
     for s in SOURCES:
-        errs = [w["end"][s]["err_m"] for w in walks if w["end"][s] and w["end"][s]["err_m"] is not None]
+        errs = [w["end"][s]["err_m"] for w in dragged if w["end"][s]]
         sources[s] = {"n": len(errs), "err_m": errs, "mean_m": round(sum(errs) / len(errs), 3) if errs else None,
                       "max_m": max(errs) if errs else None}
     rep = {"route_end": list(route_end), "n_rows": len(rows), "n_samples": n_samples, "uncalibrated": uncal,
-           "walks": walks, "sources": sources, "lower": None}
+           "walks": walks, "n_drag": len(dragged), "sources": sources, "lower": None}
     empty = [s for s in SOURCES if sources[s]["n"] == 0]
     means = sorted((sources[s]["mean_m"], s) for s in SOURCES if sources[s]["n"])
     if not walks:
         rep["why"] = "no dog.follow row: no walk to measure"
+    elif not dragged:
+        rep["why"] = ("no walk has a drag after it: the route-end numbers only say where each source believed the end was "
+                      "(the driver's is under reach_px by construction)")
     elif empty:
-        rep["why"] = f"no measured walk for {', '.join(empty)}"
+        rep["why"] = f"no drag-referenced walk measured {', '.join(empty)}"
     elif means[0][0] == means[1][0]:
         rep["why"] = f"the means tie at {means[0][0]} m"
     else:
@@ -168,16 +177,16 @@ def format(rep: dict) -> str:
     lines = [f"route end {rep['route_end']} · {rep['n_samples']} pose.sample rows in {rep['n_rows']} rows"]
     for w in rep["walks"]:
         ends = "  ".join(f"{s} {m((w['end'][s] or {}).get('err_m'))}" for s in SOURCES)
-        lines.append(f"walk {w['i']} {w['ts']} drove={w['drove']} reached {w['reached']}/{w['of']} ok={w['ok']} "
-                     f"vs {w['truth'] or 'no reference'} {w['truth_p']}: {ends}")
+        ref = f"{w['truth']} {w['truth_p']}" if w["truth"] else "no reference"
+        lines.append(f"walk {w['i']} {w['ts']} drove={w['drove']} reached {w['reached']}/{w['of']} ok={w['ok']} vs {ref}: {ends}")
     for s in SOURCES:
         v = rep["sources"][s]
-        lines.append(f"{s}: n={v['n']} mean {m(v['mean_m'])} max {m(v['max_m'])}")
+        lines.append(f"{s} over drag-referenced walks: n={v['n']} mean {m(v['mean_m'])} max {m(v['max_m'])}")
     sp, ut = rep["sources"]["sport"], rep["sources"]["utlidar"]
     if rep["lower"]:
         lo, hi = (ut, sp) if rep["lower"] == "utlidar" else (sp, ut)
         lines.append(f"lower-drift source: {rep['lower']} ({lo['mean_m']:.3f} m vs {hi['mean_m']:.3f} m over "
-                     f"{min(lo['n'], hi['n'])} walks)")
+                     f"{rep['n_drag']} drag-referenced walks)")
     else:
         lines.append(f"lower-drift source: none ({rep['why']})")
     return "\n".join(lines)
@@ -195,7 +204,7 @@ def main(argv=None) -> int:
         log("drift", "WARN " + str(e))
         return 1
     print(format(rep))
-    log("drift", "report", walks=len(rep["walks"]), samples=rep["n_samples"], uncalibrated=rep["uncalibrated"],
+    log("drift", "report", walks=len(rep["walks"]), drag_walks=rep["n_drag"], samples=rep["n_samples"], uncalibrated=rep["uncalibrated"],
         sport_mean_m=rep["sources"]["sport"]["mean_m"], utlidar_mean_m=rep["sources"]["utlidar"]["mean_m"], lower=rep["lower"])
     return 0
 
