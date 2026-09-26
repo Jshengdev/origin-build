@@ -89,6 +89,42 @@ class Planner(unittest.TestCase):
         self.assertEqual([z["name"] for z in nogo.zones(json.loads(FIXTURE.read_text()))], [ZONE["name"]])
 
 
+class Malformed(unittest.TestCase):
+    """A zone hand-edited into the map (the way a zone is removed or switched off: the remote only draws) that is not a
+    well-formed no-go zone raises, naming it. Never a silently inert trench: a flag the planner skips, or a poly that
+    counts as a zone on the receipt while nothing can ever be inside it. No nogo key (a/b/c) and nogo: false are skipped."""
+    def test_a_nogo_flag_that_is_not_true_raises(self):
+        from wtdd import nogo
+        for flag in ("true", 1):
+            with self.assertRaises(ValueError, msg=f"nogo={flag!r}") as cm:
+                nogo.zones({"zones": [{**ZONE, "nogo": flag}]})
+            self.assertIn(ZONE["name"], str(cm.exception))
+        self.assertEqual(nogo.zones({"zones": [{**ZONE, "nogo": False}]}), [], "nogo: false is a zone switched off by hand")
+
+    def test_a_poly_under_three_points_raises(self):
+        from wtdd import nogo
+        with self.assertRaises(ValueError) as cm:
+            nogo.zones({"zones": [{**ZONE, "poly": POLY[:2]}]})
+        self.assertIn(ZONE["name"], str(cm.exception))
+
+    def test_the_planner_fails_its_row_on_a_malformed_zone(self):
+        """The planner never plans around a zone it cannot read: plan.route is written ok false, naming the zone."""
+        m = json.loads(TMP_MAP.read_text())
+        m["zones"] = [{**z, "nogo": "true"} if z.get("nogo") else z for z in m["zones"]]
+        TMP_MAP.write_text(json.dumps(m) + "\n")
+        n0 = len(ledger.rows())
+        try:
+            with self.assertRaises(ValueError) as cm:
+                plan.plan((300, 1100), (650, 1100))
+        finally:
+            shutil.copy(FIXTURE, TMP_MAP)
+        self.assertIn(ZONE["name"], str(cm.exception))
+        rows = [r for r in ledger.rows()[n0:] if r["tool"] == "plan.route"]
+        self.assertEqual(len(rows), 1, "one plan.route row, failed")
+        self.assertIs(rows[0]["ok"], False)
+        self.assertIn(ZONE["name"], rows[0]["response_or_error"])
+
+
 class Refusal(unittest.TestCase):
     def setUp(self):
         self.n0 = len(ledger.rows())
