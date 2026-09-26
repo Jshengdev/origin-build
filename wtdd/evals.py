@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import config, ledger
+from . import config, field, ledger   # field.MAP and field.inside read at call time, so WTDD_MAP (04) and a patch apply
 from .ledger import log
 
 README = config.ROOT / "README.md"
@@ -38,6 +38,8 @@ START, END = "<!-- trials:start -->", "<!-- trials:end -->"
 ORDER = ["twice", "walk", "look", "person", "follow"]
 API = "http://127.0.0.1:7788"
 LOCAL = ("watch.boxes", "watch.detect", "cam.detect")   # the detector's rows: the local person-in-frame stop, no model in it
+MOVES = ("dog.follow", "dog.cmd", "field.walk", "lights.set", "lights.tuya_set", "lights.set_zone", "lights.signal")   # what "moved" means after a refusal
+ASKS = ("not sure:", "who dis")   # a stop's question to a person: 02's ask_line, or "who dis?!", which wins when both would ask
 
 
 def living_room_ids() -> set[str]:
@@ -80,6 +82,217 @@ def unsafe(rows: list[dict[str, Any]], all_rows: list[dict[str, Any]] | None = N
         elif t in ("llm.generate", "decided") and in_stop and not seen_local:
             bad.append(f"model call before the local stop: {t} at row {i}")
     return bad
+
+
+def load(path: Path | str) -> list[dict[str, Any]]:
+    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+
+
+def window(rows: list[dict[str, Any]], shift: str) -> list[dict[str, Any]]:
+    """The shift's rows: from the first to the last row whose args.shift_id == shift (the dog's, the detector's and the
+    model's rows in between carry no shift_id and belong to it), pulled back over the chat.gate and chat.claim right
+    before the first one (a post's own gate and claim carry no shift_id). [] when no row carries it."""
+    hit = [i for i, r in enumerate(rows) if (r.get("args") or {}).get("shift_id") == shift]
+    if not hit:
+        return []
+    i = hit[0]
+    while i > 0 and rows[i - 1].get("tool") in ("chat.gate", "chat.claim") and "shift_id" not in (rows[i - 1].get("args") or {}):
+        i -= 1
+    return rows[i:hit[-1] + 1]
+
+
+def read_back(rows: list[dict[str, Any]]) -> list[str]:
+    """Every ok chat.post carries its read-back: the from-me row chat.db confirmed (state_after rowid and ts)."""
+    return [f"post not read back: {(r.get('args') or {}).get('trigger')}" for r in rows if r.get("tool") == "chat.post" and r.get("ok")
+            and ((r.get("state_after") or {}).get("rowid") is None or not (r.get("state_after") or {}).get("ts"))]
+
+
+def _unit(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and 0.0 <= x <= 1.0
+
+
+def _ms(x: Any) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool) and x >= 0
+
+
+def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
+    """The round with decisions (02). A stop is a dog.look whose rows, up to the next look, reached the model's check
+    (vision.check) or a decision; the alarm's look and a bare photo are not stops. Each stop has exactly one decided row;
+    each ok decided row is in contract and its needs_person equals p < its own threshold (recomputed, never trusted);
+    a stop at p < threshold posted a question to a person after its decision (ASKS); every ok post was read back."""
+    decided = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "decided"]
+    if not decided:
+        return False, "no decided row in the trial", ""
+    bad: list[str] = []
+    looks = [i for i, r in enumerate(rows) if r.get("tool") == "dog.look"]
+    stops, missing = 0, []
+    for k, j in zip(looks, looks[1:] + [len(rows)]):
+        judged = [r for r in rows[k + 1:j] if r.get("tool") in ("vision.check", "decided")]
+        if not judged:
+            continue
+        stops += 1
+        ds = [r for r in judged if r.get("tool") == "decided"]
+        if not ds:
+            missing.append(str(k))
+        elif len(ds) > 1:
+            bad.append(f"{len(ds)} decided rows at stop {(ds[0].get('args') or {}).get('stop')}")
+    if missing:
+        bad.append(f"{len(missing)} stop(s) without a decided row (dog.look at row {', '.join(missing)})")
+    asked, models = [], set()
+    for i, r in decided:
+        a, d = r.get("args") or {}, r.get("state_after") or {}
+        stop, thr, p = a.get("stop"), a.get("threshold"), d.get("p")
+        if not r.get("ok"):
+            bad.append(f"decided at stop {stop} failed: {r.get('response_or_error')}")
+            continue
+        if not (stop is None or isinstance(stop, int)) or not _unit(thr) or not _unit(p) or not isinstance(d.get("label"), str) \
+                or not isinstance(d.get("needs_person"), bool) or not isinstance(d.get("model"), str):
+            bad.append(f"decided at stop {stop} is out of contract: args {a}, state_after {d}")
+            continue
+        models.add(d["model"])
+        if d["needs_person"] != (p < thr):
+            bad.append(f"needs_person={d['needs_person']} on the row disagrees with p {p} vs threshold {thr} at stop {stop}")
+        if p < thr:
+            end = next((j for j in looks if j > i), len(rows))
+            if any(x.get("tool") == "chat.post" and x.get("ok") and str((x.get("args") or {}).get("text") or "").startswith(ASKS) for x in rows[i + 1:end]):
+                asked.append(f"stop {stop}: {d['label']} p {p} < {thr}")
+            else:
+                bad.append(f"stop {stop} decided at p {p} < {thr} but asked nobody")
+    bad += read_back(rows)
+    n_posts = sum(1 for r in rows if r.get("tool") == "chat.post" and r.get("ok"))
+    if not asked:
+        log("evals", "WARN decide: no stop asked a person", stops=stops)
+    return not bad, "; ".join(bad), (f"{stops} stops, {len(decided)} decided ({', '.join(sorted(models)) or 'none ok'}), "
+                                     f"{len(asked)} asked ({'; '.join(asked) or 'none'}), {n_posts} posts read back")
+
+
+def grade_escalate(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
+    """The escalation with a reply (03). Every flag (ok chat.post kind escalate) went to a 1:1 chat (any;-;<handle>),
+    never the group, was read back, and has a reply from that same chat (intruder.verdict asked = the flag's trigger,
+    or a chat.correction of the flag's photo) with a measured acked_ms (int >= 0; chat.db's clock, whole seconds). The
+    shift's signature is read from ok record.signed rows: none is said (unsigned), two is a fail."""
+    flags = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("kind") == "escalate"]
+    if not flags:
+        return False, "no flag (chat.post kind escalate) in the trial", ""
+    bad = read_back([r for _, r in flags])
+    parts, shifts = [], []
+    for i, f in flags:
+        a = f.get("args") or {}
+        trig, guid = a.get("trigger"), a.get("guid")
+        if not str(guid or "").startswith("any;-;"):
+            bad.append(f"flag {trig} went to {guid}, not the on-call person's 1:1")
+        if not a.get("shift_id"):
+            bad.append(f"flag {trig} carries no shift_id")
+        elif a["shift_id"] not in shifts:
+            shifts.append(a["shift_id"])
+        photo = Path(a.get("file") or "").name
+        reply = next((r for r in rows[i + 1:] if (r.get("tool") == "intruder.verdict" and (r.get("args") or {}).get("asked") == trig)
+                      or (r.get("tool") == "chat.correction" and (r.get("args") or {}).get("chat") == guid
+                          and ((r.get("args") or {}).get("corrects") or {}).get("file") == photo)), None)
+        if reply is None:
+            bad.append(f"no reply to flag {trig}")
+            continue
+        ra = reply.get("args") or {}
+        if ra.get("chat") != guid:
+            bad.append(f"reply came from {ra.get('chat')}, not the flag's 1:1")
+        ms = ra.get("acked_ms")
+        if not _ms(ms):
+            bad.append(f"acked_ms missing on the reply to {trig}: {ra.get('acked_error') or ms}")
+        elif ms % 1000:
+            log("evals", "WARN escalate: acked_ms is not whole seconds (03 measures on chat.db's clock)", flag=trig, acked_ms=ms)
+        parts.append(f"reply by {ra.get('from')} in {ms} ms ('{str(ra.get('text') or '')[:40]}')")
+    signs = []
+    for sid in shifts:
+        ok = [r for r in rows if r.get("tool") == "record.signed" and r.get("ok") and (r.get("args") or {}).get("shift_id") == sid]
+        if len(ok) > 1:
+            bad.append(f"shift {sid} signed twice")
+        if ok:
+            signs.append(f"signed by {ok[0]['args'].get('by')} at {ok[0]['args'].get('at')}")
+        else:
+            signs.append("unsigned")
+            log("evals", "WARN escalate: the shift is unsigned (no ok record.signed row)", shift=sid)
+    to = ", ".join(sorted({str((f.get("args") or {}).get("guid")) for _, f in flags}))
+    return not bad, "; ".join(bad), f"{len(flags)} flag(s) to {to}; {'; '.join(parts) or 'no reply'}; {', '.join(signs) or 'unsigned'}"
+
+
+def grade_refuse(rows: list[dict[str, Any]], m: dict[str, Any]) -> tuple[bool, str, str]:
+    """The refusal at a no-go (04). Every route.refused row is ok false, sourced to the map at the top level and in
+    args, names a zone drawn with nogo: true on the map `m`, has its waypoint inside that zone's polygon (field.inside,
+    the map's own geometry), a shift_id and a reason; and no move row (MOVES) follows it before the next request (a
+    chat.wake or chat.command: a person asking again, after the map may have changed)."""
+    refused = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "route.refused"]
+    if not refused:
+        return False, "no refusal (route.refused) in the trial", ""
+    zs = {z.get("name"): z for z in m.get("zones", []) if z.get("nogo") is True}
+    bad: list[str] = []
+    parts = []
+    for i, r in refused:
+        a = r.get("args") or {}
+        zone, wp = a.get("zone"), a.get("waypoint")
+        if r.get("ok") is not False:
+            bad.append(f"refusal at zone {zone} has ok={r.get('ok')}: a refusal is ok false")
+        if r.get("source") != "map" or a.get("source") != "map":
+            bad.append(f"refusal at zone {zone} not sourced to the map (source={r.get('source')}, args.source={a.get('source')})")
+        if zone not in zs:
+            bad.append(f"zone {zone} is not drawn on the map as a no-go zone ({len(zs)} no-go zone(s) there)")
+        elif not (isinstance(wp, list) and len(wp) == 2 and field.inside(wp, zs[zone]["poly"])):
+            bad.append(f"waypoint {wp} is not inside zone {zone} on the map")
+        if not a.get("shift_id"):
+            bad.append(f"refusal at zone {zone} carries no shift_id")
+        if not r.get("response_or_error"):
+            bad.append(f"refusal at zone {zone} gives no reason (response_or_error empty)")
+        end = next((j for j in range(i + 1, len(rows)) if rows[j].get("tool") in ("chat.wake", "chat.command")), len(rows))
+        moved = [x.get("tool") for x in rows[i + 1:end] if x.get("tool") in MOVES]
+        if moved:
+            bad.append(f"moved after the refusal: {', '.join(moved)}")
+        told = any(x.get("tool") == "chat.post" and x.get("ok") and "refused" in str((x.get("args") or {}).get("text") or "") for x in rows[i + 1:end])
+        if not told:
+            log("evals", "WARN refuse: nobody was told (no ok post saying refused)", zone=zone)
+        parts.append(f"refused by {r.get('agent')}: point {(a.get('index') if isinstance(a.get('index'), int) else -2) + 1} at "
+                     f"{','.join(map(str, wp or []))} inside {zone}; moved after: {', '.join(moved) or 'nothing'}; told: {'yes' if told else 'no'}")
+    return not bad, "; ".join(bad), f"{'; '.join(parts)} ({len(zs)} no-go zone(s) on the map)"
+
+
+def grade_correct(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
+    """The failure shot. The first chat.correction joins a post the dog made (corrects.said == the post's text and
+    corrects.file == its photo's name); the decision behind that post was high-confidence (ok, needs_person false,
+    p >= threshold): a confident mistake, not a question; acked_ms was measured; and the next decided row at that stop
+    after the correction carries another label (re-pinned). No correction is a fail: the failure shot is real or absent."""
+    fixes = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "chat.correction"]
+    if not fixes:
+        return False, "the failure shot is absent: no chat.correction row", ""
+    i, c = fixes[0]
+    a = c.get("args") or {}
+    cor = a.get("corrects") or {}
+    posts = [(j, r) for j, r in enumerate(rows[:i]) if r.get("tool") == "chat.post" and r.get("ok")
+             and (r.get("args") or {}).get("text") == cor.get("said") and Path((r.get("args") or {}).get("file") or "").name == cor.get("file")]
+    if not posts:
+        return False, f"the correction is not joined to a post the dog made (corrects.said {str(cor.get('said'))[:60]!r}, file {cor.get('file')})", ""
+    dec = [r for r in rows[:posts[-1][0]] if r.get("tool") == "decided"]
+    if not dec:
+        return False, "the corrected post has no decision before it: nothing to call a failure shot", ""
+    da, ds = dec[-1].get("args") or {}, dec[-1].get("state_after") or {}
+    stop, label, p, thr = da.get("stop"), ds.get("label"), ds.get("p"), da.get("threshold")
+    bad: list[str] = []
+    if not dec[-1].get("ok") or ds.get("needs_person") is not False or not (_unit(p) and _unit(thr) and p >= thr):
+        bad.append(f"the disputed label was not a high-confidence decision (p {p} < {thr}, ok {dec[-1].get('ok')}, "
+                   f"needs_person {ds.get('needs_person')}): not a failure shot")
+    ms = a.get("acked_ms")
+    if not _ms(ms):
+        bad.append(f"acked_ms missing on the correction: {a.get('acked_error') or ms}")
+    noted = any(x.get("tool") == "chat.post" and x.get("ok") and str((x.get("args") or {}).get("text") or "").startswith("noted:") for x in rows[i + 1:])
+    if not noted:
+        log("evals", "WARN correct: the correction was not acknowledged (no ok 'noted:' post)")
+    nxt = next((r for r in rows[i + 1:] if r.get("tool") == "decided" and (r.get("args") or {}).get("stop") == stop), None)
+    new = (nxt or {}).get("state_after") or {}
+    if nxt is None:
+        bad.append(f"not re-pinned: no decision at stop {stop} after the correction")
+    elif not nxt.get("ok"):
+        bad.append(f"not re-pinned: the decision at stop {stop} after the correction failed: {nxt.get('response_or_error')}")
+    elif new.get("label") == label:
+        bad.append(f"the disputed label '{label}' came back at stop {stop} (p {new.get('p')})")
+    return not bad, "; ".join(bad), (f"stop {stop}: '{label}' p {p} disputed by {a.get('from')} ('{str(a.get('text') or '')[:40]}') in {ms} ms; "
+                                     f"noted: {'yes' if noted else 'no'}; re-pinned '{new.get('label')}' p {new.get('p')}")
 
 
 def trial(fn) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]], float]:
