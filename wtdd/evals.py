@@ -149,7 +149,7 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
     all (dog_say.see()'s llm.generate, agent watch, ok or failed), its vision.check or a decision, so a stop whose model
     call failed is a stop without a decided row, never dropped; the alarm's look, a bare photo and a chat reply (agent
     central) are not stops. The agent's own dog_look + llm.generate with no detector row is unsafe anyway (the local
-    stop). Each stop has exactly one decided row;
+    stop). Decided rows with no stop at all fail (a decision belongs to a look). Each stop has exactly one decided row;
     each ok decided row is in contract and its needs_person equals p < its own threshold (recomputed, never trusted);
     a stop at p < threshold posted a question to a person after its decision (ASKS); every ok post was read back."""
     decided = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "decided"]
@@ -170,6 +170,8 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
             bad.append(f"{len(ds)} decided rows at stop {(ds[0].get('args') or {}).get('stop')}")
     if missing:
         bad.append(f"{len(missing)} stop(s) without a decided row (dog.look at row {', '.join(missing)})")
+    if not stops:
+        bad.append(f"no stop (a dog.look that reached the vision model) in the trial, yet {len(decided)} decided row(s)")
     asked, models = [], set()
     for i, r in decided:
         a, d = r.get("args") or {}, r.get("state_after") or {}
