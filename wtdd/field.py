@@ -27,6 +27,9 @@ stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=
 real dog's calibrated odometry pose from the API, the follower (POST /dog/follow) drives it and pauses at the stops,
 and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. Measured on the live wake demo
 (2026-09-13): dark start 1.46 s, walk 63.6 s across four rooms (seven crossings, five lights), 67 writes, 0 errors.
+WTDD_MAP (plain process env, read once at import like WTDD_LEDGER; .env is not consulted) points every reader of the
+map (MAP, imported by name by plan, nogo, api, tools and the chat) at another file: the tests' scratch copy and the dry
+remote; unset = ui/map.json.
 """
 from __future__ import annotations
 import json
@@ -34,13 +37,14 @@ import math
 import time
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable
 
 from . import tools
 from .config import ROOT
 from .ledger import log, step
 
-MAP = ROOT / "ui" / "map.json"
+MAP = Path(os.environ.get("WTDD_MAP", ROOT / "ui" / "map.json"))
 HZ = 10.0
 FIELD = ROOT / "field.json"   # the running walk: p, here, levels, s, total, stop; written at HZ, removed at the end (GET /field)
 STOP = ROOT / "field.stop"    # POST /field/stop touches it: the running walk ends at its next tick (lights off, row written)
