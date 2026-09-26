@@ -218,7 +218,9 @@ class Listener:
 
     def verdict(self, m: dict[str, Any]) -> bool:
         """The chat answering "who dis?!" (intruder_alarm): "idk" and its kin mean a stranger, so "STRANGER DANGER!!!"
-        three times and light_alarm; anything else stands the dog down with "ok". One intruder.verdict row either way."""
+        three times and light_alarm; anything else stands the dog down with "ok". One intruder.verdict row either way.
+        An answer to a decide question (pending kind "decide", "not sure: ...") is the same row and always stands down:
+        only "who dis?!" can sound the alarm, so WTDD_ALARM and the map's ask flags still gate it."""
         if not PENDING.exists():
             return False
         pend = json.loads(PENDING.read_text())
@@ -227,7 +229,7 @@ class Listener:
             log("chat", "who dis: no answer in time, standing down")
             return False
         from .. import tools
-        stranger = bool(IDK.search(normalize(m["text"])))
+        stranger = pend.get("kind") != "decide" and bool(IDK.search(normalize(m["text"])))
         PENDING.unlink(missing_ok=True)
         append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
                 "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger")},
