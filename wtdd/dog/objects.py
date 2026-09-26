@@ -163,10 +163,16 @@ def draft_live(obj: dict) -> dict[str, Any]:
 
 
 def drafter() -> Callable[[dict], dict]:
-    """draft_live, or draft_stub when WTDD_OBJECTS_DRAFT=stub (read here, at the point of use; logged)."""
+    """draft_live, or draft_stub when WTDD_OBJECTS_DRAFT=stub (read here, at the point of use; logged). Any other value
+    is a draft that raises: every object gets a failed drafted row and a FAILED message_source, never a quiet model call."""
     mode = config.maybe("WTDD_OBJECTS_DRAFT") or "live"
     if mode not in ("live", "stub"):
-        log("objects", f"WARN WTDD_OBJECTS_DRAFT={mode!r} is neither live nor stub: drafting live")
+        err = f"WTDD_OBJECTS_DRAFT={mode!r} is neither live nor stub"
+        log("objects", f"WARN {err}: every draft FAILS until it is fixed")
+
+        def bad(obj: dict) -> dict[str, Any]:
+            raise ValueError(err)
+        return bad
     log("objects", "drafts " + ("stub (DEMO_CACHE: tagged [stub: no model], rows cached=true)" if mode == "stub" else "live (one llm.generate per new object)"))
     return draft_stub if mode == "stub" else draft_live
 
