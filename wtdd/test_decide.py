@@ -1,0 +1,269 @@
+"""A decision at every stop, offline. Run: python -m unittest wtdd.test_decide -v
+Checks wtdd/decide.py: the fixed label list (ui/map.json `labels` or the default), the text state (words, never
+digits), the deterministic DEMO_CACHE stub when JEV_API_KEY is unset, the threshold rule (needs_person = p below
+WTDD_DECIDE_THRESHOLD, default 0.7), the `decided` ledger row (stub rows say cached=True source="stub"; a live
+failure is a row with ok=False and is raised, never a canned decision), the CLI's exit-2 branch without a key, and the
+ordering law: the local detector's watch.boxes row lands before the decided row.
+
+The scratch ledger is set through WTDD_LEDGER before wtdd.ledger is imported, so the real file is never touched.
+JEV_API_KEY is forced empty here (a real environment or .env value must not turn these into live calls).
+wtdd/fixtures/stop_state.txt is hand-written prose from the take's first stop (docs/evidence/ledger-take-2026-09-13.jsonl:
+the watch.boxes row said couch, the vision.check row said someone on the couch, a blanket and a cup, and that the
+detector's couch was really a person); the box geometry below is chosen to word that frame as large and tall, it is not
+from the ledger (the take's boxes rows carry counts, not boxes)."""
+from __future__ import annotations
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+_TMP = tempfile.mkdtemp(prefix="wtdd-decide-test-")
+os.environ["WTDD_LEDGER"] = str(Path(_TMP) / "ledger.jsonl")
+os.environ["JEV_API_KEY"] = ""            # the stub path; config.maybe() reads an empty value as unset
+os.environ.pop("JEV_LIVE", None)
+os.environ.pop("WTDD_DECIDE_THRESHOLD", None)
+os.environ.pop("WTDD_SHIFT", None)
+
+from wtdd import config, decide, ledger  # noqa: E402
+
+ROOT = config.ROOT
+FIXTURE = ROOT / "wtdd" / "fixtures" / "stop_state.txt"
+PY = sys.executable
+DIGIT = re.compile(r"\d")
+
+# the take's first stop, as look_and_see has it in hand: see()'s reply and boxed()'s result
+SEEN = {"text": "someone on the couch with their feet up. a red blanket on the floor. probably teris cup on the coffee table. "
+                "put that cup in the sink teri.",
+        "person": True, "out_of_place": ["blanket", "cup"], "pick": 2, "why": "",
+        "detector_check": "it says couch but that is really a person on the couch", "model": "x-ai/grok-4.20"}
+DET = {"file": "look-level-boxed.jpg", "classes": {"couch": 1}, "n": 1, "ms": 5695,
+       "boxes": [{"name": "couch", "conf": 0.7, "xyxy": [120, 200, 1100, 700]}]}
+FRAME = (1280, 720)
+
+
+def _state() -> str:
+    return FIXTURE.read_text().strip()
+
+
+class Labels(unittest.TestCase):
+    def _map(self, **extra) -> Path:
+        p = Path(_TMP) / f"map-{len(extra)}-{abs(hash(json.dumps(extra, sort_keys=True)))}.json"
+        p.write_text(json.dumps({"note": "test", "path": [], "stops": [], "rooms": [], **extra}))
+        return p
+
+    def test_default_list_when_the_map_has_none(self):
+        self.assertEqual(decide.labels(map_path=self._map()), decide.DEFAULT_LABELS)
+        self.assertEqual(decide.DEFAULT_LABELS, ["clear", "out_of_place", "hazard", "person"])
+
+    def test_map_labels_win(self):
+        self.assertEqual(decide.labels(map_path=self._map(labels=["ok", "flag"])), ["ok", "flag"])
+
+    def test_bad_map_labels_raise(self):
+        for bad in ([], ["a", "a"], "clear", [""], [1, 2]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                decide.labels(map_path=self._map(labels=bad))
+
+
+class State(unittest.TestCase):
+    def test_fixture_has_no_digits(self):
+        self.assertIsNone(DIGIT.search(FIXTURE.read_text()))
+
+    def test_state_for_the_take_matches_the_fixture(self):
+        s = decide.state_for_stop("stop one, in the living room", SEEN, DET, frame_wh=FRAME)
+        self.assertEqual(s.strip(), _state())
+
+    def test_state_words_every_number(self):
+        seen = {**SEEN, "text": "2 cups and 100 socks on the floor", "detector_check": "agree", "out_of_place": []}
+        det = {**DET, "classes": {"cup": 2, "chair": 1}}
+        s = decide.state_for_stop("stop two, in the kitchen", seen, det, frame_wh=FRAME)
+        self.assertIsNone(DIGIT.search(s), s)
+        self.assertIn("two cups", s)
+        self.assertIn("many socks", s)
+        self.assertIn("cup (two)", s)
+        self.assertIn("the eyes agree", s)
+        self.assertIn("out of place: nothing", s)
+
+    def test_state_without_a_detector_says_so(self):
+        s = decide.state_for_stop("a stop off the route", SEEN, {"error": "RuntimeError: detector rc=1"}, frame_wh=None)
+        self.assertIsNone(DIGIT.search(s), s)
+        self.assertIn("the detector did not run", s)
+        self.assertIn("footprint: unknown", s)
+
+    def test_stop_name_is_words(self):
+        self.assertTrue(decide.stop_name(22).startswith("stop two"), decide.stop_name(22))   # ui/map.json stops [10, 22, 23]
+        self.assertIsNone(DIGIT.search(decide.stop_name(22)))
+        self.assertIsNone(DIGIT.search(decide.stop_name(None)))
+
+
+class Stub(unittest.TestCase):
+    def test_stub_is_deterministic_and_typed(self):
+        a, b = decide.decide(_state()), decide.decide(_state())
+        self.assertEqual(a, b)
+        self.assertEqual(set(a), {"label", "p", "needs_person", "model"})
+        self.assertIn(a["label"], decide.DEFAULT_LABELS)
+        self.assertTrue(0.0 <= a["p"] <= 1.0, a)
+        self.assertIsInstance(a["needs_person"], bool)
+        self.assertEqual(a["model"], "stub")
+
+    def test_two_eyes_disagreeing_asks_a_person(self):
+        d = decide.decide(_state())
+        self.assertEqual(d["label"], "person")
+        self.assertLess(d["p"], 0.7)
+        self.assertTrue(d["needs_person"])
+        agree = _state().replace("the eyes disagree: it says couch but that is really a person on the couch.", "the eyes agree.")
+        e = decide.decide(agree)
+        self.assertEqual(e["label"], "person")
+        self.assertGreaterEqual(e["p"], 0.7)
+        self.assertFalse(e["needs_person"])
+
+    def test_stub_never_invents_a_custom_label(self):
+        with self.assertRaises(ValueError):
+            decide.decide(_state(), labels=["ok", "flag"])
+        row = ledger.rows(1)[0]
+        self.assertEqual(row["tool"], "decided")
+        self.assertFalse(row["ok"])
+
+
+class Threshold(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("WTDD_DECIDE_THRESHOLD", None)
+
+    def test_default_is_point_seven(self):
+        self.assertEqual(decide.threshold(), 0.7)
+
+    def test_needs_person_is_p_below_threshold(self):
+        os.environ["WTDD_DECIDE_THRESHOLD"] = "1.0"
+        d = decide.decide(_state())
+        self.assertLess(d["p"], 1.0)
+        self.assertTrue(d["needs_person"])
+        os.environ["WTDD_DECIDE_THRESHOLD"] = "0.0"
+        self.assertFalse(decide.decide(_state())["needs_person"])
+
+    def test_bad_threshold_fails_loud(self):
+        for bad in ("abc", "1.5", "-0.1", ""):
+            os.environ["WTDD_DECIDE_THRESHOLD"] = bad
+            if bad == "":
+                continue   # empty = unset = the default; not an error
+            with self.assertRaises(ValueError, msg=bad):
+                decide.decide(_state())
+
+
+class Row(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("WTDD_SHIFT", None)
+
+    def test_decided_row_shape(self):
+        state = _state()
+        d = decide.decide(state, stop=1)
+        row = ledger.rows(1)[0]
+        self.assertEqual(row["tool"], "decided")
+        self.assertEqual(row["agent"], "decide")
+        self.assertEqual(row["app"], "stub")
+        self.assertTrue(row["ok"])
+        self.assertIs(row["cached"], True)
+        self.assertEqual(row["source"], "stub")
+        self.assertEqual(row["args"]["stop"], 1)
+        self.assertEqual(row["args"]["state_chars"], len(state))
+        self.assertEqual(row["args"]["threshold"], 0.7)
+        self.assertRegex(row["args"]["shift_id"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(row["state_before"], {"labels": decide.DEFAULT_LABELS})
+        self.assertEqual(row["state_after"], d)
+        self.assertIsInstance(row["latency_ms"], int)
+        self.assertIsInstance(row["response_or_error"], str)
+        self.assertTrue(row["response_or_error"])
+
+    def test_shift_id_from_env(self):
+        os.environ["WTDD_SHIFT"] = "shift-x"
+        decide.decide(_state(), stop=None)
+        row = ledger.rows(1)[0]
+        self.assertEqual(row["args"]["shift_id"], "shift-x")
+        self.assertIsNone(row["args"]["stop"])
+
+
+class Live(unittest.TestCase):
+    """The live half of the verifying command, without a key: exit 2 and a message naming JEV_API_KEY. With a key and
+    an endpoint that refuses the connection: the failure is raised and is a row, never a stub decision."""
+
+    def _run(self, **env):
+        e = {**os.environ, "WTDD_LEDGER": str(Path(_TMP) / "cli-ledger.jsonl"), "JEV_API_KEY": "", **env}
+        e.pop("JEV_LIVE", None)
+        e.update({k: v for k, v in env.items()})
+        return subprocess.run([PY, "-m", "wtdd.decide", "--state", str(FIXTURE)], capture_output=True, text=True, cwd=ROOT, env=e, timeout=60)
+
+    def test_no_key_exits_two_with_a_clear_message(self):
+        pr = self._run(JEV_LIVE="1")
+        self.assertEqual(pr.returncode, 2, pr.stderr)
+        self.assertIn("JEV_API_KEY", pr.stderr)
+
+    def test_stub_cli_prints_a_labeled_decision(self):
+        pr = self._run()
+        self.assertEqual(pr.returncode, 0, pr.stderr)
+        d = json.loads(pr.stdout.strip().splitlines()[-1])
+        self.assertEqual(d["model"], "stub")
+        self.assertIn("stub", pr.stderr.lower())   # the stderr line says it was not live
+
+    def test_live_failure_is_raised_and_recorded_not_stubbed(self):
+        os.environ["JEV_API_KEY"] = "not-a-real-key"
+        try:
+            with mock.patch.object(decide, "JEV_URL", "http://127.0.0.1:9/"), mock.patch.object(decide, "JEV_TIMEOUT_S", 2):
+                with self.assertRaises(Exception):
+                    decide.decide(_state(), stop=3)
+        finally:
+            os.environ["JEV_API_KEY"] = ""
+        row = ledger.rows(1)[0]
+        self.assertEqual(row["tool"], "decided")
+        self.assertFalse(row["ok"])
+        self.assertEqual(row["source"], "live")
+        self.assertIs(row["cached"], False)
+        self.assertIn("Error", row["response_or_error"])
+
+
+class Ordering(unittest.TestCase):
+    """The local person-in-frame check is the detector (wtdd/watch.py, no model); at a stop, look_and_see runs boxed()
+    before see() and before decide(), so the watch.boxes row precedes the decided row (11's unsafe rule). The dog, the
+    detector and the vision model are patched; the ledger order is what is graded."""
+
+    def setUp(self):
+        from PIL import Image
+        self.up, self.down = Path(_TMP) / "look-tilt.jpg", Path(_TMP) / "look-down.jpg"
+        for f in (self.up, self.down):
+            Image.new("RGB", (64, 48), (40, 40, 40)).save(f, "JPEG")
+
+    def test_decide_row_lands_after_the_detector_row(self):
+        from wtdd import commands
+        from wtdd.tools import dog_say
+
+        def fake_look(kind="tilt"):
+            return {"text": "here's what i see", "file": str(self.up), "kind": kind, "pitch_deg": -15.0, "fired": True,
+                    "attempts": 1, "file_down": str(self.down), "pitch_down_deg": 15.0}
+
+        def fake_boxed(file):
+            with ledger.step("watch", "watch.boxes", "yolo", {"file": file.split("/")[-1]}) as r:
+                r["state_after"] = {"file": file, "classes": {"couch": 1}, "n": 1, "ms": 1}
+            return {"file": file, "classes": {"couch": 1}, "n": 1, "ms": 1, "boxes": DET["boxes"]}
+
+        def fake_see(file, baseline=None, file_down=None, labels=None):
+            return {**SEEN, "pick": 1, "ms": 1}
+
+        n0 = len(ledger.rows())
+        with mock.patch.object(commands, "look", fake_look), mock.patch.object(dog_say, "boxed", fake_boxed), \
+                mock.patch.object(dog_say, "see", fake_see):
+            out = dog_say.look_and_see("tilt", stop=10)
+        self.assertIn("decision", out)
+        self.assertIn("state", out)
+        self.assertIsNone(DIGIT.search(out["state"]), out["state"])
+        self.assertEqual(set(out["decision"]), {"label", "p", "needs_person", "model"})
+        tools = [r["tool"] for r in ledger.rows()[n0:]]
+        self.assertIn("watch.boxes", tools)
+        self.assertIn("decided", tools)
+        self.assertLess(tools.index("watch.boxes"), tools.index("decided"), tools)
+        self.assertEqual(ledger.rows()[n0:][tools.index("decided")]["args"]["stop"], 10)
+
+
+if __name__ == "__main__":
+    unittest.main()
