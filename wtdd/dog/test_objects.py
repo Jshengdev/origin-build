@@ -161,7 +161,8 @@ class Association(unittest.TestCase):
     def test_a_blob_seen_once_is_found_at_threshold_1_and_not_at_2(self):
         h = objects.nearest_blob(self.g, (0.0, 0.0), -math.pi / 2, threshold=1)
         self.assertIsNotNone(h, "the BLOB at (0.0, -1.0) lies straight below the origin (odometry -y)")
-        np.testing.assert_allclose(h["xy"], [0.0, -0.8], atol=1e-9)
+        # BLOB's y is the half-open index range (-20, -16): lattice points -1.0 .. -0.85 m; -0.8 m (index -16) is outside it
+        np.testing.assert_allclose(h["xy"], [0.0, (fx.BLOB["y"][1] - 1) * fx.RES], atol=1e-9)
         self.assertEqual(h["count"], 1)
         self.assertIsNone(objects.nearest_blob(self.g, (0.0, 0.0), -math.pi / 2, threshold=2), "seen once: not a blob at threshold 2")
 
