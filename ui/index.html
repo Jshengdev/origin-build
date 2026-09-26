@@ -86,6 +86,7 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
 function App() {
