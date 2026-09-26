@@ -25,7 +25,7 @@ ENV = {"WTDD_ON_CALL_NAME": "Teri Test",                       # 03 defines the 
        "WTDD_GUARD_SHIFT_CITE": "test fixture, not a source",
        "WTDD_PRICE_PER_STOP_NIGHT": "10",
        "WTDD_SHIFT": "2026-09-27-test"}
-SHIPPED = json.loads((config.ROOT / "ui" / "map.json").read_text())   # 3 stops, 3 lighting zones, no cameras
+SHIPPED = json.loads((config.ROOT / "ui" / "map.json").read_text())   # the shipped map; its cameras key is 09's to add
 
 
 def _map(**over):
@@ -96,11 +96,10 @@ class Roster(Base):
                 schedule.roster(_map(cameras=[{"id": "cam-x", "pt": [50, 50], "zone": zone}]))
             self.assertIn("cam-x", str(e.exception))
 
-    def test_no_cameras_on_the_shipped_map(self):
-        self.assertNotIn("cameras", SHIPPED)                                 # 09 owns the key; until it lands, the roster has none
-        r = schedule.roster(SHIPPED)
-        self.assertEqual(r["cameras"], [])                                   # none invented
-        self.assertEqual([s["i"] for s in r["stops"]], SHIPPED["stops"])
+    def test_no_cameras_key_is_no_cameras(self):
+        m = {k: v for k, v in SHIPPED.items() if k != "cameras"}             # 09 owns the key: its absence is tested on a copy,
+        self.assertEqual(schedule.roster(m)["cameras"], [])                  # never pinned on the shipped file; none invented
+        self.assertEqual([s["i"] for s in schedule.roster(SHIPPED)["stops"]], SHIPPED["stops"])
 
     def test_on_call_from_config_and_loud_without(self):
         self.assertEqual(schedule.roster(_map())["on_call"], "Teri Test")
