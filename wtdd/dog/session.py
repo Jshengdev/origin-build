@@ -21,9 +21,10 @@ ui/map.json: the route the dog drove, and what it did along it, is what it repla
 row; a failed or cancelled follow says so in state().follow.error.
 
 Two poses (wtdd/dog/drift.py): the sport odometry above and the LiDAR odometry rt/utlidar/robot_pose. A drag ties each
-source that has a pose (cals); env WTDD_POSE_SOURCE (sport | utlidar, absent = sport) picks the one the follower, the
-drag's requirement and "map" use; every follow writes pose.sample rows for both every POSE_SAMPLE_S, so
-`python -m wtdd.dog.drift --ledger ledger.jsonl` can say which drifted less. self.cal stays the sport tie (lidar()).
+source that has a pose (cals) and unties one that has none; env WTDD_POSE_SOURCE (sport | utlidar, absent = sport)
+picks the one the follower, the drag's requirement and "map" use; every follow writes pose.sample rows for both every
+POSE_SAMPLE_S, so `python -m wtdd.dog.drift --ledger ledger.jsonl` can say which drifted less. self.cal stays the sport
+tie (lidar()).
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -264,7 +265,7 @@ class DogSession:
 
     def calibrate(self, p, heading: float) -> dict[str, Any]:
         """Ties every pose source that has a pose right now to map point p facing `heading` (radians); the selected
-        source (WTDD_POSE_SOURCE) must be one of them, another missing one keeps its old tie, logged. One dog.calibrate row."""
+        source (WTDD_POSE_SOURCE) must be one of them; another missing one loses its old tie, logged. One dog.calibrate row."""
         st = self.run(self.with_body(lambda b: b.fresh_state(required=True)))
         with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1)}) as r:
             source = drift.selected_source()   # inside the step: a bad WTDD_POSE_SOURCE is a failed row, not a silent refusal
@@ -274,8 +275,9 @@ class DogSession:
                 raise RuntimeError(f"no {source} pose now: cannot tie the follower's source (WTDD_POSE_SOURCE)"
                                    + (" (state().utpose is None or stale: is rt/utlidar/robot_pose publishing?)" if source == "utlidar" else ""))
             for s in drift.SOURCES:
-                if raws[s] is None:
-                    log("dog", f"WARN no {s} pose at this drag: {s} keeps its old tie", had_tie=s in self.cals)
+                if raws[s] is None:   # a kept tie may be in a frame a power cycle reset: untied, its samples say so
+                    had = self.cals.pop(s, None) is not None
+                    log("dog", f"WARN no {s} pose at this drag: {s} is untied until a drag sees it", had_tie=had)
             ties = {s: nav.calibration(v[:2], v[2], p, heading) for s, v in raws.items() if v is not None}
             self.cals.update(ties)
             if "sport" in ties:
