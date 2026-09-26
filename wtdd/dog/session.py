@@ -274,7 +274,9 @@ class DogSession:
 
     def _relocalize(self, d: dict) -> int | None:
         """One window against the grid (wtdd/dog/localize.py), under _grid_lock: applied, rejected, unmatched or skipped
-        (the docstring's Re-correction paragraph). Returns the cells drawn, None for a rejected window (not drawn)."""
+        (the docstring's Re-correction paragraph). Returns the cells drawn, None for a rejected window (not drawn). An
+        applied window is drawn before anything moves: a grid that refuses it raises (Body counts it in cb_errors) and
+        leaves the correction, the counts and the ledger as they were."""
         localize.same_lattice(self.grid, d)   # 01's two refusals, before anything is matched or drawn
         xy, loc = localize.apply_points(self.corr, localize.band(d["points"])), self.loc
         if len(xy) < localize.MIN_CELLS:
@@ -291,12 +293,14 @@ class DogSession:
         m = localize.match(self.grid, xy, pivot)
         why = localize.over_cap(m)
         verdict = "unmatched" if m["score"] < localize.MIN_SCORE else "rejected" if why else "applied"
-        loc[verdict] += 1
         kv = {"dx": round(m["dx"], 3), "dy": round(m["dy"], 3), "dtheta_deg": m["dtheta_deg"], "score": round(m["score"], 3),
               "score0": round(m["score0"], 3), "n": m["n"], "ms": m["ms"], "pivot": kind}
-        loc["last"] = {"verdict": verdict, **kv, "why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        last = {"verdict": verdict, **kv, "why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         if m["ms"] > localize.BUDGET_MS:
             log("dog", "WARN localize over budget on the driver's dispatcher", ms=m["ms"], budget_ms=localize.BUDGET_MS, n=m["n"])
+        if verdict != "applied":   # an applied window is counted below, once the grid has taken it
+            loc[verdict] += 1
+            loc["last"] = last
         if verdict == "unmatched":
             if loc["unmatched"] <= 5 or loc["unmatched"] % 100 == 0:
                 log("dog", "WARN localize unmatched: new territory or a bad grid, drawn through the correction held",
@@ -312,10 +316,11 @@ class DogSession:
                 log("dog", "WARN windows past the cap in a row: was the dog power-cycled? POST /dog/grid {clear: true}",
                     streak=loc["rejected_streak"])
             return None
-        loc["rejected_streak"] = 0
         delta = localize.delta_about(pivot, m["dx"], m["dy"], m["dtheta"])
+        touched = self.grid.update(localize.apply_points(delta, xy))   # first: a grid that refuses the window (01's MAX_SIDE) raises here and nothing moves
         self.corr = localize.compose(self.corr, delta)
-        touched = self.grid.update(localize.apply_points(delta, xy))
+        loc["applied"] += 1
+        loc["rejected_streak"], loc["last"] = 0, last
         append(localize.row(m, kind, before, snap()))
         c = localize.describe(self.corr)
         log("dog", "localize applied", corr_tx=c["tx"], corr_ty=c["ty"], corr_deg=c["theta_deg"], **kv)
