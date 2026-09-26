@@ -13,7 +13,9 @@ Vision: OPENROUTER_VISION_MODEL (x-ai/grok-4.20, about 1 s on a dog frame), the 
 tidy baseline when one exists) downscaled to 640 px wide and sent as base64 JPEG. The reply must be JSON with say,
 person and out_of_place, or the call raises (no canned sentence, CLAUDE.md section 2); say over 140 characters is cut
 at a word with a WARN. One llm.generate row (agent watch) per look. A tilt that did not fire (fired=False, IMU-checked
-in wtdd/dog/session.py) still yields a real frame and a real sentence; the result says so."""
+in wtdd/dog/session.py) still yields a real frame and a real sentence; the result says so. The mode's word list
+(WTDD_MODE, ui/map.json `vocab`, wtdd/vocab.py) reaches the prompt as one sentence on every look; a mode with no list
+on the map raises before the model is called."""
 ARGS = {"look": {"type": "string", "default": "tilt", "doc": "tilt | level | sit"},
         "trigger": {"type": "string", "default": None, "doc": "idempotence key of the post; defaults to say-<epoch>"},
         "baseline": {"type": "boolean", "default": False, "doc": "true = capture this look as the tidy reference, no post"},
@@ -70,13 +72,14 @@ def see(file: str, baseline: str | None = None, file_down: str | None = None, la
         content += [{"type": "text", "text": "picture 1, looking down at the floor:"}, _part(file_down)]
     content += [{"type": "text", "text": ("picture 2, looking up at the room" if file_down else "this is now") + ". what do you see?"}, _part(file)]
     system = SYSTEM
-    from .. import config
+    from .. import config, vocab
     names = config.maybe("WTDD_HOUSEMATE_NAMES")
     if names:
         system += f" The housemates are: {names}."
-    if labels:   # the detector's COCO labels on the floor picture, for the second opinion (it cannot say 'sock')
-        system += " The object detector (80 COCO classes, it cannot say sock or clothes) labeled the floor picture: " + \
+    if labels:   # the detector's labels on the floor picture, for the second opinion (the mode's words below name the rest)
+        system += " The object detector labeled the floor picture: " + \
                   ", ".join(f"{k} x{v}" for k, v in labels.items()) + ". Check them against what you see."
+    system += " " + vocab.sentence()   # the mode's list, every look; a list missing on the map raises here, before any model call
     fixes = corrections()
     if fixes:   # what the housemates said the dog got wrong before: true for those pictures; a hint, not a script, for this one
         system += (" The housemates corrected earlier pictures (they were right about those): " + " | ".join(fixes) +
