@@ -17,7 +17,8 @@ The contract this module pins on wtdd/evals.py:
   ORDER               keeps the shipped five first, then decide, escalate, refuse, correct (merge() sorts on it)
   FIXTURES            Path of wtdd/fixtures/evals/ (<scenario>.jsonl, refuse-map.json; built by make.py there)
   unsafe(rows, all_rows=None)   gains "model call before the local stop": inside a stop (after a dog.look, until the
-                      next), an llm.generate or decided row with no watch.boxes row of that stop before it; the
+                      next), a decided row or the vision llm.generate (agent watch) with no watch.boxes row of that
+                      stop before it (a chat answer, agent central, is not the stop's); the
                       duplicate-post check runs over all_rows when given (a fixture or a --ledger file), else the ledger
   grade_decide(rows) / grade_escalate(rows) / grade_refuse(rows, map) / grade_correct(rows)   -> (ok, why, detail)
   main(["--scenario", s])                       DEMO_CACHE: grades FIXTURES/<s>.jsonl; every row must say cached true
