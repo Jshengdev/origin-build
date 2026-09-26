@@ -2,7 +2,8 @@
 
 Six replays of the taught route (ui/route-saved.json: 23 waypoints from [448, 455] to [436, 586], stops 11, 15, 22).
 Walks 1-3 are driven on the sport odometry (LF_SPORT_MOD_STATE), walks 4-6 on the utlidar pose (rt/utlidar/robot_pose);
-both sources are sampled at every waypoint on every walk, which is the goal: the two poses recorded side by side.
+both sources are sampled at every other waypoint and the last on every walk (the goal: the two poses recorded side by
+side; a real walk samples at 1 Hz, the report reads only each walk's last sample), and the dog.follow row counts them.
 Planted: by the end of walk k the sport position is off by SPORT_M[k] metres and the utlidar pose by UTLIDAR_M[k]; each
 drift vector grows linearly with the distance walked, in a direction that turns from walk to walk. The follower stops
 where ITS source believes the route end is, so the dog physically ends off by the driver's drift; DRAG_AFTER_S seconds
@@ -93,7 +94,7 @@ def rows() -> list[dict]:
         # the drag to the start: both sources tied to path[0] facing the first segment
         cals = {s: nav.calibration(FRAME0[s][:2], FRAME0[s][2], path[0], headings[0]) for s in SOURCES}
         out.append(calibrate_row(t, path[0], headings[0], None, cals))
-        end_belief, end_truth = {}, None
+        end_belief, end_truth, n = {}, None, {s: 0 for s in SOURCES}
         for i, p in enumerate(path):
             frac = along[i] / along[-1]
             dv = {s: (drift[s][0] * frac, drift[s][1] * frac) for s in SOURCES}
@@ -103,13 +104,14 @@ def rows() -> list[dict]:
                 end_belief[s] = belief
                 if i % 2 == 0 or i == len(path) - 1:   # every other waypoint and always the last (a small file; the report reads the last)
                     out.append(sample_row(t + 5 + STEP_S * i, s, cals[s], belief, headings[i]))
+                    n[s] += 1
             end_truth = truth
         t_end = t + 5 + STEP_S * (len(path) - 1) + 1
         hd = round(math.degrees(headings[-1]), 1)
         out.append(row(t_end, "dog.follow", {"n": len(path), "start": 0, "stops": stops, "reach_px": 30.0, "avoid": True, "pose_source": drove},
                        {"p": list(path[0]), "heading_deg": round(math.degrees(headings[0]), 1)},
                        {"reached": list(range(len(path))), "of": len(path), "seconds": float(t_end - t - 5), "map": {"p": list(path[-1]), "heading_deg": hd},
-                        "samples": {s: (len(path) + 1) // 2 + 1 for s in SOURCES}}, latency_ms=int((t_end - t - 5) * 1000)))
+                        "samples": n}, latency_ms=int((t_end - t - 5) * 1000)))
         # the drag: where the dog actually stood, from the person on camera; both sources re-tied there
         cals_end = {s: nav.calibration(from_map(cals[s], end_belief[s][0], end_belief[s][1], headings[-1])[:2],
                                        from_map(cals[s], end_belief[s][0], end_belief[s][1], headings[-1])[2], end_truth, headings[-1]) for s in SOURCES}
