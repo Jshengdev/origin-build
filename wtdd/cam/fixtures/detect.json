@@ -1,0 +1,23 @@
+{
+  "ts": "2026-09-26T00:00:00",
+  "ms": 41,
+  "n": 1,
+  "classes": {
+    "person": 1
+  },
+  "boxes": [
+    {
+      "name": "person",
+      "conf": 0.87,
+      "xyxy": [
+        108,
+        34,
+        212,
+        236
+      ]
+    }
+  ],
+  "file": "lap1-boxed.jpg",
+  "model": "yolo11n.pt",
+  "note": "fixture: the box is where make.py drew the figure and 0.87 is a made-up conf; the shape is python -m wtdd.watch --once's stdout"
+}

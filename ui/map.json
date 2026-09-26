@@ -1,5 +1,5 @@
 {
-  "note": "Map space = house.svg viewBox (0 0 1060 1540). path = the entity's route (draw on the page). entity = radius_px (how far a light reacts), speed_px_s, falloff (curve steepness; 1 linear, higher = brightness holds near the center then drops), other_room_factor (lights in rooms the entity is not in are scaled by this), samples (points along the strip line). lights = Johnny's placed markers: kind dot (lamp) or line (the strip); pts in map space; room is computed from rooms. zones stay for the chat commands and the light show.",
+  "note": "Map space = house.svg viewBox (0 0 1060 1540). path = the entity's route (draw on the page). entity = radius_px (how far a light reacts), speed_px_s, falloff (curve steepness; 1 linear, higher = brightness holds near the center then drops), other_room_factor (lights in rooms the entity is not in are scaled by this), samples (points along the strip line). lights = Johnny's placed markers: kind dot (lamp) or line (the strip); pts in map space; room is computed from rooms. zones stay for the chat commands and the light show. cameras = the fixed cameras (wtdd/cam): id (the client's --cam), label, pt (where it sits, map px), zone (a zone name; 08's roster reads it).",
   "path": [
     [
       449,
@@ -556,5 +556,16 @@
       "say": true,
       "ask": false
     }
-  }
+  },
+  "cameras": [
+    {
+      "id": "lap1",
+      "label": "laptop at the gate",
+      "pt": [
+        322,
+        1284
+      ],
+      "zone": "a"
+    }
+  ]
 }

@@ -25,6 +25,8 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  POST /cam/<id>/frame  raw image/jpeg   a fixed camera's frame (python -m wtdd.cam): saved, detected out of process, cam.frame + cam.detect rows, the who-dis ask when armed
+  GET  /cam                       every fixed camera's newest detections {<id>: {classes, boxes, ms, t, age_ms, error?}}; GET /cam/<id>/frame.jpg its raw frame
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -113,6 +115,15 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "image/jpeg", DogSession.get().snapshot())
             except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+        if u.path == "/cam" or u.path.startswith("/cam/"):   # 09 · fixed-cam: the fixed cameras (wtdd/cam), {} until one posts
+            from . import cam
+            if u.path == "/cam":
+                return self._json(200, cam.read_all())
+            parts = u.path.split("/")   # "", "cam", <id>, "frame.jpg"
+            f = cam.cams() / f"{parts[2]}.jpg"
+            if len(parts) != 4 or parts[3] != "frame.jpg" or not cam.ID.fullmatch(parts[2]) or not f.is_file():
+                return self._json(404, {"error": f"no frame for camera {parts[2][:64]}"})
+            return self._send(200, "image/jpeg", f.read_bytes())
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -208,6 +219,17 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a connect failure or a refused follow is reported, never hidden)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        if u.path.startswith("/cam/") and u.path.endswith("/frame"):   # 09 · fixed-cam: a raw JPEG body, so it is read here, never through _body()
+            from . import cam
+            cam_id = u.path[len("/cam/"):-len("/frame")]
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                out = cam.ingest(cam_id, body)
+            except ValueError as e:   # a bad id or not a JPEG: its FAILED cam.frame row is written
+                return self._json(400, {"ok": False, "cam": cam_id[:64], "error": f"{type(e).__name__}: {e}"})
+            except Exception as e:  # noqa: BLE001  (a disk error: the frame not written, or cams/ unreadable; reported, never hidden)
+                return self._json(500, {"ok": False, "cam": cam_id[:64], "error": f"{type(e).__name__}: {e}"})
+            return self._json(200 if out["ok"] else 500, out)
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
         name, args = u.path[len("/tools/"):], self._body()
