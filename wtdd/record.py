@@ -10,8 +10,9 @@ confirmed it, the correction that fixes it), the flags with who resolved what an
 the path, the shift's planned stops), and the signature line: "unsigned" until an ok record.signed {by, at, shift_id}
 row exists (item 03, `python -m wtdd record_sign`), then the name and the time. Every number is counted from rows,
 nothing is typed by hand. It reads the ledger through ledger.rows() (so WTDD_LEDGER is honoured) and ui/map.json; it
-never appends a row and never writes the map. One stderr line per run with the counts; 0 stops or 0 flags is a WARN;
-a shift with no stamped row is exit 1, naming the shift ids that exist, and nothing is written.
+never appends a row and never writes the map. One stderr line per run with the counts; 0 stops, 0 flags, or a map
+with 0 rooms, path points or lights is a WARN; a shift with no stamped row is exit 1, naming the shift ids that exist,
+and nothing is written.
 
 Which rows are a shift's (the rule wtdd/test_record.py pins): every row stamped args.shift_id == id (03 stamps every
 post, reply and signature), plus the unstamped rows of its window. The window opens at the round's chat.wake (the
@@ -296,10 +297,12 @@ def main(argv: list[str] | None = None) -> int:
         Path(o.html).write_text(html(rec), encoding="utf-8")
     else:
         print(json.dumps(rec, default=str, indent=1))
-    zero = [k for k in ("stops", "flags") if not rec[k]]
+    site = rec["site"]   # a key the map lost reads as empty in build(), so its zero is said here
+    zero = [k for k in ("stops", "flags") if not rec[k]] + [f"map {k}" for k in ("rooms", "path", "lights") if not site[k]]
     log("record", ("WARN 0 " + ", 0 ".join(zero) + ": " if zero else "") + f"shift {sid}", rows=rec["rows"], stops=len(rec["stops"]),
         flags=len(rec["flags"]), resolved=sum(f["resolved"] is not None for f in rec["flags"]), corrections=len(rec["corrections"]),
         refusals=len(rec["refusals"]), failures=len(rec["failures"]), stub=rec["stub_rows"],
+        map=f"rooms:{len(site['rooms'])},lights:{len(site['lights'])},path:{len(site['path'])}",
         signed=f"{rec['signed']['by']} at {rec['signed']['at']}" if rec["signed"] else "unsigned", out=o.html or "stdout")
     return 0
 
