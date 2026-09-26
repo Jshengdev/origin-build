@@ -134,7 +134,7 @@ def tidy_path(look: str, stop: int | None = None) -> str:
 
 def boxed(file: str) -> dict:
     """The detector (YOLO11n, wtdd/watch.py) over the exact frame, in its own process: returns {file (the boxed copy),
-    classes, n, ms}. A failure raises; the caller decides (dog_say posts the plain frame and records the error)."""
+    classes, n, ms, boxes}. A failure raises; the caller decides (dog_say posts the plain frame and records the error)."""
     import json
     import subprocess
     import sys
@@ -151,6 +151,7 @@ def boxed(file: str) -> dict:
         d = json.loads(pr.stdout.strip().splitlines()[-1])
         res = {"file": d["file"], "classes": d["classes"], "n": d["n"], "ms": round((time.perf_counter() - t0) * 1000)}
         r["state_after"] = res
+        res = {**res, "boxes": d["boxes"]}   # [{name, conf, xyxy}] for decide's footprint words; the row keeps the counts
     log("watch", "boxes", n=res["n"], classes=res["classes"], ms=res["ms"])
     return res
 
