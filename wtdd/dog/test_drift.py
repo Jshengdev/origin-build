@@ -4,9 +4,10 @@ Checks wtdd/dog/drift.py on fixtures/pose_rows.jsonl (planted drift, made by fix
 source the follower uses is chosen by env WTDD_POSE_SOURCE (default sport, anything else refused); a rt/utlidar/
 robot_pose message parses to x, y, yaw or is refused loud; a pose.sample row has the contract's fields
 {source, x, y, yaw} in args (plus shift_id) and its map projection in state_after; the report measures each source's
-end error per walk from where the dog actually stood (the drag after the walk, refused when the dog moved before it) or,
-without one, from the taught route end, says which, names who drove, and names the lower-drift source; a ledger without
-pose.sample rows fails loud. Session drives the real wtdd/dog/session.py (calibrate, follow, _follow, _sample_poses,
+end error per walk from where the dog actually stood (the drag after the walk, refused loud when the dog moved before it
+or when it came past DRAG_WINDOW_S) or, without one, from the taught route end, says which, names who drove, and names
+the lower-drift source from the drag-referenced walks only (none when there is none); a ledger without pose.sample rows
+fails loud. Session drives the real wtdd/dog/session.py (calibrate, follow, _follow, _sample_poses,
 state) with FakeBody in place of the dog on a three-waypoint route: both ties on the drag row, both poses on every
 follow, the driver and the counts on the follow row, a silent utlidar as a zero and a WARN, a refused drag as a row.
 WTDD_LEDGER and session.CAL_FILE are pointed at a scratch dir before anything runs, so nothing real is written."""
@@ -164,11 +165,38 @@ class Report(unittest.TestCase):
 
     def test_without_a_drag_the_reference_is_the_route_end_and_the_driver_only_reports_its_own_belief(self):
         rows = [r for r in _rows() if not (r["tool"] == "dog.calibrate" and r["state_before"] is not None)]   # keep the start drags, drop the truth drags
-        rep = drift.report(rows, ROUTE_END)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rep = drift.report(rows, ROUTE_END)
         self.assertEqual({w["truth"] for w in rep["walks"]}, {"route end"})
         for w in rep["walks"]:
             self.assertLessEqual(w["end"][w["drove"]]["err_m"], REACH_M + 0.01)   # the driver stopped where it believed the end was
         self.assertEqual(rep["route_end"], ROUTE_END)
+        # a route-end number is a belief, not a drift: printed per walk, never summarized, and no source is named
+        self.assertIsNone(rep["lower"])
+        self.assertEqual(rep["sources"]["sport"]["n"], 0)
+        self.assertEqual(rep["sources"]["utlidar"]["n"], 0)
+        self.assertEqual(rep["n_drag"], 0)
+        self.assertIn("WARN no lower-drift source: no walk has a drag after it", err.getvalue())
+        self.assertIn("lower-drift source: none", drift.format(rep))
+
+    def test_a_late_drag_is_not_the_walks_reference_and_says_so(self):
+        # Every truth drag made 200 s after its walk (past DRAG_WINDOW_S), the dog not moved in between: the drag is refused
+        # as a reference, and it says so, so "you dragged too late" is not silent like "you never dragged".
+        rows, follow_t = [], None
+        for r in _rows():
+            if r["tool"] == "dog.calibrate" and r["state_before"] is not None:
+                r = {**r, "ts": time.strftime(drift.TS, time.localtime(follow_t + 200))}
+            if r["tool"] == "dog.follow":
+                follow_t = drift._t(r)
+            rows.append(r)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rep = drift.report(rows, ROUTE_END)
+        self.assertEqual([w["truth"] for w in rep["walks"]], ["route end"] * len(gen.DROVE))
+        self.assertEqual(err.getvalue().count("past DRAG_WINDOW_S"), len(gen.DROVE), err.getvalue())
+        self.assertIn("WARN walk 1: the first drag came 200 s after the walk", err.getvalue())
+        self.assertIsNone(rep["lower"])
 
     def test_a_drag_after_the_dog_moved_is_not_the_walks_reference(self):
         # The truth drag skipped; the dog hand-driven back to the start and dragged there 30 s after the walk (inside
