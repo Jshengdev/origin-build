@@ -1,6 +1,7 @@
 """Plan a route between two points on the floor plan with A* over the drawn rooms (wtdd/plan.py, python-pathfinding)
 and, with save=true, make it the map's path (stops cleared) for the dog to follow. The drawing has no walls or doors
-between rooms yet, so a planned route can cross a shared wall; the demo uses the recorded route. Returns the waypoints."""
+between rooms yet, so a planned route can cross a shared wall; the demo uses the recorded route. Returns the waypoints.
+Zones drawn on the map with nogo: true are blocked like the outside of a room: the route bends around them."""
 ARGS = {"from": {"type": "string", "default": None, "doc": "x,y in map pixels (default: where the dog thinks it is)"},
         "to": {"type": "string", "default": "436,586", "doc": "x,y in map pixels"},
         "save": {"type": "boolean", "default": False, "doc": "true = write the planned route as the map's path"}}
