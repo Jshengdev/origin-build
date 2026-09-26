@@ -4,7 +4,9 @@ odometry frame, so the map keeps what the dog has seen instead of only the newes
 Run. Body._on_lidar (wtdd/dog/body.py) hands every decoded frame to the session (wtdd/dog/session.py), whose grid
 takes it through update_frame(); GET /dog/grid serves walls(threshold) in map pixels through the same calibration as
 the LiDAR dots (to_map_px is nav.to_map vectorised), and the remote draws it under the dots. POST /dog/grid {save}
-writes ui/grid.json (runtime, gitignored); {clear} drops the grid after a power cycle. Offline:
+writes ui/grid.json (runtime, gitignored) with the calibration it was tied to (`cal`): a saved grid carries that tie
+and the page draws it through that, not the current one, because its cells are in the odometry frame of the power-on
+that made them; {clear} drops the grid after a power cycle. Offline:
 
     python -m wtdd.dog.occupancy --replay wtdd/dog/fixtures/voxel_frames.npz --png /tmp/grid.png [--threshold N] [--save F]
 
@@ -57,6 +59,7 @@ class Grid:
         self.frames = 0
         self.frame_id = frame_id
         self.z_band = (lidar.Z_MIN, lidar.Z_MAX)
+        self.cal: dict | None = None   # the odometry <-> map tie it was saved under (session.cal); None for a replayed fixture
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -139,11 +142,11 @@ class Grid:
         return {"x": [round(x0, 3), round(x0 + w * self.resolution, 3)], "y": [round(y0, 3), round(y0 + h * self.resolution, 3)]}
 
     def to_dict(self) -> dict[str, Any]:
-        """ui/grid.json: every nonzero cell as [ix, iy, count]; odometry metres, never map pixels."""
+        """ui/grid.json: every nonzero cell as [ix, iy, count]; odometry metres, never map pixels; `cal` ties them to the map."""
         iy, ix = np.nonzero(self.counts)
         h, w = self.counts.shape
         return {"resolution": self.resolution, "origin": list(self.origin), "width": [w, h], "frames": self.frames,
-                "frame_id": self.frame_id, "z_band": list(self.z_band),
+                "frame_id": self.frame_id, "z_band": list(self.z_band), "cal": self.cal,
                 "cells": np.column_stack([ix, iy, self.counts[iy, ix]]).astype(np.int64).tolist(),
                 "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
 
@@ -154,7 +157,7 @@ class Grid:
         g.counts = np.zeros((int(h), int(w)), dtype=np.uint32)
         c = np.asarray(d["cells"], dtype=np.int64).reshape(-1, 3)
         g.counts[c[:, 1], c[:, 0]] = c[:, 2]
-        g.frames, g.z_band = int(d["frames"]), tuple(d["z_band"])
+        g.frames, g.z_band, g.cal = int(d["frames"]), tuple(d["z_band"]), d.get("cal")
         return g
 
     def save(self, path) -> Path:

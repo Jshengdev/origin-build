@@ -259,28 +259,38 @@ class DogSession:
                 return {**occupancy.response(self.grid, self.cal, threshold, "session"), **errs}
             # DEMO_CACHE: ui/grid.json, the last grid saved by POST /dog/grid {save: true} (or a fixture planted with
             # `python -m wtdd.dog.occupancy --replay wtdd/dog/fixtures/voxel_frames.npz --png /tmp/g.png --save ui/grid.json`),
-            # drawn while this session has taken no LiDAR frame so the page shows the site with no dog present. Live path:
-            # POST /dog/lidar {on: true}; the first frame starts the session grid and `source` flips to "session".
+            # drawn while this session has taken no LiDAR frame so the page shows the site with no dog present, through the
+            # calibration saved with it (its cells are in the odometry frame of the power-on that made them; a planted
+            # fixture has none and takes the session's). Live path: POST /dog/lidar {on: true}; the first frame starts the
+            # session grid and `source` flips to "session".
             if GRID_FILE.exists():
                 mt = GRID_FILE.stat().st_mtime
                 if self._grid_file is None or self._grid_file[0] != mt:
                     g = occupancy.Grid.load(GRID_FILE)
                     self._grid_file = (mt, g)
-                    log("dog", "grid loaded from file", file="ui/grid.json", frames=g.frames, cells=int((g.counts > 0).sum()), frame_id=g.frame_id)
-                return {**occupancy.response(self._grid_file[1], self.cal, threshold, "ui/grid.json"), **errs}
+                    log("dog", "grid loaded from file", file="ui/grid.json", frames=g.frames, cells=int((g.counts > 0).sum()), frame_id=g.frame_id,
+                        cal_at=g.cal.get("at") if g.cal else "none saved: drawn through the session's calibration")
+                fg = self._grid_file[1]
+                return {**occupancy.response(fg, fg.cal or self.cal, threshold, "ui/grid.json"), **errs}
         return {**occupancy.response(None, self.cal, threshold, None), **errs}
 
     def grid_save(self) -> dict[str, Any]:
-        """POST /dog/grid {save: true}: the session grid to ui/grid.json. One dog.grid_save row; with no session grid the
-        row fails (RuntimeError) and no file is written, never an empty one."""
+        """POST /dog/grid {save: true}: the session grid to ui/grid.json, with the calibration it is drawn through (so a
+        power cycle and a new tie do not move the saved site). One dog.grid_save row; with no session grid the row fails
+        (RuntimeError) and no file is written, never an empty one."""
         with self._grid_lock:
             g = self.grid
             args = {"file": "ui/grid.json", "frames": g.frames if g else 0, "frame_id": g.frame_id if g else None,
-                    "resolution": g.resolution if g else None}
+                    "resolution": g.resolution if g else None, "cal_at": self.cal.get("at") if self.cal else None}
             with step("dog", "dog.grid_save", "map", args, {"file_bytes": GRID_FILE.stat().st_size if GRID_FILE.exists() else None}) as r:
                 if g is None:
                     raise RuntimeError("no grid this session: switch the LiDAR on and walk first (POST /dog/lidar {on: true})")
+                g.cal = dict(self.cal) if self.cal else None
+                if g.cal is None:
+                    log("dog", "WARN grid saved without a calibration: it will be drawn through whatever calibration exists when it is read",
+                        frames=g.frames)
                 p = g.save(GRID_FILE)
+                self._grid_file = None   # the next fallback re-reads the file, whatever the mtime resolution
                 r["state_after"] = {"file": "ui/grid.json", "bytes": p.stat().st_size, "cells": int((g.counts > 0).sum()),
                                     "frames": g.frames, "extent_m": g.extent_m()}
         return r["state_after"]
