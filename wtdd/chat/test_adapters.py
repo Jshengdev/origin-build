@@ -508,7 +508,8 @@ class Live(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             _sms().Sms(self.SID, self.TOKEN, None)
         self.assertIn("TWILIO_FROM", str(cm.exception))
-        with mock.patch.dict(os.environ, {"TWILIO_ACCOUNT_SID": self.SID}), \
+        # its own scratch ledger: the module's is shared, and NeverTwice counts every sms chat.gate row in it
+        with mock.patch.dict(os.environ, {"TWILIO_ACCOUNT_SID": self.SID}), mock.patch.object(ledger, "LEDGER", _TMP / "partial-keys.jsonl"), \
              mock.patch.object(requests, "post", side_effect=_no_http), mock.patch.object(requests, "get", side_effect=_no_http):
             _sms().reset()
             with self.assertRaises(RuntimeError) as cm:
@@ -516,10 +517,10 @@ class Live(unittest.TestCase):
             self.assertIn("TWILIO_AUTH_TOKEN", str(cm.exception))
             with self.assertRaises(RuntimeError):
                 cli.post(SMS, "alarm:partial-keys", "escalate", "who dis?!")
-        gate = ledger.rows()[-1]                             # the failure is the gate's own row, before any claim
-        self.assertEqual((gate["tool"], gate["ok"], gate["app"], gate["args"]), ("chat.gate", False, "sms", {"guid": SMS}))
-        self.assertIn("TWILIO_AUTH_TOKEN", gate["response_or_error"])
-        self.assertEqual([r for r in ledger.rows() if r["tool"] == "chat.claim" and r["args"].get("trigger") == "alarm:partial-keys"], [])
+            rows = ledger.rows()
+        # the failure is the gate's own row, and the only row: nothing claimed, nothing sent
+        self.assertEqual([(r["tool"], r["ok"], r["app"], r["args"]) for r in rows], [("chat.gate", False, "sms", {"guid": SMS})])
+        self.assertIn("TWILIO_AUTH_TOKEN", rows[0]["response_or_error"])
 
     def test_post_text_posts_to_twilio_and_reads_the_status_back(self):
         a = self._live()
