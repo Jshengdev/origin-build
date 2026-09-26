@@ -1,4 +1,4 @@
-at stop one, in the living room.
+at stop one, in the dining room.
 the detector saw: couch.
 footprint: large. height: tall.
 the eyes disagree: it says couch but that is really a person on the couch.

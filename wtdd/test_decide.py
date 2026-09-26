@@ -12,7 +12,8 @@ popped key comes back from the file (a threshold tuned in .env would fail these 
 and reads as unset.
 wtdd/fixtures/stop_state.txt is hand-written prose from the take's first stop (docs/evidence/ledger-take-2026-09-13.jsonl:
 the watch.boxes row said couch, the vision.check row said someone on the couch, a blanket and a cup, and that the
-detector's couch was really a person); the box geometry below is chosen to word that frame as large and tall, it is not
+detector's couch was really a person; its field.walk row reached stop 11 of the taught route, ui/route-saved.json, which
+field.room_of puts in the dining room); the box geometry below is chosen to word that frame as large and tall, it is not
 from the ledger (the take's boxes rows carry counts, not boxes)."""
 from __future__ import annotations
 import json
@@ -75,7 +76,7 @@ class State(unittest.TestCase):
         self.assertIsNone(DIGIT.search(FIXTURE.read_text()))
 
     def test_state_for_the_take_matches_the_fixture(self):
-        s = decide.state_for_stop("stop one, in the living room", SEEN, DET, frame_wh=FRAME)
+        s = decide.state_for_stop("stop one, in the dining room", SEEN, DET, frame_wh=FRAME)
         self.assertEqual(s.strip(), _state())
 
     def test_state_words_every_number(self):
