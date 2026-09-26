@@ -5,7 +5,7 @@ Run. DogSession._on_frame (wtdd/dog/session.py) calls match() on every window af
 drawn: the window's band cells, moved through the correction the session holds, against the grid. A match at or above
 MIN_SCORE inside the cap is applied (one `pose.corrected` row, the correction composed, the window drawn through it);
 past the cap it is rejected (a `pose.corrected` row with ok false naming the cap; the window is not drawn and the
-correction is kept); below MIN_SCORE the window is unmatched (no row: a WARN line and a counter on GET /dog/lidar; the
+correction is kept); below MIN_SCORE the window is unmatched (no row: a log line and a counter on GET /dog/lidar; the
 window is drawn through the correction held, so the map grows into rooms it has not seen). Nothing is written to the
 ledger here: row() builds the row, the session appends it. Offline: `python -m unittest wtdd.dog.test_localize`.
 

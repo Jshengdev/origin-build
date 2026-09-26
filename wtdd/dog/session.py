@@ -38,8 +38,9 @@ Re-correction (wtdd/dog/localize.py, 05b). Every window after the first is match
 its band cells through the correction held (self.corr, a rigid 2D transform in the odometry frame) against the cells
 seen MATCH_THRESHOLD+ times. Applied: one pose.corrected row, the window's delta composed into self.corr, the window
 drawn through it. Rejected past the cap: a pose.corrected row with ok false, not drawn, the correction kept (a streak of
-them is a WARN: after a power cycle, clear the grid). Unmatched below MIN_SCORE or skipped under MIN_CELLS: no row, a
-rate-limited WARN, drawn through the correction held. Counts and the last verdict are on GET /dog/lidar .localize.
+them is a WARN: after a power cycle, clear the grid). Unmatched below MIN_SCORE: no row, one line per window (a WARN
+the first five times, then every 100th), drawn through the correction held; skipped under MIN_CELLS: the same with the
+rate-limited WARN only. Counts and the last verdict are on GET /dog/lidar .localize.
 map_pose() is the odometry pose through self.corr, then nav.to_map; calibrate() ties that corrected pose and keeps the
 correction (the grid is drawn through it); grid_clear() resets it and, with a calibration, sets recheck (the dot moves
 by the dropped correction, so the remote asks for the drag). The match runs inline on the driver's dispatcher, as the
@@ -306,6 +307,8 @@ class DogSession:
             if loc["unmatched"] <= 5 or loc["unmatched"] % 100 == 0:
                 log("dog", "WARN localize unmatched: new territory or a bad grid, drawn through the correction held",
                     unmatched=loc["unmatched"], min_score=localize.MIN_SCORE, **kv)
+            else:   # one line per window, as applied and rejected: only the WARN is rate-limited
+                log("dog", "localize unmatched", unmatched=loc["unmatched"], **kv)
             return self.grid.update(xy)
         snap = lambda: {"corr": localize.describe(self.corr), "map": self.map_pose(st), "grid_frames": self.grid.frames}  # noqa: E731
         before = snap()
