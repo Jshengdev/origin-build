@@ -5,7 +5,8 @@ body; every fixed camera to its zone (its own `zone` when it says one, else the 
 quote(map, price_per_stop_night): stops x nights x price, the guard-shift figure and its citation from config (a number
 Johnny enters), a quote for nothing refused; one `quote.night` row. Both rows carry the shift id in args and the result
 in state_after; a refusal leaves a FAILED row. The two tools (roster, quote) sit in the registry so the CLI and the
-API get them for free; the page reads both rows by their tool names from the ledger it already polls.
+API get them for free; the page reads both rows by their tool names from its own long tail of the ledger (the roster
+of beat 1.2 must outlive a round's rows), and when it finds none it says how far back it looked, never a bare "not yet".
 Nothing here touches a device: the map is a dict, the ledger a temp file, config is patched env. The page is checked by
 string only; its drawing is proven by the headless screenshot in the PR (docs/evidence/night-1/08-remote.png).
 """
@@ -201,13 +202,14 @@ class Tools(Base):
 
 
 class Remote(unittest.TestCase):
-    """The page shows both rows under where the queue goes: one component reading them by tool name from GET /ledger,
-    with a visible fail-loud line when there is none. String check only; the screenshot in the PR proves the drawing."""
+    """The page shows both rows under where the queue goes: one component reading them by tool name from its own
+    GET /ledger tail, with a visible line naming the rows it searched when there is none (an absence claimed only for
+    the window it read). String check only; the screenshot in the PR proves the drawing."""
 
     def test_page_reads_both_rows(self):
         page = (config.ROOT / "ui" / "index.html").read_text()
         for needle in ("// 08 · roster-quote · start", "// 08 · roster-quote · end", "schedule.shift", "quote.night",
-                       "no roster yet", "no quote yet"):
+                       "no roster in the last", "no quote in the last"):
             self.assertIn(needle, page)
 
 
