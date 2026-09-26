@@ -1,0 +1,368 @@
+"""The livecheck tests (goal 22's verifying command): `python -m unittest wtdd.livecheck.test_livecheck`.
+Committed failing first (the package is a docstring: no run(), no match(), no CLI), then made to pass.
+
+What is checked, each from the fixtures under wtdd/livecheck/fixtures/ (written by fixtures/make.py, every row labelled
+cached true / source stub) and the table wtdd/livecheck/steps.json:
+  Replay   the PASS fixture names its deciding row (the last dog.grid_save) with its ts; the per-second stderr lines carry
+           the counts; the timeout FAIL names the missing tool and the where field; a fatal WARN in the log fails with
+           that line; the unsafe fixture returns UNSAFE naming the dog.follow row (after route.refused); exit codes 0/1/2.
+  Table    --list shows an `unchecked` step; --step on it exits 1 and says so; every entry is well formed; the items the
+           goal names (01 02 03 04 06 07 09 14 15) each have at least one checked step.
+  Verdict  livecheck.json is written per verdict with the goal's keys and rewritten by the next run.
+  Live     a row landing after the command started is graded within a second (a thread appends rows to a temp ledger;
+           rows written before the start are history and do not count: the tail starts at the end); a stub row never
+           passes a live (non-replay) step.
+  Draft    needs_the_dog_lines() on the two PR-body shapes (`**Needs the dog**` and `## Needs the dog`, fixtures trimmed from
+           PRs #5 and #4) yields the numbered lines of that section only; draft() makes steps with empty rows; the table's
+           titles for 01 and 04 are those lines verbatim; `--from-prs` (gh stubbed at open_prs) writes the draft, WARNs on
+           a PR with no section, and fails loud when gh fails.
+  Api      GET /livecheck serves livecheck.json with age_s (the remote's mono line), a stale waiting state is flagged,
+           and with no file it says how to make one.
+  Where    match() handles a plain value, gte/lte/in/re, and a missing path, and says which field failed.
+Nothing here touches a dog, the real ledger or the real livecheck.json: every path is a fixture or a temp file."""
+from __future__ import annotations
+import io
+import json
+import os
+import re
+import tempfile
+import threading
+import time
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+from wtdd import livecheck
+
+FIX = Path(__file__).resolve().parent / "fixtures"
+LEDGER_PASS = FIX / "ledger-01-3.jsonl"
+LEDGER_TIMEOUT = FIX / "ledger-01-3-timeout.jsonl"
+LEDGER_UNSAFE = FIX / "ledger-04-4-unsafe.jsonl"
+LOG_OK = FIX / "api-01-3.log"
+LOG_WARN = FIX / "api-01-3-warn.log"
+VERDICT_KEYS = {"step", "title", "t0", "elapsed_s", "seen", "expected", "verdict", "deciding_row"}
+
+
+def run(**kw) -> tuple[dict, str, str]:
+    """livecheck.run(...) with stdout and stderr captured: (verdict object, stdout, stderr)."""
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        v = livecheck.run(**kw)
+    return v, out.getvalue(), err.getvalue()
+
+
+def cli(argv: list[str]) -> tuple[int, str, str]:
+    from wtdd.livecheck import __main__ as m
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        rc = m.main(argv)
+    return rc, out.getvalue(), err.getvalue()
+
+
+class Replay(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "livecheck.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fixture_pass_names_its_row(self):
+        v, out, err = run(step="01.3", ledger=LEDGER_PASS, log=LOG_OK, replay=True, out=self.out)
+        self.assertEqual(v["verdict"], "PASS", v)
+        self.assertEqual(v["deciding_row"]["tool"], "dog.grid_save")
+        self.assertEqual(v["deciding_row"]["args"]["frames"], 74, "the second save (after the drive) decides, not the baseline")
+        self.assertEqual((v["seen"], v["expected"]), (3, 3))
+        last = out.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("PASS 01.3 · "), last)
+        self.assertIn("dog.grid_save", last)
+        self.assertIn("2026-09-27T20:00:12", last, "the deciding row's ts is on the verdict line")
+        ticks = [l for l in err.splitlines() if l.startswith("[wtdd:livecheck] 01.3 · ")]
+        self.assertGreaterEqual(len(ticks), 10, "one stderr line per simulated second (rows at +0, +3, +12 s)")
+        self.assertTrue(all(re.search(r" · \d+ s · rows \d/3 · last ", l) for l in ticks), ticks[:3])
+        self.assertTrue(any(" · rows 2/3 · " in l and "waiting" in l for l in ticks), ticks)
+        self.assertEqual(livecheck.exit_code(v), 0)
+
+    def test_timeout_fail_names_missing_tool_and_field(self):
+        v, out, err = run(step="01.3", ledger=LEDGER_TIMEOUT, log=LOG_OK, replay=True, timeout_s=20, out=self.out)
+        self.assertEqual(v["verdict"], "FAIL", v)
+        last = out.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("FAIL 01.3 · timeout after 20 s: missing dog.grid_save where "), last)
+        self.assertIn("args.frames gte 30", last, "the where field that the missing row had to satisfy is named")
+        self.assertEqual((v["seen"], v["expected"]), (2, 3))
+        self.assertEqual(v["elapsed_s"], 20)
+        self.assertEqual(len([l for l in err.splitlines() if l.startswith("[wtdd:livecheck] 01.3 · ")]), 20)
+        self.assertEqual(livecheck.exit_code(v), 1)
+
+    def test_fatal_warn_in_log_fails(self):
+        v, out, _ = run(step="01.3", ledger=LEDGER_PASS, log=LOG_WARN, replay=True, out=self.out)
+        self.assertEqual(v["verdict"], "FAIL", v)
+        last = out.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("FAIL 01.3 · "), last)
+        self.assertIn("WARN lidar frame callback failed err=ValueError: frame_id map is not odom", last, "the fatal line, verbatim")
+        self.assertIn("WARN lidar frame callback failed", str(v["deciding_row"]))
+        self.assertEqual(livecheck.exit_code(v), 1)
+
+    def test_unsafe_fixture_names_the_row(self):
+        v, out, _ = run(step="04.4", ledger=LEDGER_UNSAFE, log=LOG_OK, replay=True, out=self.out)
+        self.assertEqual(v["verdict"], "UNSAFE", v)
+        self.assertEqual(v["deciding_row"]["tool"], "dog.follow")
+        last = out.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("UNSAFE 04.4 · dog.follow after route.refused · "), last)
+        self.assertIn('"tool": "dog.follow"', last, "the offending row, verbatim")
+        self.assertIn('"ts": "2026-09-27T20:10:03"', last)
+        self.assertEqual(livecheck.exit_code(v), 2)
+
+    def test_cli_replay_exit_codes(self):
+        rc, out, _ = cli(["--step", "01.3", "--replay", "--ledger", str(LEDGER_PASS), "--log", str(LOG_OK), "--out", str(self.out)])
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out.strip().splitlines()[-1].startswith("PASS 01.3 · "))
+        rc, out, _ = cli(["--step", "04.4", "--replay", "--ledger", str(LEDGER_UNSAFE), "--log", str(LOG_OK), "--out", str(self.out)])
+        self.assertEqual(rc, 2, out)
+        rc, out, _ = cli(["--step", "01.3", "--replay", "--timeout", "5", "--ledger", str(LEDGER_TIMEOUT), "--log", str(LOG_OK), "--out", str(self.out)])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("timeout after 5 s", out)
+
+
+class Table(unittest.TestCase):
+    REQUIRED_CHECKED = ["01", "02", "03", "04", "06", "07", "09", "14", "15"]   # the goal: entered at least for these
+
+    def test_list_shows_unchecked(self):
+        rc, out, _ = cli(["--list"])
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertTrue(any("01.8" in l and "unchecked" in l for l in lines), out)
+        self.assertTrue(any("01.3" in l and "rows 3" in l and "Walk about 3 m" in l for l in lines), out)
+
+    def test_unchecked_step_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            outp = Path(d) / "livecheck.json"
+            rc, out, _ = cli(["--step", "01.8", "--replay", "--ledger", str(LEDGER_PASS), "--log", str(LOG_OK), "--out", str(outp)])
+            self.assertEqual(rc, 1, out)
+            last = out.strip().splitlines()[-1]
+            self.assertTrue(last.startswith("FAIL 01.8 · unchecked"), last)
+            v = json.loads(outp.read_text())
+            self.assertEqual(v["verdict"], "FAIL")
+            self.assertIn("unchecked", v["why"])
+
+    def test_steps_table_is_well_formed(self):
+        steps = livecheck.load_steps()
+        self.assertIsInstance(steps, dict)
+        self.assertIn("01.3", steps)
+        for key, s in steps.items():
+            self.assertEqual(key, s["step"])
+            self.assertTrue(key.startswith(s["item"] + "."), key)
+            for k in ("item", "step", "title", "do", "rows", "fatal_warns", "unsafe", "timeout_s"):
+                self.assertIn(k, s, f"{key} lacks {k}")
+            self.assertTrue(s["title"].strip(), f"{key} has an empty title")
+            self.assertGreater(s["timeout_s"], 0)
+            for r in s["rows"]:
+                self.assertIn("tool", r, key)
+                self.assertIn("ok", r, key)
+                self.assertIsInstance(r.get("where", {}), dict, key)
+            for u in s["unsafe"]:
+                self.assertIn("tool", u, key)
+                self.assertTrue(("before" in u) != ("between" in u), f"{key}: unsafe is {{tool, before}} or {{tool, between}}")
+            for w in s["fatal_warns"]:
+                re.compile(w)
+        checked = {s["item"] for s in steps.values() if s["rows"]}
+        missing = [i for i in self.REQUIRED_CHECKED if i not in checked]
+        self.assertEqual(missing, [], f"items with no checked step yet: {missing}")
+
+
+class Verdict(unittest.TestCase):
+    def test_livecheck_json_written_per_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            outp = Path(d) / "livecheck.json"
+            run(step="01.3", ledger=LEDGER_PASS, log=LOG_OK, replay=True, out=outp)
+            v = json.loads(outp.read_text())
+            self.assertTrue(VERDICT_KEYS <= set(v), set(v))
+            self.assertEqual(v["verdict"], "PASS")
+            self.assertEqual(v["step"], "01.3")
+            self.assertTrue(v["title"].startswith("Walk about 3 m"))
+            run(step="04.4", ledger=LEDGER_UNSAFE, log=LOG_OK, replay=True, out=outp)
+            v2 = json.loads(outp.read_text())
+            self.assertEqual(v2["verdict"], "UNSAFE")
+            self.assertEqual(v2["step"], "04.4")
+            self.assertFalse(list(Path(d).glob("*.tmp")), "the atomic write leaves no temp file behind")
+
+
+class Live(unittest.TestCase):
+    """The non-replay path on temp files: rows appended after the start count, history does not, a stub row fails."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.ledger, self.log, self.out = self.dir / "ledger.jsonl", self.dir / "api.log", self.dir / "livecheck.json"
+        self.log.write_text("[wtdd:api] serving http://127.0.0.1:7929/  tools=23\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def live_row(ts: str, tool: str, args: dict, after) -> str:
+        return json.dumps({"ts": ts, "run_id": "test", "cached": False, "source": "live", "step": tool, "agent": "dog", "tool": tool,
+                           "app": "map", "args": args, "state_before": None, "state_after": after, "ok": True,
+                           "response_or_error": None, "latency_ms": 1}) + "\n"
+
+    def test_rows_landing_after_start_pass_within_a_second(self):
+        history = "".join(json.loads(l) and l for l in LEDGER_PASS.read_text().splitlines(True))   # a full PASS sequence, already there
+        self.ledger.write_text(history)
+        t_row = []
+
+        def land():
+            time.sleep(0.4)
+            with self.ledger.open("a") as f:
+                f.write(self.live_row("2026-09-27T21:00:00", "dog.calibrate", {"p": [1, 2], "heading_deg": 0.0}, {"map": {"p": [1, 2]}})); f.flush()
+                time.sleep(0.3)
+                f.write(self.live_row("2026-09-27T21:00:03", "dog.grid_save", {"file": "ui/grid.json", "frames": 5, "frame_id": "odom", "resolution": 0.05, "cal_at": "x"},
+                                      {"cells": 50, "frames": 5, "extent_m": 4.0})); f.flush()
+                time.sleep(0.3)
+                f.write(self.live_row("2026-09-27T21:00:09", "dog.grid_save", {"file": "ui/grid.json", "frames": 60, "frame_id": "odom", "resolution": 0.05, "cal_at": "x"},
+                                      {"cells": 900, "frames": 60, "extent_m": 7.5})); f.flush()
+                t_row.append(time.monotonic())
+
+        threading.Thread(target=land, daemon=True).start()
+        t0 = time.monotonic()
+        v, out, _ = run(step="01.3", ledger=self.ledger, log=self.log, timeout_s=8, out=self.out)
+        took = time.monotonic() - t0
+        self.assertEqual(v["verdict"], "PASS", (v, out))
+        self.assertEqual(v["deciding_row"]["ts"], "2026-09-27T21:00:09", "the new row decides, not the fixture history (the tail starts at the end)")
+        self.assertLess(took - (t_row[0] - t0), 1.5, "the verdict lands within about a second of the last row")
+
+    def test_stub_row_never_passes_a_live_step(self):
+        self.ledger.write_text(LEDGER_PASS.read_text())
+        v, out, _ = run(step="01.3", ledger=self.ledger, log=self.log, timeout_s=3, from_start=True, out=self.out)
+        self.assertEqual(v["verdict"], "FAIL", (v, out))
+        self.assertIn("stub", v["why"])
+        self.assertEqual(v["deciding_row"]["tool"], "dog.calibrate")
+        self.assertTrue(out.strip().splitlines()[-1].startswith("FAIL 01.3 · stub row cannot pass a live step"), out)
+
+    def test_missing_log_fails_loud(self):
+        self.log.unlink()
+        self.ledger.write_text("")
+        v, out, _ = run(step="01.3", ledger=self.ledger, log=self.log, timeout_s=3, out=self.out)
+        self.assertEqual(v["verdict"], "FAIL")
+        self.assertIn("tee -a logs/api.log", out, "the FAIL line says how to start the API so the log exists")
+
+
+class Draft(unittest.TestCase):
+    def test_from_prs_fixture_yields_numbered_lines(self):
+        body = (FIX / "pr-body-01.md").read_text()
+        lines = livecheck.needs_the_dog_lines(body)
+        self.assertEqual([k for k, _ in lines], ["1", "2", "3", "4", "5", "6", "7", "8"])
+        self.assertTrue(lines[0][1].startswith("`frame_id` must be `odom`."), lines[0])
+        self.assertTrue(lines[2][1].startswith("Walk about 3 m"), lines[2])
+        self.assertFalse(any("Shared files" in t or "wtdd/api.py" in t for _, t in lines), "numbered lines outside the section are not taken")
+        steps = livecheck.draft([{"number": 5, "title": "01 · Every LiDAR window is accumulated ...", "body": body}])
+        self.assertEqual([s["step"] for s in steps], [f"01.{k}" for k in range(1, 9)])
+        self.assertTrue(all(s["rows"] == [] and s["item"] == "01" and s["pr"] == 5 for s in steps))
+        self.assertEqual(steps[2]["title"], lines[2][1])
+
+    def test_h2_heading_shape(self):
+        lines = livecheck.needs_the_dog_lines((FIX / "pr-body-04.md").read_text())
+        self.assertEqual([k for k, _ in lines], ["1", "2", "3", "4", "5", "6"])
+        self.assertTrue(lines[3][1].startswith('Press "▶ walk the path"'), lines[3])
+        self.assertFalse(any("cut from this fixture" in t for _, t in lines), "numbered lines outside the section are not taken")
+
+    def test_table_titles_are_the_pr_lines_verbatim(self):
+        steps = livecheck.load_steps()
+        for item, name in (("01", "pr-body-01.md"), ("04", "pr-body-04.md")):
+            for k, text in livecheck.needs_the_dog_lines((FIX / name).read_text()):
+                self.assertEqual(steps[f"{item}.{k}"]["title"], text, f"{item}.{k}")
+
+    def test_cli_from_prs_writes_the_draft(self):
+        prs = [{"number": 5, "title": "01 · Every LiDAR window is accumulated ...", "body": (FIX / "pr-body-01.md").read_text()},
+               {"number": 4, "title": "04 · A zone drawn on the map blocks ...", "body": (FIX / "pr-body-04.md").read_text()},
+               {"number": 99, "title": "99 · a PR with no such section", "body": "**Goal**\n\n1. not a step\n"}]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(livecheck, "open_prs", return_value=prs):
+            outp = Path(d) / "steps.draft.json"
+            rc, out, err = cli(["--from-prs", "--draft-out", str(outp)])
+            self.assertEqual(rc, 0, out + err)
+            steps = json.loads(outp.read_text())["steps"]
+        self.assertEqual([s["step"] for s in steps], [f"01.{k}" for k in range(1, 9)] + [f"04.{k}" for k in range(1, 7)])
+        self.assertTrue(all(s["rows"] == [] for s in steps))
+        self.assertEqual([s["pr"] for s in steps[::8]], [5, 4])
+        self.assertTrue(any("WARN" in l and "#99" in l for l in err.splitlines()), "a PR with no Needs-the-dog lines is a WARN, not a silence")
+
+    def test_cli_from_prs_fails_loud_when_gh_fails(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(livecheck, "open_prs", side_effect=RuntimeError("gh pr list failed: not logged in")):
+            outp = Path(d) / "steps.draft.json"
+            rc, out, err = cli(["--from-prs", "--draft-out", str(outp)])
+            self.assertEqual(rc, 1)
+            self.assertIn("not logged in", out + err)
+            self.assertFalse(outp.exists(), "no draft is written when the PRs could not be read")
+
+
+class Api(unittest.TestCase):
+    """GET /livecheck on a real wtdd.api handler on an ephemeral port, livecheck.OUT pointed at a temp file."""
+
+    def setUp(self):
+        from http.server import ThreadingHTTPServer
+        from wtdd import api
+        self.tmp = tempfile.TemporaryDirectory()
+        self.outp = Path(self.tmp.name) / "livecheck.json"
+        self.err = io.StringIO()
+        self.quiet = redirect_stderr(self.err)
+        self.quiet.__enter__()
+        self.patch = mock.patch.object(livecheck, "OUT", self.outp)
+        self.patch.start()
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), api.H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}/livecheck"
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.patch.stop()
+        self.quiet.__exit__(None, None, None)
+        self.tmp.cleanup()
+
+    def get(self) -> dict:
+        import urllib.request
+        with urllib.request.urlopen(self.url, timeout=5) as r:
+            self.assertEqual(r.status, 200)
+            return json.loads(r.read())
+
+    def test_no_verdict_yet_says_how(self):
+        d = self.get()
+        self.assertIsNone(d.get("verdict"), d)
+        self.assertIn("python -m wtdd.livecheck --step", d.get("why", ""))
+
+    def test_serves_the_newest_verdict(self):
+        livecheck.run(step="04.4", ledger=LEDGER_UNSAFE, log=LOG_OK, replay=True, out=self.outp)
+        d = self.get()
+        self.assertEqual((d["step"], d["verdict"]), ("04.4", "UNSAFE"))
+        self.assertEqual(d["deciding_row"]["tool"], "dog.follow")
+        self.assertIsInstance(d["age_s"], (int, float))
+        self.assertFalse(d["stale"])
+
+    def test_a_dead_waiting_state_is_stale(self):
+        self.outp.write_text(json.dumps({"step": "01.3", "title": "t", "t0": "x", "elapsed_s": 4, "seen": 1, "expected": 3,
+                                         "verdict": "waiting", "deciding_row": None}))
+        old = time.time() - 30
+        os.utime(self.outp, (old, old))
+        d = self.get()
+        self.assertEqual(d["verdict"], "waiting")
+        self.assertTrue(d["stale"], "a waiting state nobody rewrote for 30 s is a killed livecheck, flagged for the page to draw red")
+
+
+class Where(unittest.TestCase):
+    ROW = {"tool": "dog.grid_save", "ok": True, "source": "live", "args": {"frame_id": "odom", "frames": 74}, "state_after": {"cells": 1510, "extent_m": 8.9}}
+
+    def test_match_operators(self):
+        self.assertIsNone(livecheck.match(self.ROW, {"tool": "dog.grid_save", "ok": True, "where": {"args.frame_id": "odom", "args.frames": {"gte": 30}}}))
+        self.assertIsNone(livecheck.match(self.ROW, {"tool": "dog.grid_save", "ok": True, "where": {"state_after.extent_m": {"gte": 3, "lte": 20}, "source": {"in": ["live", "stub"]}, "args.frame_id": {"re": "^od"}}}))
+        why = livecheck.match(self.ROW, {"tool": "dog.grid_save", "ok": True, "where": {"args.frames": {"gte": 100}}})
+        self.assertIn("args.frames gte 100", why)
+        self.assertIn("74", why, "the value seen is named")
+        self.assertIsNotNone(livecheck.match(self.ROW, {"tool": "dog.grid_save", "ok": False, "where": {}}))
+        self.assertIsNotNone(livecheck.match(self.ROW, {"tool": "dog.calibrate", "ok": True, "where": {}}))
+        why = livecheck.match(self.ROW, {"tool": "dog.grid_save", "ok": True, "where": {"args.cal_at": {"re": "."}}})
+        self.assertIn("args.cal_at", why)
+        self.assertIsNotNone(livecheck.match(self.ROW, {"tool": "dog.grid_save", "agent": "watch", "ok": True, "where": {}}), "agent, when given, must match")
+
+
+if __name__ == "__main__":
+    unittest.main()
