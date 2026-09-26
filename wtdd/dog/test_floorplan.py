@@ -184,10 +184,11 @@ class Mask(Base):
         g = accumulated()
         before = g.zmask.copy()
         for k in (64, 65, -1):   # 64 would wrap to bit 0, -1 to bit 63
-            g.update(np.array([[0.0, 0.0, g.z_ref + k * RES]]))
+            buf = io.StringIO()   # this update's stderr only: the fixture's re-based frame may WARN too
+            with redirect_stderr(buf):
+                g.update(np.array([[0.0, 0.0, g.z_ref + k * RES]]))
+            self.assertTrue(any("WARN" in l and "layer" in l for l in buf.getvalue().splitlines()), f"layer {k}: no WARN line")
         np.testing.assert_array_equal(g.zmask, before, "an out-of-lattice layer changed the mask")
-        self.assertIn("WARN", self.err.getvalue())
-        self.assertIn("layer", self.err.getvalue())
 
     def test_the_mask_round_trips_through_save_and_load_bit_63_too(self):
         g, (_, zmask, _, lines) = accumulated(), truth()
@@ -441,8 +442,7 @@ class Replay(Base):
     def test_no_wall_exits_2_with_a_warn(self):
         r = self.cli("--png", str(self.tmp / "fp.png"), npz=ff.write(self.tmp / "box.npz", world=BOX_ONLY))
         self.assertEqual(r.returncode, 2, r.stderr[-800:])
-        self.assertIn("WARN", r.stderr)
-        self.assertIn("no wall", r.stderr)
+        self.assertTrue(any("WARN" in l and "no wall" in l for l in r.stderr.splitlines()), r.stderr[-800:])
 
 
 if __name__ == "__main__":
