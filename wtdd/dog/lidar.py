@@ -32,8 +32,9 @@ examples/go2/data_channel/lidar/lidar_stream.py, not shipped in the wheel, fetch
   frame:    the voxel window is a grid whose corner is `origin`; the viewers never apply the robot pose to it, so the
             points are ABSOLUTE in the frame named by frame_id, not body-relative. UNVERIFIED on this dog: (1) the
             value of frame_id (expected "odom"), (2) that it is the same odometry as LF_SPORT_MOD_STATE position
-            (both are dead-reckoned from power-on; the lidar odometry rt/utlidar/robot_pose is subscribed alongside
-            and reported so the two can be compared on the first live run), (3) where z = 0 sits (Z_MIN/Z_MAX are a
+            (both are dead-reckoned from power-on; 05a: Body.connect subscribes the lidar odometry rt/utlidar/robot_pose
+            for the whole session, LiDAR on or off, every follow records both poses as pose.sample rows, and
+            `python -m wtdd.dog.drift` compares them), (3) where z = 0 sits (Z_MIN/Z_MAX are a
             guess: the first frame logs the z range and the count per z layer; tune from that log).
 Ceiling (wtdd:): no accumulation across frames and no wall extraction; the map shows the newest window only.
 """
@@ -79,14 +80,15 @@ async def subscribe(conn: Any, cb: Callable[[dict], None], pose_cb: Callable[[di
 
 
 def unsubscribe(conn: Any) -> None:
-    """Publishes "off" to rt/utlidar/switch and unsubscribes both topics (the driver keeps the callbacks registered;
-    the dog stops sending). UNVERIFIED that "off" is honoured; the frame count in Body tells."""
+    """Publishes "off" to rt/utlidar/switch and unsubscribes the voxel topic (the driver keeps the callback registered;
+    the dog stops sending). UNVERIFIED that "off" is honoured; the frame count in Body tells. rt/utlidar/robot_pose
+    stays subscribed: since 05a it belongs to the session (Body.connect), and LiDAR off must not silence the
+    follower's other pose source (wtdd/dog/drift.py)."""
     dc = conn.datachannel
     if dc.pub_sub.channel.readyState != "open":
         raise ConnectionError("data channel is not open")
     dc.pub_sub.publish_without_callback(RTC_TOPIC["ULIDAR_SWITCH"], "off")
     dc.pub_sub.unsubscribe(RTC_TOPIC["ULIDAR_ARRAY"])
-    dc.pub_sub.unsubscribe(RTC_TOPIC["ROBOTODOM"])
     log("lidar", "stream off", topic=RTC_TOPIC["ULIDAR_ARRAY"])
 
 

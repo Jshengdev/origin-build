@@ -73,7 +73,7 @@ from unitree_webrtc_connect.unitree_auth import _probe_tcp_port
 
 from .. import config
 from ..ledger import log, step
-from . import lidar
+from . import drift, lidar
 
 try:
     from unitree_webrtc_connect.constants import OBSTACLES_AVOID_API
@@ -251,6 +251,10 @@ class Body:
         self._lidar_at = 0.0
         self._lidar_on = False
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
+        self._ut: tuple[float, float, float] | None = None   # 05a: its newest parse (drift.utpose_xyyaw), x y yaw
+        self._ut_n = 0
+        self._ut_err = 0
+        self._ut_at = 0.0
 
     # ---- connection
 
@@ -271,6 +275,9 @@ class Body:
             # Registered before the channel is ever switched on, so the first frame is handed to us.
             conn.video.add_track_callback(self._drain)
             conn.datachannel.pub_sub.subscribe(RTC_TOPIC["LF_SPORT_MOD_STATE"], self._on_state)
+            # 05a: the second pose source lives for the session, LiDAR on or off (wtdd/dog/drift.py). UNVERIFIED that the
+            # dog publishes it with the LiDAR switch off; the LiDAR is never switched on here to get it (utpose stays None).
+            conn.datachannel.pub_sub.subscribe(RTC_TOPIC["ROBOTODOM"], self._on_utpose)
             r["state_after"] = await self.fresh_state()
             r["response_or_error"] = {"peer": conn.pc.connectionState, "ice": conn.pc.iceConnectionState,
                                       "state_n": self._st_n}
@@ -315,7 +322,9 @@ class Body:
         return {"mode": d.get("mode"), "gait_type": d.get("gait_type"), "progress": d.get("progress"),
                 "position": d.get("position"), "velocity": d.get("velocity"), "yaw_speed": d.get("yaw_speed"),
                 "body_height": d.get("body_height"), "range_obstacle": d.get("range_obstacle"), "rpy": imu.get("rpy"),
-                "n": self._st_n, "hz": hz, "age_ms": round((now - self._st_at) * 1000)}
+                "n": self._st_n, "hz": hz, "age_ms": round((now - self._st_at) * 1000),
+                "utpose": {"x": self._ut[0], "y": self._ut[1], "yaw": self._ut[2], "n": self._ut_n,
+                           "age_ms": round((now - self._ut_at) * 1000)} if self._ut else None, "utpose_errors": self._ut_err}
 
     async def fresh_state(self, required: bool = False) -> dict | None:
         """Snapshot from a sample that arrived after this call (up to STATE_FRESH_S). required=True raises if
@@ -515,7 +524,7 @@ class Body:
         """The dog's LiDAR voxel stream on, once per connection; decoded frames land in _on_lidar, the newest is kept."""
         if self._lidar_on:
             return
-        await lidar.subscribe(self.conn, self._on_lidar, self._on_utpose)
+        await lidar.subscribe(self.conn, self._on_lidar)   # the pose topic is connect()'s since 05a
         self._lidar_on = True
 
     async def lidar_off(self) -> None:
@@ -552,7 +561,22 @@ class Body:
             log("dog", f"lidar frames={self._lidar_n}", voxels=d["n"], errors=self._lidar_err)
 
     def _on_utpose(self, message: dict) -> None:
-        self._utpose = message.get("data")
+        """Runs inside the driver's message handler. Keeps the raw data and its parse (drift.utpose_xyyaw); the first
+        message logs its keys and pose (how the UNVERIFIED shape is confirmed live). A message that does not parse is
+        counted (state().utpose_errors) and logged on the first and every 100th; the last good pose ages out (age_ms)."""
+        d = message.get("data")
+        self._utpose = d
+        try:
+            self._ut = drift.utpose_xyyaw(d)
+        except ValueError as e:
+            self._ut_err += 1
+            if self._ut_err % 100 == 1:
+                log("dog", "WARN rt/utlidar/robot_pose not parsed", err=str(e)[:120], errors=self._ut_err, data=str(d)[:160])
+            return
+        self._ut_n, self._ut_at = self._ut_n + 1, time.monotonic()
+        if self._ut_n == 1:
+            log("dog", "first rt/utlidar/robot_pose", keys=sorted(d), x=round(self._ut[0], 3), y=round(self._ut[1], 3),
+                yaw=round(self._ut[2], 3), sport_pos=[round(float(v), 3) for v in ((self.state() or {}).get("position") or [])[:2]])
 
     def lidar_points(self) -> dict:
         """The newest decoded voxel frame and the counts: {on, n (frames), errors, age_ms, frame (None until the first:
