@@ -265,5 +265,99 @@ class Ordering(unittest.TestCase):
         self.assertEqual(ledger.rows()[n0:][tools.index("decided")]["args"]["stop"], 10)
 
 
+class LiveReply(unittest.TestCase):
+    """The live path against TypeSafe's documented System One reply, with requests.post patched (no network, no key):
+    the state and the labels go out as one Choice question, the chosen label's probability is p, the row says live."""
+    REPLY = {"model": "typesafe/jev-1.13-20260917", "usage": {"input_tokens": 476, "output_tokens": 70},
+             "answers": {"stop": {"type": "choice", "choice": "person", "confidence": 0.7,
+                                  "probabilities": {"clear": 0.05, "out_of_place": 0.1, "hazard": 0.03, "person": 0.82}}}}
+
+    def _decide(self, reply, status=200):
+        resp = mock.Mock(status_code=status, text=json.dumps(reply))
+        resp.json.return_value = reply
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "test-key", "JEV_MODEL": ""}), \
+                mock.patch.object(decide.requests, "post", return_value=resp) as post:
+            return decide.decide(_state(), stop=10), post
+
+    def test_system_one_choice_is_parsed(self):
+        d, post = self._decide(self.REPLY)
+        self.assertEqual(d, {"label": "person", "p": 0.82, "needs_person": False, "model": "typesafe/jev-1.13-20260917"})
+        kw = post.call_args.kwargs
+        self.assertEqual(kw["headers"]["Authorization"], "Bearer test-key")
+        self.assertEqual(kw["json"]["state"], _state())
+        self.assertEqual(kw["json"]["model"], "typesafe/jev-1.13")
+        self.assertEqual(kw["json"]["questions"]["stop"]["type"], "choice")
+        self.assertEqual(list(kw["json"]["questions"]["stop"]["criteria"]), decide.DEFAULT_LABELS)
+        row = ledger.rows(1)[0]
+        self.assertEqual((row["tool"], row["ok"], row["source"], row["cached"], row["app"]), ("decided", True, "live", False, "openrouter"))
+        self.assertEqual(row["state_after"], d)
+        self.assertIn('"answers"', row["response_or_error"])
+
+    def test_a_reply_without_the_answer_fails_loud(self):
+        for reply, status in (({"model": "x"}, 200), ({"error": "no credits"}, 402)):
+            with self.assertRaises(RuntimeError, msg=reply):
+                self._decide(reply, status)
+            row = ledger.rows(1)[0]
+            self.assertEqual((row["tool"], row["ok"], row["source"]), ("decided", False, "live"))
+
+    def test_a_label_that_was_not_offered_fails_loud(self):
+        bad = {"model": "x", "answers": {"stop": {"type": "choice", "choice": "banana", "probabilities": {"banana": 0.9}}}}
+        with self.assertRaises(ValueError):
+            self._decide(bad)
+        self.assertFalse(ledger.rows(1)[0]["ok"])
+
+
+class ListenAsk(unittest.TestCase):
+    """The chat round's stop (listen.look_and_say): when the decision is not sure, one "not sure" line with the photo
+    under decide:<guid>:<stop>, the pending question, and the hold; "who dis?!" wins when both would ask; a sure
+    decision asks nothing; a failed one is posted as its error. look_and_see, the map and the hold are patched."""
+
+    def setUp(self):
+        from wtdd.chat import listen as L
+        self.L, self.posts = L, []
+        self.pending, self.map = Path(_TMP) / "pending.json", Path(_TMP) / "listen-map.json"
+        self.pending.unlink(missing_ok=True)
+        self.map.write_text(json.dumps({"actions": {"10": {"look": "tilt", "ask": False}, "22": {"look": "sit", "ask": True}}}))
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            self.l = L.Listener("any;+;test", lambda g, k, kind, t, f: self.posts.append((k, t, f)), listen_s=60)
+
+    def _stop(self, at, person, decision):
+        seen = {"text": "someone on the couch.", "file": "/tmp/look-down-boxed.jpg", "person": person,
+                "detector": {"classes": {"couch": 1}}, "decision": decision}
+        with mock.patch("wtdd.tools.dog_say.look_and_see", return_value=seen), mock.patch("wtdd.field.MAP", self.map), \
+                mock.patch.object(self.L, "PENDING", self.pending), \
+                mock.patch.object(self.L.Listener, "await_verdict", return_value=False) as wait:
+            self.l.look_and_say({"guid": "g1"}, at=at)
+        return wait
+
+    def test_not_sure_is_one_question_with_the_photo_and_a_hold(self):
+        d = {"label": "person", "p": 0.6, "needs_person": True, "model": "stub"}
+        wait = self._stop(10, False, d)
+        self.assertEqual([p[0] for p in self.posts], ["say:g1:10", "decide:g1:10"])
+        self.assertEqual(self.posts[1], ("decide:g1:10", "not sure: person at 60 percent. what is it?", "/tmp/look-down-boxed.jpg"))
+        pend = json.loads(self.pending.read_text())
+        self.assertEqual((pend["kind"], pend["trigger"], pend["decision"]), ("decide", "decide:g1:10", d))
+        wait.assert_called_once()
+
+    def test_who_dis_wins_one_question_per_stop(self):
+        wait = self._stop(22, True, {"label": "person", "p": 0.6, "needs_person": True, "model": "stub"})
+        self.assertEqual([p[0] for p in self.posts], ["say:g1:22", "alarm:g1:22"])
+        self.assertEqual(json.loads(self.pending.read_text())["kind"], "who_dis")
+        wait.assert_called_once()
+
+    def test_a_sure_decision_asks_nothing(self):
+        wait = self._stop(10, False, {"label": "clear", "p": 0.8, "needs_person": False, "model": "stub"})
+        self.assertEqual([p[0] for p in self.posts], ["say:g1:10"])
+        self.assertFalse(self.pending.exists())
+        wait.assert_not_called()
+
+    def test_a_failed_decision_is_posted_as_its_error(self):
+        self._stop(10, False, {"error": "RuntimeError: jev 500: down"})
+        self.assertEqual(self.posts[-1][:2], ("decide:g1:10", "couldn't decide: RuntimeError: jev 500: down"))
+
+    def test_the_ask_line_is_the_dogs_own(self):
+        self.assertTrue(decide.ask_line({"label": "out_of_place", "p": 0.42}).startswith(self.L.OWN_OPENERS))
+
+
 if __name__ == "__main__":
     unittest.main()
