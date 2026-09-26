@@ -15,7 +15,10 @@ clothes or "out of place": the vision model in wtdd/tools/dog_say.py names those
 detector is observability and a receipt, not a gate: the one thing that acts on it is the intruder watch: while <repo>/intruder.on exists
 (POST /intruder {on} on the API, the remote's "intruder watch" button) a person in view for HOLD frames calls the API's
 intruder_alarm tool (photo, boxes, "STRANGER DANGER!!!" to the castle, red/blue on the room), at most once every COOLDOWN_S. First run downloads yolo11n.pt
-(about 5 MB) next to the working directory. The API adds age_ms to /watch so the page hides stale boxes."""
+(about 5 MB) next to the working directory. The API adds age_ms to /watch so the page hides stale boxes. From a URL,
+watch.json names the frame it boxed (frame_sha, frame_n from the API's X-Frame-Sha and X-Frame-N headers; a --source file
+writes neither) and each box carries cls, the model's class index: the page draws the boxes over the live stream in the
+detector's class colours only when frame_sha is the frame on screen, else dimmed with /watch's frames_behind."""
 from __future__ import annotations
 import argparse
 import json
@@ -46,13 +49,14 @@ def detect(model, img: bytes) -> tuple[list[dict], object, int]:
     t0 = time.perf_counter()
     r = model.predict(arr, conf=CONF, verbose=False)[0]
     ms = round((time.perf_counter() - t0) * 1000)
-    boxes = [{"name": r.names[int(c)], "conf": round(float(p), 2), "xyxy": [round(float(v)) for v in b]}
+    boxes = [{"name": r.names[int(c)], "cls": int(c), "conf": round(float(p), 2), "xyxy": [round(float(v)) for v in b]}
              for c, p, b in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist(), r.boxes.xyxy.tolist())]
     return boxes, r.plot(), ms
 
 
-def publish(boxes: list[dict], plotted, ms: int, source: str, out: Path = OUT, state: bool = True) -> dict:
-    """Writes the boxed JPEG to `out` (atomic) and, when `state`, the counts to watch.json for the remote."""
+def publish(boxes: list[dict], plotted, ms: int, source: str, out: Path = OUT, state: bool = True, frame: dict | None = None) -> dict:
+    """Writes the boxed JPEG to `out` (atomic) and, when `state`, the counts to watch.json for the remote. `frame` names
+    the frame that was boxed ({frame_sha, frame_n} from the API's headers), so the page joins the boxes to it."""
     import cv2
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.stem + ".tmp.jpg")
@@ -62,7 +66,7 @@ def publish(boxes: list[dict], plotted, ms: int, source: str, out: Path = OUT, s
     for b in boxes:
         classes[b["name"]] = classes.get(b["name"], 0) + 1
     d = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "t": time.time(), "ms": ms, "n": len(boxes), "classes": classes,
-         "boxes": boxes, "source": source, "model": MODEL, "file": str(out)}
+         "boxes": boxes, "source": source, "model": MODEL, "file": str(out), **(frame or {})}
     if state:
         tmpj = WATCH.with_suffix(".tmp")
         tmpj.write_text(json.dumps(d))
@@ -96,10 +100,12 @@ def main(argv: list[str] | None = None) -> int:
                 if r.status_code != 200:
                     raise RuntimeError(f"{a.source} -> {r.status_code}: {r.text[:80]}")
                 img = r.content
+                frame = {"frame_sha": r.headers.get("X-Frame-Sha"), "frame_n": int(r.headers["X-Frame-N"]) if r.headers.get("X-Frame-N") else None}
             else:
                 img = Path(a.source).expanduser().read_bytes()
+                frame = {}   # a file names no live frame
             boxes, plotted, ms = detect(model, img)
-            d = publish(boxes, plotted, ms, a.source, out_path, state=not a.out)
+            d = publish(boxes, plotted, ms, a.source, out_path, state=not a.out, frame=frame)
             n += 1
             warned = 0
             now = set(d["classes"])
