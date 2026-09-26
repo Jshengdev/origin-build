@@ -46,6 +46,16 @@ def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def _unreached(rows: list[dict], stop: int) -> list[dict]:
+    """Shift A's rows as the README's live failure mode writes them at one stop ("the dog drops or is unreachable ...
+    the look posts the error"): the API is down, so the stop has no dog.look, watch.boxes, llm.generate or vision.check
+    row, and listen.py still claims and posts say:<wake>:<n> as "couldn't look: ...". In memory; the ledger is untouched."""
+    i = next(i for i, r in enumerate(rows) if r["tool"] == "chat.post" and r["args"]["trigger"] == f"say:WAKE-A:{stop}")
+    look = max(j for j in range(i) if rows[j]["tool"] == "dog.look")
+    said = {**rows[i], "args": {**rows[i]["args"], "text": "couldn't look: ConnectionError: the API is not answering", "file": None}}
+    return [r for j, r in enumerate(rows[:i]) if j < look or r["tool"] == "chat.claim"] + [said] + rows[i + 1:]
+
+
 class Fixture(unittest.TestCase):
     def test_fixture_matches_its_recipe_and_every_row_is_labeled_stub(self):
         rows = ledger.rows()
@@ -147,6 +157,25 @@ class Unsigned(Guard):
                 "state_before": None, "state_after": {"model": "a-chat-model", "usage": {"total_tokens": 9}}, "response_or_error": "sup", "latency_ms": 7}
         s23 = record.build(A, rows=rows[:noon] + [turn] + rows[noon:])["stops"][2]
         self.assertIsNone(s23["model"])      # a "yo dog" turn (agent central) is the chat's; the failed look had no model call
+
+    def test_a_say_post_with_no_look_before_it_is_its_own_failed_stop(self):
+        mid = record.build(A, rows=_unreached(ledger.rows(), 22))["stops"]     # stop 22 never reached the dog
+        self.assertEqual([s["index"] for s in mid], [10, 22, 23])
+        s10, s22, _ = mid
+        self.assertEqual(s10["posted"]["rowid"], 70003)                        # stop 10 keeps its own post and sentence
+        self.assertIn("tarp", s10["sentence"])
+        self.assertEqual(s22["posted"]["rowid"], 70005)
+        self.assertIsNone(s22["kind"])
+        self.assertIs(s22["ok"], False)
+        self.assertIsNone(s22["sentence"])
+        self.assertIn("couldn't look", s22["error"])
+        first = record.build(A, rows=_unreached(ledger.rows(), 10))["stops"]   # the round's first stop never reached the dog
+        self.assertEqual([s["index"] for s in first], [10, 22, 23])
+        self.assertIsNone(first[0]["kind"])
+        self.assertIn("couldn't look", first[0]["error"])
+        self.assertEqual(first[0]["posted"]["rowid"], 70003)
+        self.assertEqual((first[1]["kind"], first[1]["posted"]["rowid"]), ("sit", 70005))
+        self.assertIn("no dog.look row", record.html(record.build(A, rows=_unreached(ledger.rows(), 22))))   # the page shows it FAILED
 
     def test_page_renders_with_an_empty_map(self):
         h = record.html(record.build(A, site=EMPTY_SITE))
