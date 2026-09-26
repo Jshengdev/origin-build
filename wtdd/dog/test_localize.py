@@ -290,6 +290,46 @@ class Session(unittest.TestCase):
         self.assertEqual(tuple(self.s.corr), localize.IDENTITY)
         self.assertIsNone(self.s.grid)
 
+    # ---- review round 1: added after the build, each seen failing on 59ee282 before the fix
+    def test_a_window_the_grid_refuses_moves_nothing(self):
+        """The window is drawn before the belief moves: a grid that refuses it (01's MAX_SIDE) leaves the correction,
+        the counts and the ledger as they were, and Body counts the raise."""
+        blobs = dfx.blobs()
+        self.body._on_lidar(fx.decode_wire(blobs[0]))
+        corr, frames, n = tuple(self.s.corr), self.s.grid.frames, len(self.ledger.rows())
+        self.assertNotEqual(corr, localize.IDENTITY, "the first drifted window was applied")
+        with mock.patch.object(self.s.grid, "update", side_effect=ValueError("grid would pass MAX_SIDE: refused")):
+            self.body._on_lidar(fx.decode_wire(blobs[1]))
+        self.assertEqual(tuple(self.s.corr), corr, "the dot does not move for a window the grid did not take")
+        self.assertEqual([r["tool"] for r in self.ledger.rows()[n:]], [], "no pose.corrected row for a correction never applied")
+        self.assertEqual(self.s.grid.frames, frames)
+        self.assertEqual(self.s.lidar()["localize"]["applied"] - self.loc0["applied"], 1, "the refused window is not counted applied")
+        self.assertEqual(self.body.lidar_points()["cb_errors"], 1)
+
+    def test_a_clear_under_a_correction_asks_for_the_drag_again(self):
+        """The drag tied the corrected pose; clearing the correction moves the dot by it, so the remote asks for the drag
+        (recheck) instead of reading 'located'."""
+        st = {"position": [0.4, 0.2, 0.0], "rpy": [0.0, 0.0, 0.3], "age_ms": 0, "n": 1}
+        with mock.patch.object(self.s, "run", return_value=st):
+            self.s.calibrate((300.0, 900.0), 0.0)
+        self.feed_drift()
+        self.assertFalse(self.s.recheck)
+        self.s.grid_clear("test: a bad grid, the dog was not power-cycled")
+        self.assertTrue(self.s.state()["recheck"], "the tie was made through a correction that is gone")
+        row = [r for r in self.ledger.rows() if r["tool"] == "dog.grid_clear"][-1]
+        self.assertTrue(row["ok"])
+        self.assertTrue(row["state_after"]["recheck"])
+
+    def test_every_unmatched_window_is_one_line(self):
+        """An unmatched window prints one stderr line, as applied and rejected ones do; only its WARN is rate-limited, so
+        a new corridor does not go quiet after five windows while the counter climbs."""
+        with mock.patch.object(localize, "MIN_SCORE", 1.01):   # nothing clears the gate: every window is unmatched
+            self.feed_drift()
+            self.feed_drift()
+        n = self.s.lidar()["localize"]["unmatched"]
+        self.assertGreater(n, 5, "past the WARN's rate limit")
+        self.assertEqual(len([ln for ln in self.err.getvalue().splitlines() if "localize unmatched" in ln]), n)
+
 
 if __name__ == "__main__":
     unittest.main()
