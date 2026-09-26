@@ -67,6 +67,21 @@
   .occ { fill: rgba(38,35,35,.6); stroke: none; pointer-events: none; }   /* one square per grid cell (not ".grid": that is the page layout) */
   .occlbl { opacity: .85; }
   /* 01 · occupancy · end */
+  /* 21 · route-the-map · start */
+  .rtcap { fill: transparent; cursor: crosshair; }
+  .rtap { fill: #fff; stroke: #262323; stroke-width: 3; pointer-events: none; }
+  .rtapn { font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; fill: #262323; text-anchor: middle; dominant-baseline: central; pointer-events: none; user-select: none; }
+  .rtleg { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: rtdraw .6s ease-out forwards; pointer-events: none; }   /* pathLength=1: each leg draws itself, one after another */
+  @keyframes rtdraw { to { stroke-dashoffset: 0; } }
+  .rtstop { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 5; pointer-events: none; }
+  .rtfail { stroke: #c0392b; stroke-width: 6; stroke-dasharray: 12 8; pointer-events: none; }
+  .rtfaillbl { fill: #c0392b; }
+  .rtfo { pointer-events: none; } .rtbar { pointer-events: auto; display: inline-flex; flex-direction: column; gap: 8px; padding: 10px 14px; background: rgba(251,250,247,.94); border-radius: 4px; box-shadow: 0 0 0 1px rgba(38,35,35,.12); }
+  .rtbar button { font-size: 22px; padding: 8px 18px; } .rtrow { display: flex; gap: 10px; flex-wrap: wrap; }
+  .rtline { font-family: var(--mono); font-size: 20px; max-width: 990px; } .rtline.bad { color: var(--bad); }
+  .map.routing .path, .map.routing .pt, .map.routing .pt + .lbl { opacity: .12; }   /* the drawn path recedes while a route is tapped or planned */
+  .map.routing .cone { pointer-events: none; }
+  /* 21 · route-the-map · end */
 </style>
 </head>
 <body>
@@ -267,6 +282,7 @@ function App() {
             ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
+            <${RouteMap} onSaved=${() => fetch("/map").then(r => r.json()).then(setMap)}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
@@ -384,6 +400,68 @@ function GridLayer() {
     <text class="lbl occlbl" x="12" y="28">grid · ${g ? `${c.length} cells seen ${g.threshold ?? "?"}+ times` : "…"}${g?.frames ? ` · ${g.frames} frames` : ""}${g?.source ? ` · ${g.source}` : ""}${g?.why ? ` · ${g.why}` : ""}${g?.error ? ` · FAILED ${g.error}` : ""}${g?.cb_errors ? ` · FAILED to take ${g.cb_errors} frames` : ""}</text></g>`;
 }
 // 01 · occupancy · end
+// 21 · route-the-map · start
+// Route the map (goal 21; POST /tools/plan_route, wtdd/plan.py route()). "route: tap the stops" captures taps on the map,
+// numbered; "plan route" asks the API for one route through them (A* per leg over the dog's grid, no-go zones blocked;
+// the start is the dog's believed pose when it is located, else tap 1) and draws the server's path leg by leg with its
+// numbered stops. The page only slices the server's path at the server's stops: it computes no geometry. A leg with no
+// route: the error in red and, from the plan.multistop ok=false row's args.failed_leg, a red dashed straight line
+// labelled "no route" (the receipts panel shows that row). "save route" writes path, stops and actions through POST
+// /map's rules (check_path; the previous map kept as map.prev.json); a refusal shows check_path's words in red.
+// "restore saved route" above stays the fallback.
+function RouteMap({ onSaved }) {
+  const [on, setOn] = useState(false), [taps, setTaps] = useState([]), [res, setRes] = useState(null);
+  const [failed, setFailed] = useState(null), [msg, setMsg] = useState(null), [busy, setBusy] = useState(false);
+  const g = useRef(null);
+  const active = on || taps.length > 0 || !!res;
+  useEffect(() => { g.current?.ownerSVGElement?.classList.toggle("routing", active); });   // every render: App's own class update would drop it
+  const tap = e => {
+    e.stopPropagation();
+    const svg = e.currentTarget.ownerSVGElement, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    setTaps(t => [...t, [Math.round(p.x), Math.round(p.y)]]); setRes(null); setFailed(null); setMsg(null);
+  };
+  const stops = taps.map(p => p.join(",")).join(";");
+  const go = async save => {
+    setBusy(true); setFailed(null); setMsg(null); if (!save) setRes(null);
+    try {
+      const out = await call("plan_route", save ? { stops, save: true } : { stops });
+      if (out.ok && save) { onSaved(); setOn(false); setTaps([]); setRes(null); setMsg({ text: `saved · ${out.result.path.length} pts · ${out.result.stops.length} stops · previous kept in map.prev.json` }); }
+      else if (out.ok) setRes(out.result);
+      else {
+        setMsg({ bad: true, text: `${save ? "save" : "route"} FAILED: ${out.error}` });
+        const r = (await (await fetch("/ledger?n=25")).json()).reverse().find(x => x.tool === "plan.multistop");
+        const fl = r?.ok === false && r.args?.failed_leg;
+        if (fl && taps.some(t => t[0] === fl.to[0] && t[1] === fl.to[1])) setFailed(fl);   // this plan's own row: the newest route row, ending on one of these taps
+      }
+    } catch (e) { setMsg({ bad: true, text: `${save ? "save" : "route"} FAILED: ${e}` }); }
+    setBusy(false);
+  };
+  const P = res?.path || [], S = res?.stops || [];
+  const legs = S.map((s, k) => P.slice(k ? S[k - 1] : 0, s + 1));
+  const line = msg || (res ? { text: `route · ${res.legs.length} legs · ${S.length} stops · ${res.length_m} m · ${res.cost_map}${res.grid_source ? ` (${res.grid_source})` : ""}${res.why ? ` · ${res.why}` : ""} · start: ${res.start === "pose" ? "the dog's believed pose" : res.start}` }
+    : on ? { text: `tap the stops (${taps.length}) · tap 1 is the start unless the dog is located` } : null);
+  const clear = () => { setOn(false); setTaps([]); setRes(null); setFailed(null); setMsg(null); };
+  return html`<g ref=${g}>
+    ${on && html`<rect class="rtcap" x="0" y="0" width="1060" height="1540" onClick=${tap}/>`}
+    ${legs.map((pts, k) => html`<polyline key=${"l" + k} class="rtleg" pathLength="1" style=${{ animationDelay: `${k * 0.5}s` }} points=${pts.map(p => p.join(",")).join(" ")}/>`)}
+    ${failed && html`<g><line class="rtfail" x1=${failed.from[0]} y1=${failed.from[1]} x2=${failed.to[0]} y2=${failed.to[1]}/>
+      <text class="lbl rtfaillbl" x=${(failed.from[0] + failed.to[0]) / 2} y=${(failed.from[1] + failed.to[1]) / 2 - 16} text-anchor="middle">no route · leg ${failed.leg} of ${failed.of}</text></g>`}
+    ${S.map((s, k) => html`<circle key=${"s" + k} class="rtstop" cx=${P[s][0]} cy=${P[s][1]} r="24"/>`)}
+    ${taps.map((p, i) => html`<g key=${"t" + i}><circle class="rtap" cx=${p[0]} cy=${p[1]} r="15"/><text class="rtapn" x=${p[0]} y=${p[1]}>${i + 1}</text></g>`)}
+    ${P.length > 0 && html`<text class="lbl" x=${P[0][0] + 26} y=${P[0][1] - 24}>start</text>`}
+    ${S.map((s, k) => html`<text key=${"sl" + k} class="lbl" x=${P[s][0] + 26} y=${P[s][1] - 24}>stop ${k + 1}</text>`)}
+    <foreignObject class="rtfo" x="10" y="44" width="1040" height="190"><div class="rtbar" onClick=${e => e.stopPropagation()}>
+      <div class="rtrow">
+        <button class=${on ? "on" : ""} onClick=${() => setOn(!on)}>${on ? `tapping (${taps.length})` : "route: tap the stops"}</button>
+        <button class="key" disabled=${!taps.length || busy} onClick=${() => go(false)}>${busy ? "…" : "plan route"}</button>
+        <button disabled=${!res || busy} title="write this route as the map's path with its stops (POST /map's rules; the previous map is kept as map.prev.json)" onClick=${() => go(true)}>save route</button>
+        <button disabled=${(!active && !msg) || busy} onClick=${clear}>clear</button>
+      </div>
+      ${line && html`<div class=${"rtline" + (line.bad ? " bad" : "")}>${line.text}</div>`}
+    </div></foreignObject></g>`;
+}
+// 21 · route-the-map · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
