@@ -206,7 +206,50 @@ class Escalate(unittest.TestCase):
         self.assertEqual(len(posts), 1)
         self.assertEqual(posts[0]["args"]["guid"], ONCALL)
         self.assertEqual(posts[0]["args"]["kind"], "escalate")
+        self.assertEqual(posts[0]["args"]["shift_id"], SHIFT)          # the live post carries the shift, as the fixture row shows
         self.assertEqual(posts[0]["state_after"]["ts"], "2026-09-27 12:18:10")
+
+    def test_intruder_alarm_flags_the_on_call(self):
+        # The detector-armed path (wtdd/watch.py -> POST /tools/intruder_alarm) is the same flag: photo + "who dis?!"
+        # to the on-call 1:1, never the group. The look and the detector are stubbed; the send goes through the gate.
+        from wtdd.config import ROOT
+        self.addCleanup(lambda: (ROOT / "pending.json").unlink(missing_ok=True))   # the tool writes the listener's pending file
+        confirmed = {"guid": "P-W", "rowid": 60011, "ts": "2026-09-27 12:30:10",
+                     "caption": {"guid": "P-Wc", "rowid": 60012, "ts": "2026-09-27 12:30:11"}}
+        with mock.patch("wtdd.commands.look", return_value={"file": "/tmp/look-level.jpg", "pitch_deg": 0.4}), \
+             mock.patch("wtdd.tools.dog_say.boxed", return_value={"file": "/tmp/look-level-boxed.jpg", "n": 1, "classes": {"person": 1}}), \
+             mock.patch.object(db, "chat_members", side_effect=_members), \
+             mock.patch.object(send, "_osascript", _no_osascript), \
+             mock.patch.object(send, "send_file", return_value=confirmed) as sf:
+            out = tools.call("intruder_alarm", trigger="alarm:watch-1")
+        self.assertIs(out["pending"], True)
+        self.assertEqual(out["post"]["rowid"], 60011)
+        sf.assert_called_once_with(ONCALL, "/tmp/look-level-boxed.jpg", "who dis?!")
+        post = [r for r in ledger.rows() if r["tool"] == "chat.post" and r["args"]["trigger"] == "alarm:watch-1"][-1]
+        self.assertEqual((post["args"]["guid"], post["args"]["kind"], post["args"]["text"], post["args"]["file"]),
+                         (ONCALL, "escalate", "who dis?!", "/tmp/look-level-boxed.jpg"))
+        self.assertFalse(any(r["tool"] == "chat.post" and r["args"]["guid"] == GROUP for r in ledger.rows()))
+        self.assertEqual(json.loads((ROOT / "pending.json").read_text())["trigger"], "alarm:watch-1")
+
+    def test_no_on_call_configured_is_posted_as_the_error_not_faked(self):
+        # Fail loud, round goes on: like "couldn't look:", a flag with nobody to send it to is posted to the group as its
+        # error under the same alarm: key (consumed, never retried), no question is opened, the dog does not hold 45 s.
+        seen = {"text": "someone by the trench cover", "file": "/tmp/look-level-boxed.jpg", "person": True,
+                "detector": {"classes": ["person"]}}
+        with mock.patch.dict(os.environ), \
+             mock.patch("wtdd.tools.dog_say.look_and_see", return_value=seen), \
+             mock.patch.object(L, "PENDING", _TMP / "pending-5.json"), \
+             mock.patch.object(self.l, "await_verdict", return_value=False) as av:
+            os.environ.pop("WTDD_ON_CALL_HANDLE", None)
+            self.l.look_and_say({"guid": "g5", "sender": HANDLE, "text": "what the dog doin"})
+        self.assertEqual(len(self.posts), 2)
+        self.assertEqual(self.posts[0][:2], (GROUP, "say:g5"))
+        guid, key, kind, text, file = self.posts[1]
+        self.assertEqual((guid, key, file), (GROUP, "alarm:g5", None))
+        self.assertTrue(text.startswith("couldn't escalate: RuntimeError:"), text)
+        self.assertIn("WTDD_ON_CALL_HANDLE", text)
+        self.assertFalse((_TMP / "pending-5.json").exists())
+        av.assert_not_called()
 
     def test_poll_reads_the_on_call_chat_and_tags_the_chat(self):
         reply = {"rowid": 9, "guid": "R-9", "text": "thats my friend", "is_from_me": 0, "sender": HANDLE,
@@ -345,6 +388,20 @@ class Numbers(unittest.TestCase):
 
     def test_no_rows_is_no_shifts(self):
         self.assertEqual(numbers.shifts([]), [])
+
+    def test_block_reports_shifts_from_the_ledger_env(self):
+        # The command is `python -m wtdd.numbers` (the goal's `python -m wtdd numbers` is not a tool: KeyError). Its block
+        # must read the ledger WTDD_LEDGER points at (today count() reads <repo>/ledger.jsonl and ignores it), so a shift
+        # that exists only in this scratch ledger shows up, with its acked_ms and the word "unsigned" (item 10's word too).
+        ledger.append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
+                       "args": {"from": HANDLE, "text": "thats my friend", "guid": "R-29", "asked": "alarm:g29:11",
+                                "acked_ms": 5000, "shift_id": "2026-09-29", "chat": ONCALL},
+                       "state_before": None, "state_after": {"verdict": "known"}, "response_or_error": None, "latency_ms": 0})
+        text = numbers.block()
+        line = [l for l in text.splitlines() if "2026-09-29" in l]
+        self.assertTrue(line, text)
+        self.assertIn("5000", "\n".join(line))
+        self.assertIn("unsigned", "\n".join(line))
 
 
 if __name__ == "__main__":
