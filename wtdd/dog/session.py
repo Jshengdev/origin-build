@@ -33,6 +33,17 @@ un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
 are rows, reads are not.
+
+Re-correction (wtdd/dog/localize.py, 05b). Every window after the first is matched against the grid before it is drawn:
+its band cells through the correction held (self.corr, a rigid 2D transform in the odometry frame) against the cells
+seen MATCH_THRESHOLD+ times. Applied: one pose.corrected row, the window's delta composed into self.corr, the window
+drawn through it. Rejected past the cap: a pose.corrected row with ok false, not drawn, the correction kept (a streak of
+them is a WARN: after a power cycle, clear the grid). Unmatched below MIN_SCORE or skipped under MIN_CELLS: no row, a
+rate-limited WARN, drawn through the correction held. Counts and the last verdict are on GET /dog/lidar .localize.
+map_pose() is the odometry pose through self.corr, then nav.to_map; calibrate() ties that corrected pose and keeps the
+correction (the grid is drawn through it); grid_clear() resets it. The match runs inline on the driver's dispatcher,
+as the grid's accumulate does, measured on every row (latency_ms, a WARN over BUDGET_MS); if the dog's windows blow the
+budget the fallback is a queue and one worker thread (not built: the first live run reads the ms).
 """
 from __future__ import annotations
 import asyncio
@@ -43,8 +54,8 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from ..ledger import log, step
-from . import lidar, nav, occupancy
+from ..ledger import append, log, step
+from . import lidar, localize, nav, occupancy
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -96,6 +107,8 @@ class DogSession:
         self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
         self._grid_lock = threading.Lock()           # frames arrive on the driver's dispatcher, reads on HTTP threads
         self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
+        self.corr = localize.IDENTITY                # the scan-to-map correction (localize.py), odometry frame; identity until a window is applied
+        self.loc: dict[str, Any] = {"applied": 0, "rejected": 0, "unmatched": 0, "skipped": 0, "rejected_streak": 0, "last": None}
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -141,7 +154,7 @@ class DogSession:
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
-                "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
+                "avoid": self.body._avoid if self.body else None, "recheck": self.recheck, "corr": localize.describe(self.corr),
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
 
@@ -218,39 +231,95 @@ class DogSession:
 
     def lidar(self, on: bool | None = None) -> dict[str, Any]:
         """GET/POST /dog/lidar. on=True switches the dog's LiDAR voxel stream on (connecting first), on=False off, None
-        reads. Returns {on, n (frames), errors, cb_errors (frames the grid failed to take), grid_frames, age_ms, frame,
-        points_px, why?}; switching on hands every frame to the session grid (_on_frame). points_px is the newest frame's
-        floor-to-head band in map pixels through the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
+        reads. Returns {on, n (frames), errors, cb_errors (frames the grid failed to take), grid_frames, localize, age_ms,
+        frame, points_px, why?}; switching on hands every frame to the session grid (_on_frame). localize is the
+        re-correction's {applied, rejected, unmatched, skipped, corr, last}. points_px is the newest frame's floor-to-head
+        band in map pixels through the correction and the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
         frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
+        loc = {**{k: self.loc[k] for k in ("applied", "rejected", "unmatched", "skipped", "last")}, "corr": localize.describe(self.corr)}
         if self.body is None:
             return {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "grid_frames": g.frames if (g := self.grid) is not None else 0,
-                    "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
+                    "localize": loc, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
         lp = self.body.lidar_points()
         out = {k: lp[k] for k in ("on", "n", "errors", "cb_errors", "age_ms", "frame", "utlidar_pose")}
-        out["grid_frames"] = g.frames if (g := self.grid) is not None else 0
+        out["grid_frames"], out["localize"] = g.frames if (g := self.grid) is not None else 0, loc
         st = self.body.state()
         if lp["points"] is None:
             return {**out, "points_px": [], "why": "no frame yet" if lp["on"] else "lidar off"}
         if not self.cal or not st or not st.get("position") or not st.get("rpy"):
             return {**out, "points_px": [], "why": "not calibrated"}
-        xy = lidar.top_down(lp["points"])
-        return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, st["position"], st["rpy"][2])}
+        xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
+        x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
+        return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
 
     # ---- the occupancy grid (wtdd/dog/occupancy.py): every LiDAR window this session, accumulated in odometry metres
     def _on_frame(self, d: dict) -> None:
-        """Body._on_lidar hands every decoded frame here, on the driver's dispatcher: one count per cell per frame. A raise
-        is counted by Body (cb_errors, on GET /dog/lidar and /dog/grid) and logged there; it never stops the stream."""
+        """Body._on_lidar hands every decoded frame here, on the driver's dispatcher: one count per cell per drawn frame,
+        every window after the first re-corrected first (_relocalize). A raise is counted by Body (cb_errors, on GET
+        /dog/lidar and /dog/grid) and logged there; it never stops the stream."""
         with self._grid_lock:
+            t0 = time.perf_counter()
             if self.grid is None:
                 self.grid = occupancy.Grid.from_frame(d)
                 log("dog", "grid started", frame_id=d["frame"], resolution=d["resolution"], origin=[round(v, 2) for v in d["origin"][:2]])
-            t0 = time.perf_counter()
-            touched = self.grid.update_frame(d)
-            if self.grid.frames % 100 == 0:
+                self.loc["skipped"] += 1   # nothing to match the first window against
+                touched = self.grid.update_frame(d)
+            else:
+                touched = self._relocalize(d)
+            if touched is not None and self.grid.frames % 100 == 0:
                 log("dog", "grid", frames=self.grid.frames, cells=int((self.grid.counts > 0).sum()), shape=self.grid.shape,
                     touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1))
+
+    def _relocalize(self, d: dict) -> int | None:
+        """One window against the grid (wtdd/dog/localize.py), under _grid_lock: applied, rejected, unmatched or skipped
+        (the docstring's Re-correction paragraph). Returns the cells drawn, None for a rejected window (not drawn)."""
+        localize.same_lattice(self.grid, d)   # 01's two refusals, before anything is matched or drawn
+        xy, loc = localize.apply_points(self.corr, localize.band(d["points"])), self.loc
+        if len(xy) < localize.MIN_CELLS:
+            loc["skipped"] += 1
+            if loc["skipped"] <= 5 or loc["skipped"] % 100 == 0:
+                log("dog", "WARN localize skipped: too few band cells to match, drawn through the correction held",
+                    n=len(xy), min_cells=localize.MIN_CELLS, skipped=loc["skipped"])
+            return self.grid.update(xy)
+        st = self.body.state() if self.body else None
+        if st and st.get("position"):   # the dog's corrected position; without a state stream, the window's centre
+            pivot, kind = localize.apply_pose(self.corr, st["position"][0], st["position"][1], 0.0)[:2], "odom"
+        else:
+            pivot, kind = (float(d["center"][0]), float(d["center"][1])), "window"
+        m = localize.match(self.grid, xy, pivot)
+        why = localize.over_cap(m)
+        verdict = "unmatched" if m["score"] < localize.MIN_SCORE else "rejected" if why else "applied"
+        loc[verdict] += 1
+        kv = {"dx": round(m["dx"], 3), "dy": round(m["dy"], 3), "dtheta_deg": m["dtheta_deg"], "score": round(m["score"], 3),
+              "score0": round(m["score0"], 3), "n": m["n"], "ms": m["ms"], "pivot": kind}
+        loc["last"] = {"verdict": verdict, **kv, "why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        if m["ms"] > localize.BUDGET_MS:
+            log("dog", "WARN localize over budget on the driver's dispatcher", ms=m["ms"], budget_ms=localize.BUDGET_MS, n=m["n"])
+        if verdict == "unmatched":
+            if loc["unmatched"] <= 5 or loc["unmatched"] % 100 == 0:
+                log("dog", "WARN localize unmatched: new territory or a bad grid, drawn through the correction held",
+                    unmatched=loc["unmatched"], min_score=localize.MIN_SCORE, **kv)
+            return self.grid.update(xy)
+        snap = lambda: {"corr": localize.describe(self.corr), "map": self.map_pose(st), "grid_frames": self.grid.frames}  # noqa: E731
+        before = snap()
+        if verdict == "rejected":
+            loc["rejected_streak"] += 1
+            append(localize.row(m, kind, before, before, why))
+            log("dog", "localize rejected", why=why, streak=loc["rejected_streak"], **kv)
+            if loc["rejected_streak"] == 5 or (loc["rejected_streak"] > 5 and loc["rejected_streak"] % 50 == 0):
+                log("dog", "WARN windows past the cap in a row: was the dog power-cycled? POST /dog/grid {clear: true}",
+                    streak=loc["rejected_streak"])
+            return None
+        loc["rejected_streak"] = 0
+        delta = localize.delta_about(pivot, m["dx"], m["dy"], m["dtheta"])
+        self.corr = localize.compose(self.corr, delta)
+        touched = self.grid.update(localize.apply_points(delta, xy))
+        append(localize.row(m, kind, before, snap()))
+        c = localize.describe(self.corr)
+        log("dog", "localize applied", corr_tx=c["tx"], corr_ty=c["ty"], corr_deg=c["theta_deg"], **kv)
+        return touched
 
     def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
@@ -299,13 +368,17 @@ class DogSession:
 
     def grid_clear(self, why: str) -> dict[str, Any]:
         """POST /dog/grid {clear: true, why}: drops the session grid (after a power cycle the odometry frame reset, so the
-        old counts belong to another frame). One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
+        old counts belong to another frame), and the scan-to-map correction with it (it was measured against that grid).
+        One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
         with self._grid_lock:
             g = self.grid
-            before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0}
+            before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0,
+                      "corr_before": localize.describe(self.corr)}
             with step("dog", "dog.grid_clear", "map", {"why": why, **before}) as r:
                 self.grid = None
-                r["state_after"] = {"cleared": True}
+                self.corr = localize.IDENTITY
+                self.loc.update(applied=0, rejected=0, unmatched=0, skipped=0, rejected_streak=0, last=None)
+                r["state_after"] = {"cleared": True, "corr_reset": True}
         return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
@@ -313,14 +386,18 @@ class DogSession:
         st = st if st is not None else (self.body.state() if self.body else None)
         if not self.cal or not st or not st.get("position") or not st.get("rpy"):
             return None
-        px, py, h = nav.to_map(self.cal, st["position"], st["rpy"][2])
+        x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])   # the believed pose: odometry through the correction
+        px, py, h = nav.to_map(self.cal, (x, y), yaw)
         return {"p": [round(px), round(py)], "heading_deg": round(math.degrees(h), 1)}
 
     def calibrate(self, p, heading: float) -> dict[str, Any]:
-        """Ties the odometry pose right now to map point p facing `heading` (radians). One dog.calibrate row."""
+        """Ties the corrected odometry pose right now to map point p facing `heading` (radians); the scan-to-map correction
+        is kept (the grid is drawn through it) and named on the row. One dog.calibrate row."""
         st = self.run(self.with_body(lambda b: b.fresh_state(required=True)))
-        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1)}, self.map_pose(st)) as r:
-            self.cal = {**nav.calibration(st["position"], st["rpy"][2], p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        c = self.corr
+        x, y, yaw = localize.apply_pose(c, st["position"][0], st["position"][1], st["rpy"][2])
+        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1), "corr": localize.describe(c)}, self.map_pose(st)) as r:
+            self.cal = {**nav.calibration((x, y), yaw, p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
             self.recheck = False
             CAL_FILE.write_text(json.dumps(self.cal))
             r["state_after"] = {"cal": self.cal, "map": self.map_pose(st)}
