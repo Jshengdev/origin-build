@@ -1,0 +1,296 @@
+"""The morning page (item 10): one shift's record, rendered from nothing but the ledger and the map.
+
+  python -m wtdd.record --shift <id> --html /tmp/record.html    the page (default shift: WTDD_SHIFT, else today)
+  python -m wtdd.record --shift <id>                            the same record as JSON on stdout
+  WTDD_LEDGER=wtdd/fixtures/ledger_shift.jsonl python -m wtdd.record --shift 2026-09-26 --html /tmp/record.html
+
+On the page: the stops (each look, what the detector and the model said, whether a person was pinged, the post that
+confirmed it, the correction that fixes it), the flags with who resolved what and when (the reply's acked_ms, or
+"unanswered"), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
+the path, the shift's planned stops), and the signature line: "unsigned" until an ok record.signed {by, at, shift_id}
+row exists (item 03, `python -m wtdd record_sign`), then the name and the time. Every number is counted from rows,
+nothing is typed by hand. It reads the ledger through ledger.rows() (so WTDD_LEDGER is honoured) and ui/map.json; it
+never appends a row and never writes the map. One stderr line per run with the counts; 0 stops or 0 flags is a WARN;
+a shift with no stamped row is exit 1, naming the shift ids that exist, and nothing is written.
+
+Which rows are a shift's (the rule wtdd/test_record.py pins): every row stamped args.shift_id == id (03 stamps every
+post, reply and signature), plus the unstamped rows of its window. The window opens at the round's chat.wake (the
+nearest one before the first stamped row, with no other shift's row between) or at the first stamped row when there
+is no wake; it closes at the shift's ok record.signed row (inclusive), else at the next shift's opener, else at the end
+of the ledger (an open shift). A row stamped with another shift never joins. When both a signature and the next
+shift's opener exist, the window closes at whichever comes first, so a shift signed after the next one began never
+takes the next one's looks.
+
+A stop is a dog.look row plus the rows up to the next look (so a look pressed by hand shows too); its map index is
+read from its say:<wake>:<n> post, and a correction joins it when its args.corrects.at is that post's ledger ts. A
+refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every other ok=false row
+is a failure. Both are listed, never hidden.
+
+Honest edges. A shift with no chat.wake (a round started from the page) opens at the nearest earlier unstamped wake
+when no stamped row lies between, else at its first stamped row: on a ledger that still holds pre-03 rows, the first
+such shift reaches back into them. The page prints the window's first and last ts so that is visible. The map is drawn
+as ui/map.json is now, not as it was that night (the ledger holds the stop indices, not the drawing); a planned stop
+off today's path is listed as such. Models label, they never draw: every shape is the map's polygons and path, no
+row's text becomes geometry. No DEMO_CACHE here: the record is a pure read with no live path to flip; a page built
+from fixture rows (cached=true, source="stub") says so in its header.
+"""
+from __future__ import annotations
+import argparse
+import json
+import statistics
+import sys
+from html import escape
+from pathlib import Path
+from typing import Any
+
+from .chat import oncall
+from .config import ROOT
+from .ledger import LEDGER, log, rows as ledger_rows
+
+SITE = {"rooms": [], "zones": [], "path": [], "stops": [], "actions": {}, "lights": []}
+
+
+def _shift(r: dict) -> str | None:
+    return (r.get("args") or {}).get("shift_id")
+
+
+def _index(trigger: Any) -> int | None:
+    """The map stop index a trigger carries (say:<wake>:<n>, alarm:<wake>:<n>), else None."""
+    last = str(trigger or "").rsplit(":", 1)[-1]
+    return int(last) if last.isdigit() else None
+
+
+def _bind(shift_id: str, rows: list[dict]) -> tuple[list[dict], str | None]:
+    """(the shift's rows in ledger order, what closed its window: "signature" | "shift <id>" | "open")."""
+    first: dict[str, int] = {}
+    for i, r in enumerate(rows):
+        if _shift(r) is not None:
+            first.setdefault(_shift(r), i)
+    if shift_id not in first:
+        return [], None
+    opens = {}
+    for s, f in first.items():
+        opens[s] = f
+        for j in range(f - 1, -1, -1):          # walk back over unstamped rows to the round's wake
+            if _shift(rows[j]) is not None:
+                break
+            if rows[j].get("tool") == "chat.wake":
+                opens[s] = j
+                break
+    o = opens[shift_id]
+    ends = [(i + 1, "signature") for i, r in enumerate(rows)
+            if r.get("tool") == "record.signed" and r.get("ok") and _shift(r) == shift_id][:1]
+    ends += [(x, f"shift {s}") for s, x in opens.items() if s != shift_id and x > o]
+    close, closed_by = min(ends, key=lambda e: e[0], default=(len(rows), "open"))
+    return [r for i, r in enumerate(rows) if _shift(r) == shift_id or (_shift(r) is None and o <= i < close)], closed_by
+
+
+def shift_rows(shift_id: str, rows: list[dict]) -> list[dict]:
+    """The rows of one shift (the rule in this module's docstring); [] when no row is stamped with it."""
+    return _bind(shift_id, rows)[0]
+
+
+def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = None) -> dict[str, Any]:
+    """One shift's record as a dict, every value read from rows (default: the ledger) and site (default: ui/map.json)."""
+    rows = ledger_rows() if rows is None else rows
+    site = json.loads((ROOT / "ui" / "map.json").read_text()) if site is None else site
+    members, closed_by = _bind(shift_id, rows)
+
+    def ok(r: dict, tool: str) -> bool:
+        return r.get("tool") == tool and bool(r.get("ok"))
+
+    corrections = [{"ts": r["ts"], "by": a.get("from"), "text": a.get("text"), "said": (a.get("corrects") or {}).get("said"),
+                    "at": (a.get("corrects") or {}).get("at"), "acked_ms": a.get("acked_ms")}
+                   for r in members if ok(r, "chat.correction") for a in [r.get("args") or {}]]
+    stops: list[dict] = []
+    cur = None
+    for r in members:
+        a, after = r.get("args") or {}, r.get("state_after") or {}
+        if r.get("tool") == "dog.look":
+            cur = {"n": len(stops) + 1, "index": None, "ts": r["ts"], "kind": a.get("kind"), "ok": bool(r.get("ok")),
+                   "fired": after.get("fired"), "pitch_deg": after.get("pitch_deg"), "error": None if r.get("ok") else r.get("response_or_error"),
+                   "classes": None, "sentence": None, "person": None, "out_of_place": None, "detector_check": None,
+                   "model": None, "model_ms": None, "tokens": None, "posted": None, "pinged": False, "correction": None}
+            stops.append(cur)
+        elif cur is None or not r.get("ok"):
+            continue
+        elif r["tool"] == "watch.boxes":
+            cur["classes"] = after.get("classes")
+        elif r["tool"] == "vision.check":
+            cur.update(sentence=r.get("response_or_error"), person=after.get("person"), out_of_place=after.get("out_of_place"),
+                       detector_check=after.get("detector_check"))
+        elif r["tool"] == "llm.generate":
+            cur.update(model=after.get("model"), model_ms=r.get("latency_ms"), tokens=(after.get("usage") or {}).get("total_tokens"))
+        elif r["tool"] == "chat.post" and str(a.get("trigger") or "").startswith("say:"):
+            cur.update(index=_index(a["trigger"]), posted={"rowid": after.get("rowid"), "ts": after.get("ts"), "file": a.get("file")},
+                       correction=next((c["text"] for c in corrections if c["at"] == r["ts"]), None))
+        elif r["tool"] == "chat.post" and a.get("kind") == "escalate":
+            cur["pinged"] = True
+
+    verdicts = [r for r in members if ok(r, "intruder.verdict")]
+    flags = []
+    for r in members:
+        a = r.get("args") or {}
+        if ok(r, "chat.post") and a.get("kind") == "escalate":
+            v = next((x for x in verdicts if x["args"].get("asked") == a.get("trigger")), None)
+            flags.append({"ts": r["ts"], "trigger": a.get("trigger"), "stop": _index(a.get("trigger")), "to": a.get("guid"),
+                          "text": a.get("text"), "file": a.get("file"),
+                          "resolved": v and {"by": v["args"].get("from"), "text": v["args"].get("text"),
+                                             "verdict": (v.get("state_after") or {}).get("verdict"), "acked_ms": v["args"].get("acked_ms"), "ts": v["ts"]}})
+    acked = [a["acked_ms"] for r in members for a in [r.get("args") or {}]
+             if (ok(r, "intruder.verdict") or ok(r, "chat.correction")) and a.get("acked_ms") is not None]
+    bad = [{"ts": r.get("ts"), "tool": r.get("tool"), "error": r.get("response_or_error"), "args": r.get("args")} for r in members if not r.get("ok")]
+    refusal = [str(b["error"] or "").startswith("PermissionError") or str(b["tool"]).endswith(".refused") for b in bad]
+    walks = ([r for r in members if r.get("tool") == "field.walk" and (r.get("args") or {}).get("stops") is not None]
+             or [r for r in members if r.get("tool") == "dog.follow" and (r.get("args") or {}).get("stops") is not None])
+    sig = oncall.signed(shift_id, members)
+    return {
+        "shift_id": shift_id, "rows": len(members), "stamped": sum(_shift(r) == shift_id for r in members),
+        "posts": sum(ok(r, "chat.post") for r in members),
+        "window": {"from": members[0]["ts"] if members else None, "to": members[-1]["ts"] if members else None, "closed_by": closed_by},
+        "planned_stops": walks[-1]["args"]["stops"] if walks else None,
+        "stops": stops, "flags": flags, "corrections": corrections,
+        "acked_ms": acked, "acked_median_ms": round(statistics.median(acked)) if acked else None,
+        "refusals": [b for b, x in zip(bad, refusal) if x], "failures": [b for b, x in zip(bad, refusal) if not x],
+        "signed": {"by": sig["args"].get("by"), "at": sig["args"].get("at")} if sig else None,
+        "site": {k: site.get(k) or v for k, v in SITE.items()},
+        "stub_rows": sum(r.get("cached") is True for r in members),
+    }
+
+
+def _e(x: Any) -> str:
+    return "-" if x is None else escape(str(x))
+
+
+def _table(head: list[str], body: list[list[str]]) -> str:
+    """Cells arrive escaped; an empty table is the word none, visible."""
+    if not body:
+        return '<p class="none">none</p>'
+    return ("<table><tr>" + "".join(f"<th>{h}</th>" for h in head) + "</tr>"
+            + "".join("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>" for row in body) + "</table>")
+
+
+def _svg(site: dict, planned: list[int] | None) -> str:
+    """The map from ui/map.json alone: rooms, zones, the path, the lights, the planned stops. No shape from a row."""
+    pts = lambda p: " ".join(f"{float(x):g},{float(y):g}" for x, y in p)                 # noqa: E731  (a non-number raises, never lands in the svg)
+    mid = lambda p: (sum(x for x, _ in p) / len(p), sum(y for _, y in p) / len(p))      # noqa: E731
+    out = ['<svg viewBox="0 0 1060 1540" xmlns="http://www.w3.org/2000/svg">']
+    for r in site["rooms"]:
+        if r.get("poly"):
+            x, y = mid(r["poly"])
+            out.append(f'<polygon class="room" points="{pts(r["poly"])}"/><text class="rl" x="{x:.0f}" y="{y:.0f}">{_e(r.get("name"))}</text>')
+    for z in site["zones"]:
+        if z.get("poly"):
+            x, y = mid(z["poly"])
+            out.append(f'<polygon class="zone" points="{pts(z["poly"])}"/><text class="zl" x="{x:.0f}" y="{y + 28:.0f}">{_e(z.get("label") or z.get("name"))}</text>')
+    path = site["path"]
+    if path:
+        out.append(f'<polyline class="path" points="{pts(path)}"/>')
+    for l in site["lights"]:
+        p = l.get("pts") or []
+        if len(p) > 1:
+            out.append(f'<polyline class="strip" points="{pts(p)}"/>')
+        if p:
+            x, y = float(p[0][0]), float(p[0][1])
+            out.append(f'<circle class="light" cx="{x:g}" cy="{y:g}" r="11"/><text class="ll" x="{x + 16:g}" y="{y + 7:g}">{_e(l.get("name"))}</text>')
+    for i in planned or []:
+        if 0 <= i < len(path):
+            x, y = float(path[i][0]), float(path[i][1])
+            act = _action(site, i)
+            out.append(f'<circle class="stop" cx="{x:g}" cy="{y:g}" r="16"/><text class="sl" x="{x + 22:g}" y="{y - 12:g}">stop {i}{" " + _e(act) if act else ""}</text>')
+    return "".join(out) + "</svg>"
+
+
+def _action(site: dict, i: int) -> str:
+    a = site["actions"].get(str(i)) or {}
+    return " · ".join(x for x in (a.get("look"), "say" if a.get("say") else None, "ask" if a.get("ask") else None) if x)
+
+
+def html(rec: dict[str, Any]) -> str:
+    """The page: one standalone document, every string escaped, every number an f-string of rec."""
+    w, site, planned = rec["window"], rec["site"], rec["planned_stops"]
+    sig = rec["signed"]
+    resolved = sum(f["resolved"] is not None for f in rec["flags"])
+    cls = lambda c: ", ".join(f"{_e(k)} x{_e(v)}" for k, v in c.items()) if c else "-"   # noqa: E731
+    stops = [[_e(s["n"]), _e(s["index"]), _e(s["ts"]), _e(s["kind"]), f'{_e(s["fired"])} / {_e(s["pitch_deg"])}', cls(s["classes"]),
+              _e(s["sentence"]), _e(s["detector_check"]), _e(s["person"]), _e(", ".join(s["out_of_place"] or []) or None),
+              f'{_e(s["model"])}<br>{_e(s["model_ms"])} ms · {_e(s["tokens"])} tok',
+              "yes" if s["pinged"] else "no",
+              f'rowid {_e(s["posted"]["rowid"])} at {_e(s["posted"]["ts"])}<br>{_e(s["posted"]["file"])}' if s["posted"] else "-",
+              _e(s["correction"]), f'<span class="bad">{_e(s["error"])}</span>' if s["error"] else "-"] for s in rec["stops"]]
+    flags = [[_e(f["ts"]), _e(f["stop"]), _e(f["to"]), _e(f["text"]), _e(f["file"])]
+             + ([_e(f["resolved"]["by"]), _e(f["resolved"]["text"]), _e(f["resolved"]["verdict"]), _e(f["resolved"]["acked_ms"]), _e(f["resolved"]["ts"])]
+                if f["resolved"] else ['<b class="bad">unanswered</b>', "-", "-", "-", "-"]) for f in rec["flags"]]
+    corr = [[_e(c["ts"]), _e(c["by"]), _e(c["text"]), _e(c["said"]), _e(c["at"]), _e(c["acked_ms"])] for c in rec["corrections"]]
+    bad = lambda xs: [[_e(x["ts"]), _e(x["tool"]), f'<span class="bad">{_e(x["error"])}</span>', f"<code>{_e(json.dumps(x['args'], default=str))}</code>"] for x in xs]   # noqa: E731
+    legend = ("".join(f'<li>stop {_e(i)}{": " + _e(_action(site, i)) if _action(site, i) else ""}'
+                      f'{"" if 0 <= i < len(site["path"]) else " (off the current path)"}</li>' for i in planned)
+              if planned is not None else "<li>no planned stops in this shift's rows (no field.walk or dog.follow with stops)</li>")
+    stub = (f'<p class="stub">{rec["stub_rows"]} of {rec["rows"]} rows are cached/stub: a fixture, not a night</p>' if rec["stub_rows"] else "")
+    median = f'{rec["acked_median_ms"]} ms (n={len(rec["acked_ms"])}: {", ".join(map(str, rec["acked_ms"]))})' if rec["acked_ms"] else "none"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Shift {_e(rec["shift_id"])} · the record</title>
+<style>
+body{{font:14px/1.45 -apple-system,system-ui,sans-serif;color:#1b1b1b;background:#fafaf8;margin:2rem auto;max-width:1400px;padding:0 1.5rem}}
+h1{{font-size:1.8rem;margin:0 0 .3rem}} h2{{font-size:1.1rem;margin:2rem 0 .5rem;border-bottom:1px solid #ccc;padding-bottom:.2rem}}
+table{{border-collapse:collapse;width:100%;font-size:12.5px}} th,td{{border:1px solid #ddd;padding:4px 6px;vertical-align:top;text-align:left}}
+th{{background:#efefeb}} code{{font-size:11.5px;word-break:break-all}} .bad{{color:#a4161a}} .none{{color:#666}}
+.sig{{font-size:1.25rem;font-weight:600;margin:.8rem 0}} .stub{{background:#fff3cd;border:1px solid #e0c060;padding:.4rem .6rem;display:inline-block}}
+svg{{width:100%;max-width:520px;background:#fff;border:1px solid #ddd}} .room{{fill:#f4f4f0;stroke:#555;stroke-width:3}}
+.zone{{fill:none;stroke:#2a6f97;stroke-width:3;stroke-dasharray:14 10}} .path{{fill:none;stroke:#888;stroke-width:4}}
+.strip{{fill:none;stroke:#e09f3e;stroke-width:8}} .light{{fill:#e09f3e}} .stop{{fill:#a4161a}}
+.rl{{font-size:24px;fill:#333;text-anchor:middle}} .zl{{font-size:20px;fill:#2a6f97;text-anchor:middle}} .ll{{font-size:18px;fill:#7a5200}} .sl{{font-size:26px;font-weight:700;fill:#a4161a}}
+</style></head><body>
+<h1>Shift {_e(rec["shift_id"])}</h1>
+<p>window {_e(w["from"])} to {_e(w["to"])}, closed by {_e(w["closed_by"])}</p>
+<p>{rec["rows"]} rows ({rec["stamped"]} stamped with the shift) · {rec["posts"]} posts confirmed · {len(rec["stops"])} stops
+· {len(rec["flags"])} flags, {resolved} resolved · {len(rec["corrections"])} corrections · {len(rec["refusals"])} refusals
+· {len(rec["failures"])} failures · acked median {median}</p>
+<p class="sig">{f"signed by {_e(sig['by'])} at {_e(sig['at'])}" if sig else "unsigned"}</p>
+{stub}
+<h2>Stops ({len(rec["stops"])})</h2>
+{_table(["#", "stop", "ts", "look", "fired / pitch", "detector", "what it saw", "its check on the detector", "person", "out of place",
+         "model", "pinged", "posted", "correction", "error"], stops)}
+<h2>Flags ({len(rec["flags"])})</h2>
+{_table(["ts", "stop", "to", "text", "photo", "resolved by", "reply", "verdict", "acked_ms", "at"], flags)}
+<h2>Corrections ({len(rec["corrections"])})</h2>
+{_table(["ts", "by", "text", "corrects", "said at", "acked_ms"], corr)}
+<h2>Refusals ({len(rec["refusals"])})</h2>
+{_table(["ts", "tool", "error", "args"], bad(rec["refusals"]))}
+<h2>Failures ({len(rec["failures"])})</h2>
+{_table(["ts", "tool", "error", "args"], bad(rec["failures"]))}
+<h2>Map</h2>
+{_svg(site, planned)}
+<ul>{legend}</ul>
+<p class="none">The map is ui/map.json as it is now, not as it was that night; the planned stops are the shift's rows'.
+Rendered by python -m wtdd.record from the ledger and the map; every number on this page is counted from rows.</p>
+</body></html>
+"""
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m wtdd.record", description="One shift's record as a page, from the ledger and the map.")
+    ap.add_argument("--shift", help="the shift id (args.shift_id); default WTDD_SHIFT, else today YYYY-MM-DD")
+    ap.add_argument("--html", help="write the page here; without it the record is printed as JSON")
+    o = ap.parse_args(argv)
+    sid = o.shift or oncall.shift_id()
+    rows = ledger_rows()
+    if not any(_shift(r) == sid for r in rows):
+        log("record", f"WARN shift {sid}: 0 rows, nothing written", ledger=LEDGER,
+            shifts=",".join(sorted({_shift(r) for r in rows} - {None})) or "none")
+        return 1
+    rec = build(sid, rows)
+    if o.html:
+        Path(o.html).write_text(html(rec), encoding="utf-8")
+    else:
+        print(json.dumps(rec, default=str, indent=1))
+    zero = [k for k in ("stops", "flags") if not rec[k]]
+    log("record", ("WARN 0 " + ", 0 ".join(zero) + ": " if zero else "") + f"shift {sid}", rows=rec["rows"], stops=len(rec["stops"]),
+        flags=len(rec["flags"]), resolved=sum(f["resolved"] is not None for f in rec["flags"]), corrections=len(rec["corrections"]),
+        refusals=len(rec["refusals"]), failures=len(rec["failures"]), stub=rec["stub_rows"],
+        signed=f"{rec['signed']['by']} at {rec['signed']['at']}" if rec["signed"] else "unsigned", out=o.html or "stdout")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
