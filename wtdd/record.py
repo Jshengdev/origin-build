@@ -30,6 +30,9 @@ last stop), and a correction joins it when its args.corrects.at is that post's l
 of its own before it (the stop before already has its post, or there is no stop yet) is a look that never reached the
 dog (README: "the dog drops or is unreachable ... the look posts the error"; the API is down, so no dog.look row
 exists): it opens its own stop, ok false, kind none, its error the post's text, never joined to the stop before. A
+say post stamped with the shift after its signature (dog_say pressed the next morning with WTDD_SHIFT still set: the
+post joins, being stamped, while its unstamped look lies past the window the signature closed) is never a stop, so a
+signed page's stops do not change on re-render; it is listed under after_signature and in one line on the page. A
 refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every other ok=false row
 is a failure. Both are listed, never hidden.
 
@@ -109,7 +112,9 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
     corrections = [{"ts": r["ts"], "by": a.get("from"), "text": a.get("text"), "said": (a.get("corrects") or {}).get("said"),
                     "at": (a.get("corrects") or {}).get("at"), "acked_ms": a.get("acked_ms")}
                    for r in members if ok(r, "chat.correction") for a in [r.get("args") or {}]]
+    sig = oncall.signed(shift_id, members)
     stops: list[dict] = []
+    after_sig: list[dict] = []   # say posts stamped with the shift after its signature: never a stop of the signed record
     cur = None
 
     def stop(r: dict, **kv: Any) -> dict:
@@ -124,6 +129,9 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         if r.get("tool") == "dog.look":
             cur = stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"), pitch_deg=after.get("pitch_deg"),
                        error=None if r.get("ok") else r.get("response_or_error"))
+            continue
+        if say and sig and r["ts"] > sig["ts"]:   # dog_say pressed after signing with WTDD_SHIFT still set: its look is outside the window
+            after_sig.append({"ts": r["ts"], "trigger": a.get("trigger"), "rowid": after.get("rowid")})
             continue
         if say and (cur is None or cur["posted"] is not None):   # a look that never reached the dog: no dog.look row, only its post
             cur = stop(r, error=f"no dog.look row before this post: {a.get('text')}")
@@ -158,7 +166,6 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
     refusal = [str(b["error"] or "").startswith("PermissionError") or str(b["tool"]).endswith(".refused") for b in bad]
     walks = ([r for r in members if r.get("tool") == "field.walk" and (r.get("args") or {}).get("stops") is not None]
              or [r for r in members if r.get("tool") == "dog.follow" and (r.get("args") or {}).get("stops") is not None])
-    sig = oncall.signed(shift_id, members)
     return {
         "shift_id": shift_id, "rows": len(members), "stamped": sum(_shift(r) == shift_id for r in members),
         "posts": sum(ok(r, "chat.post") for r in members),
@@ -167,7 +174,7 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         "stops": stops, "flags": flags, "corrections": corrections,
         "acked_ms": acked, "acked_median_ms": round(statistics.median(acked)) if acked else None,
         "refusals": [b for b, x in zip(bad, refusal) if x], "failures": [b for b, x in zip(bad, refusal) if not x],
-        "signed": {"by": sig["args"].get("by"), "at": sig["args"].get("at")} if sig else None,
+        "signed": {"by": sig["args"].get("by"), "at": sig["args"].get("at")} if sig else None, "after_signature": after_sig,
         "site": {k: site.get(k) or v for k, v in SITE.items()},
         "stub_rows": sum(r.get("cached") is True for r in members),
     }
@@ -242,6 +249,9 @@ def html(rec: dict[str, Any]) -> str:
                       f'{"" if 0 <= i < len(site["path"]) else " (off the current path)"}</li>' for i in planned)
               if planned is not None else "<li>no planned stops in this shift's rows (no field.walk or dog.follow with stops)</li>")
     stub = (f'<p class="stub">{rec["stub_rows"]} of {rec["rows"]} rows are cached/stub: a fixture, not a night</p>' if rec["stub_rows"] else "")
+    late = rec["after_signature"]
+    late = (f'<p class="bad">{len(late)} post{"s" * (len(late) != 1)} stamped after the signature, not on the record: '
+            + "; ".join(f'{_e(x["trigger"])} rowid {_e(x["rowid"])} at {_e(x["ts"])}' for x in late) + "</p>") if late else ""
     median = f'{rec["acked_median_ms"]} ms (n={len(rec["acked_ms"])}: {", ".join(map(str, rec["acked_ms"]))})' if rec["acked_ms"] else "none"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Shift {_e(rec["shift_id"])} · the record</title>
@@ -262,7 +272,7 @@ svg{{width:100%;max-width:520px;background:#fff;border:1px solid #ddd}} .room{{f
 · {len(rec["flags"])} flags, {resolved} resolved · {len(rec["corrections"])} corrections · {len(rec["refusals"])} refusals
 · {len(rec["failures"])} failures · acked median {median}</p>
 <p class="sig">{f"signed by {_e(sig['by'])} at {_e(sig['at'])}" if sig else "unsigned"}</p>
-{stub}
+{late}{stub}
 <h2>Stops ({len(rec["stops"])})</h2>
 {_table(["#", "stop", "ts", "look", "fired / pitch", "detector", "what it saw", "its check on the detector", "person", "out of place",
          "model", "pinged", "posted", "correction", "error"], stops)}
@@ -305,7 +315,8 @@ def main(argv: list[str] | None = None) -> int:
         flags=len(rec["flags"]), resolved=sum(f["resolved"] is not None for f in rec["flags"]), corrections=len(rec["corrections"]),
         refusals=len(rec["refusals"]), failures=len(rec["failures"]), stub=rec["stub_rows"],
         map=f"rooms:{len(site['rooms'])},lights:{len(site['lights'])},path:{len(site['path'])}",
-        signed=f"{rec['signed']['by']} at {rec['signed']['at']}" if rec["signed"] else "unsigned", out=o.html or "stdout")
+        signed=f"{rec['signed']['by']} at {rec['signed']['at']}" if rec["signed"] else "unsigned",
+        after_signature=len(rec["after_signature"]), out=o.html or "stdout")
     return 0
 
 
