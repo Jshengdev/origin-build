@@ -389,6 +389,15 @@ class ListenAsk(unittest.TestCase):
     def test_the_ask_line_is_the_dogs_own(self):
         self.assertTrue(decide.ask_line({"label": "out_of_place", "p": 0.42}).startswith(self.L.OWN_OPENERS))
 
+    def test_a_housemates_not_sure_is_an_answer(self):
+        """Johnny's phone shares the dog's account (WTDD_ALLOW_SELF=1): the dog's own question is refused, a reply that
+        merely starts with "not sure" is read, or await_verdict drops the answer to "what is it?" without a row."""
+        with mock.patch.dict(os.environ, {"WTDD_ALLOW_SELF": "1"}), mock.patch.object(self.L.memory, "posted_guids", return_value=set()):
+            self.assertFalse(self.l.allowed({"is_from_me": True, "guid": "q1", "sender": "me",
+                                             "text": decide.ask_line({"label": "person", "p": 0.6})}))
+            self.assertTrue(self.l.allowed({"is_from_me": True, "guid": "r1", "sender": "me", "text": "not sure, a cup"}))
+            self.assertTrue(self.l.allowed({"is_from_me": True, "guid": "r2", "sender": "me", "text": "Not sure tbh"}))
+
 
 if __name__ == "__main__":
     unittest.main()
