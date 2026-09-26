@@ -128,7 +128,7 @@ class Malformed(unittest.TestCase):
 class Refusal(unittest.TestCase):
     def setUp(self):
         self.n0 = len(ledger.rows())
-        field.FIELD.unlink(missing_ok=True)
+        self.field_before = field.FIELD.stat().st_mtime if field.FIELD.exists() else None   # snapshot, never delete: FIELD is the checkout's live walk file
 
     def new_rows(self):
         return ledger.rows()[self.n0:]
@@ -157,7 +157,7 @@ class Refusal(unittest.TestCase):
         self.assert_refused_row(refused[0], "field", 1)
         self.assertEqual(refused[0]["args"]["waypoint"], [480, 1100])
         self.assertEqual([r["tool"] for r in rows if r["tool"] == "field.walk"], [], "refused before the walk began: no field.walk row")
-        self.assertFalse(field.FIELD.exists(), "nothing was published to the remote")
+        self.assertEqual(field.FIELD.stat().st_mtime if field.FIELD.exists() else None, self.field_before, "nothing was published to the remote")
 
     def test_walk_refuses_a_segment_crossing_the_zone(self):
         _set_path(PATH_ACROSS)
