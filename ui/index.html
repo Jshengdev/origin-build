@@ -215,7 +215,7 @@ function App() {
         <div class="panel">
           <h2>The castle · first floor</h2>
           <div class="row">
-            <button class="key" onClick=${play} disabled=${!map || (map.path || []).length < 2 || dot !== null}>${dot ? "walking…" : dog?.calibrated ? "▶ walk the path · the dog drives" : "▶ walk the path · simulated"}</button>
+            <button class="key" onClick=${() => play()} disabled=${!map || (map.path || []).length < 2 || dot !== null}>${dot ? "walking…" : dog?.calibrated ? "▶ walk the path · the dog drives" : "▶ walk the path · simulated"}</button>
             ${dot && html`<button onClick=${() => { post("/field/stop"); post("/dog/stop"); }}>stop</button>`}
             ${!dot && dog?.calibrated && dog?.connected && html`<button class="small" title="the proximity field on the dog's believed position while you drive it with the controller; no route, no stops; 'stop' ends it" onClick=${() => { fetch("/tools/walk_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: "dog", follower: false, act: false }) }).then(r => r.json()).then(setLast); }}>lights follow the dog</button>`}
             ${dog?.calibrated && dog?.connected && !dog?.avoid && !dot && html`<button class="small" style=${{ color: "var(--bad)" }} title="the dog's obstacle-avoidance service is not answering; this drives the route without it, by your choice, and the row says so" onClick=${() => play(false)}>walk WITHOUT avoidance</button>`}
