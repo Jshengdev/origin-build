@@ -32,7 +32,8 @@ Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
-are rows, reads are not.
+are rows, reads are not. Objects: every detector window (<repo>/watch.json) is placed on that grid behind GET
+/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen.
 """
 from __future__ import annotations
 import asyncio
@@ -43,8 +44,9 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .. import config
 from ..ledger import log, step
-from . import lidar, nav, occupancy
+from . import lidar, nav, objects, occupancy
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -95,6 +97,9 @@ class DogSession:
         self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
         self._grid_lock = threading.Lock()           # frames arrive on the driver's dispatcher, reads on HTTP threads
         self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
+        self.objects = objects.Store(draft=objects.drafter())   # what the detector boxed, placed on the grid (GET /dog/objects)
+        self._objects_lock = threading.Lock()        # one detector window at a time: the objects thread and GET /dog/objects both tick
+        self._objects_ticker: threading.Thread | None = None   # started by the first objects_state()
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -306,6 +311,47 @@ class DogSession:
                 self.grid = None
                 r["state_after"] = {"cleared": True}
         return {"cleared": True, "frames_before": before["frames_before"]}
+
+    # ---- the object layer (wtdd/dog/objects.py): detector boxes placed on the grid along their bearing
+    def objects_state(self, draft: bool = False) -> dict[str, Any]:
+        """GET /dog/objects: takes the detector's newest window from watch.json if it is new, places its boxes on the
+        session grid from the dog's odometry pose, and returns {n, objects, windows, fov_deg, source, why?}. The first
+        call starts the 'objects' thread, which does the same every objects.TICK_S with draft=True: the one-line drafts
+        (a model call) run there, outside every lock, never on the session loop and never inside a GET. WTDD_CAM_FOV_DEG
+        is read here, at the point of use. No ledger row for the read; the store's events are object.seen rows."""
+        fov = config.maybe("WTDD_CAM_FOV_DEG")
+        fov_deg = float(fov) if fov else None
+        st = self.body.state() if self.body else None
+        pose = {"position": list(st["position"][:2]), "yaw": st["rpy"][2]} if st and st.get("position") and st.get("rpy") else None
+        with self._objects_lock:
+            why = objects.tick(self.objects, objects.WATCH, pose, self.grid, self.cal, fov_deg, self._grid_lock)
+            body = {**self.objects.state(), "fov_deg": fov_deg, "source": "session"}
+            if self._objects_ticker is None:
+                self._objects_ticker = threading.Thread(target=self._objects_loop, name="objects", daemon=True)
+                self._objects_ticker.start()
+        if why:
+            body["why"] = why
+        if draft:
+            objects.draft_due(self.objects)
+        return body
+
+    def _objects_loop(self) -> None:
+        """The 'objects' thread: windows are taken and objects decay and get drafted while the page is closed. Ends when
+        the session loop is closed (a test's teardown); a raise is logged each time it changes, never silent, never fatal
+        (GET /dog/objects answers the same raise as a 500)."""
+        last = None
+        while True:
+            time.sleep(objects.TICK_S)
+            if self.loop.is_closed():
+                return
+            try:
+                self.objects_state(draft=True)
+                last = None
+            except Exception as e:  # noqa: BLE001  (logged; the next tick tries again, the GET shows it)
+                err = f"{type(e).__name__}: {e}"
+                if err != last:
+                    log("objects", "WARN tick FAILED", err=err[:160])
+                last = err
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
