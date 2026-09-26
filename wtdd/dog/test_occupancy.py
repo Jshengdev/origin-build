@@ -17,6 +17,9 @@ The contract under test (the grid, in the odometry frame, metres):
   grid.cell(x, y)           the count at a point (0 outside the extent)
   grid.save / Grid.load     ui/grid.json: {resolution, origin, width, frames, frame_id, cells, saved_at, cal}
   DogSession.grid_px        a saved ui/grid.json is drawn through the calibration it was saved under, not the current one
+  Body.lidar_on(on_frame)   the live path of every window: Body._on_lidar hands each decoded frame to on_frame (the
+                            session's _on_frame -> its grid); a raise there is counted (cb_errors), never raised into the
+                            driver's dispatcher; a frame the grid refuses is not counted in grid.frames
   to_map_px(xy, cal)        vectorised nav.to_map: map pixels through the same calibration as the dots
   response(grid, cal, threshold, source)   the GET /dog/grid JSON: {n, cells_px, cell_px, threshold, resolution,
                             frames, extent_m, source, why?}; zero cells always says why
@@ -25,6 +28,7 @@ The contract under test (the grid, in the odometry frame, metres):
                             background, grey below threshold, black walls) and one stderr line per frame
 """
 from __future__ import annotations
+import asyncio
 import io
 import json
 import subprocess
@@ -62,6 +66,14 @@ def accumulated() -> occupancy.Grid:
     for d in fr:
         g.update_frame(d)
     return g
+
+
+def stop(s) -> None:
+    """A DogSession runs its own event loop thread; a test stops and closes it."""
+    s.loop.call_soon_threadsafe(s.loop.stop)
+    while s.loop.is_running():
+        time.sleep(0.01)
+    s.loop.close()
 
 
 class Fixture(unittest.TestCase):
@@ -150,6 +162,14 @@ class GridTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             g.update_frame(other)
 
+    def test_a_frame_the_grid_refuses_is_not_counted(self):
+        g = accumulated()
+        before = g.counts.copy()
+        with self.assertRaises(ValueError):
+            g.update(np.array([[200.0, 0.0, 0.5]]))   # 200 m out, in the band: past MAX_SIDE, refused
+        self.assertEqual(g.frames, 3, "a refused frame is not one the grid took (grid_frames, the save row, ui/grid.json)")
+        np.testing.assert_array_equal(g.counts, before)
+
 
 class Projection(unittest.TestCase):
     def test_cells_px_match_nav_to_map_pixel_for_pixel(self):
@@ -221,13 +241,59 @@ class Persistence(unittest.TestCase):
                 r = s.grid_px(2)
                 saved = json.loads(session.GRID_FILE.read_text())
             finally:
-                s.loop.call_soon_threadsafe(s.loop.stop)
-                while s.loop.is_running():
-                    time.sleep(0.01)
-                s.loop.close()
+                stop(s)
         self.assertEqual((r["source"], r["n"]), ("ui/grid.json", len(want)))
         self.assertEqual(r["cells_px"], want, "the file grid is drawn where it was when saved, not through the new tie")
         self.assertEqual(saved.get("cal"), CAL, "ui/grid.json carries the calibration it was saved under")
+
+
+class Hook(unittest.TestCase):
+    """The live path of every window, offline: the driver's own messages -> Body._on_lidar -> the callback given to
+    lidar_on (the session's _on_frame) -> the grid. Body() and DogSession() construct without a dog; subscribe is mocked."""
+
+    def setUp(self):
+        from .body import Body
+        self.body, self.msgs, self.err = Body(), [fx.decode_wire(b) for b in fx.blobs()], io.StringIO()
+        self.enterContext(mock.patch.object(lidar, "subscribe", mock.AsyncMock()))
+        self.enterContext(redirect_stderr(self.err))
+
+    def feed(self, on_frame) -> None:
+        asyncio.run(self.body.lidar_on(on_frame))
+        for m in self.msgs:
+            self.body._on_lidar(m)   # a raise here reaches the driver's dispatcher and stops the stream
+
+    def test_every_frame_reaches_the_callback_given_to_lidar_on(self):
+        taken = []
+        self.feed(lambda d: taken.append(d["origin"][:2]))
+        np.testing.assert_allclose(taken, fx.ORIGINS)
+        self.assertEqual(self.body.lidar_points()["n"], len(fx.ORIGINS))
+
+    def test_a_failing_callback_is_counted_never_raised_into_the_driver(self):
+        def boom(d):
+            raise RuntimeError("accumulator bug")
+        self.feed(boom)
+        lp = self.body.lidar_points()
+        self.assertEqual((lp["n"], lp["cb_errors"]), (len(fx.ORIGINS), len(fx.ORIGINS)))
+        np.testing.assert_allclose(lp["frame"]["origin"][:2], fx.ORIGINS[-1], err_msg="the newest frame is still kept")
+        self.assertIn("WARN lidar frame callback failed", self.err.getvalue())
+
+    def test_the_session_grid_takes_every_frame_the_body_hands_it(self):
+        from .. import ledger
+        from . import session
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(ledger, "LEDGER", Path(tmp) / "ledger.jsonl"):
+            s = session.DogSession()
+            try:
+                self.feed(s._on_frame)
+                other = fx.decode_wire(fx.blobs()[0])
+                other["data"]["frame_id"] = "map"   # another frame_id is another world: refused, counted, not taken
+                self.body._on_lidar(other)
+                s.body = self.body
+                lr = s.lidar()
+            finally:
+                stop(s)
+        np.testing.assert_array_equal(s.grid.counts, accumulated().counts)
+        self.assertEqual((s.grid.frames, lr["grid_frames"], lr["cb_errors"], lr["n"]), (3, 3, 1, 4))
+        self.assertIn("grid started", self.err.getvalue())
 
 
 class Replay(unittest.TestCase):
