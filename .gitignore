@@ -41,6 +41,8 @@ intruder.on
 listen.json
 pending.json
 field.stop
+# 09 · fixed-cam: a fixed camera's frames and detections (wtdd/cam; WTDD_CAMS moves it)
+cams/
 
 # sources of truth (the origin folder), read locally, never committed
 context/
