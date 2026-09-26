@@ -63,6 +63,8 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 08 · roster-quote */
+  .panel.night .roster, .panel.night .quote { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; } .panel.night .quote { margin-top: var(--gap-in); }
 </style>
 </head>
 <body>
@@ -191,7 +193,7 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
@@ -300,6 +302,7 @@ function App() {
         </div>
       </div>
       <div>
+        ${html`<${Night}/>`}
         <div class="panel">
           <h2>The eye · what it sees</h2>
           ${live && html`<img src=${live} onLoad=${() => next(150)} onError=${() => next(2000)} style=${{ width: "100%", borderRadius: 2, display: "block", marginBottom: "var(--gap-group)" }}/>`}
@@ -357,7 +360,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +368,34 @@ function App() {
     </div>
   </div>`;
 }
+// 08 · roster-quote · start
+// The night's two rows (wtdd/schedule.py): the newest schedule.shift and quote.night in the last N ledger rows, from this
+// panel's own poll: App's 150-row poll loses the roster of beat 1.2 under a round's writes long before the quote of 3.3.
+// Formatting only, nothing computed here: a FAILED row shows its error, a failed read says so, no row names the rows
+// searched and the command that makes one.
+function Night() {
+  const N = 2000;   // rows searched: more than any hour of the old repo's ledger.jsonl (1686 at most, measured 2026-09-26)
+  const [rows, setRows] = useState(null);   // null until the first read; { error } when GET /ledger fails
+  useEffect(() => { const f = () => fetch(`/ledger?n=${N}`).then(r => r.json()).then(setRows).catch(e => setRows({ error: String(e) })); f(); const t = setInterval(f, 5000); return () => clearInterval(t); }, []);
+  if (!Array.isArray(rows)) return html`<div class="panel night"><h2>The night · roster and quote</h2>
+    <div class=${rows ? "bad" : "hint"}>${rows ? `ledger read FAILED · ${rows.error}` : `reading the last ${N} ledger rows`}</div></div>`;
+  const newest = tool => [...rows].reverse().find(r => r.tool === tool);
+  const s = newest("schedule.shift"), q = newest("quote.night"), R = s?.state_after, Q = q?.state_after;
+  const when = r => `${(r.ts || "").slice(11)} · ${r.latency_ms} ms`;
+  const failed = (what, r) => html`<div class="bad">${what} FAILED · ${r.response_or_error}</div>`;
+  return html`<div class="panel night"><h2>The night · roster and quote</h2>
+    <div class="roster">${!s ? html`<div class="hint">no roster in the last ${N} ledger rows · python -m wtdd roster</div>` : !s.ok ? failed("roster", s) : html`
+      <div><b>roster · shift ${R.shift_id}</b> · ${when(s)}</div>
+      <div>body walks stops ${R.stops.length ? R.stops.map(x => x.i).join(" · ") : "none on the map"}</div>
+      <div>cameras ${R.cameras.length ? R.cameras.map(c => `${c.id} → ${c.zone}`).join(" · ") : "none on the map"}</div>
+      <div>on call ${R.on_call}</div>`}</div>
+    <div class="quote">${!q ? html`<div class="hint">no quote in the last ${N} ledger rows · python -m wtdd quote</div>` : !q.ok ? failed("quote", q) : html`
+      <div><b>quote · shift ${Q.shift_id}</b> · ${when(q)}</div>
+      <div>${Q.stops} stops × ${Q.nights} night${Q.nights === 1 ? "" : "s"} × $${q.args.price_per_stop_night} per stop-night = <b>$${Q.price}</b></div>
+      <div>the guard shift it replaces · $${Q.guard_shift_ref.value} · ${Q.guard_shift_ref.cite}</div>`}</div>
+  </div>`;
+}
+// 08 · roster-quote · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
