@@ -15,8 +15,9 @@
 Every post, from any entry point (this CLI, the chat_post tool, the HTTP API, the MCP server, the agent loop, the
 listener), goes through post(): gate (chat.gate row), claim (chat.claim row), then the send inside one chat.post row
 whose state_after is the confirmed from-me row {guid, rowid, ts}, then memory.confirm (a photo's caption is a second
-bubble, confirmed under <trigger>#caption so posted_guids() knows it too). The on-call person's 1:1 (item 03,
-oncall.py) is the only target besides the group; chat.gate's state_after names who the gate verified. A refused gate or claim is a
+bubble, confirmed under <trigger>#caption so posted_guids() knows it too). Every chat.post row carries args.shift_id
+(oncall.shift_id()); kind "escalate" is a flag (photo + "who dis?!") to the on-call person's 1:1 (item 03, oncall.py),
+the only target besides the group; chat.gate's state_after names who the gate verified. A refused gate or claim is a
 ledger row with ok=False and a PermissionError (exit 2 here). --guid defaults to WTDD_CHAT_GUID; --trigger is the
 idempotence key (default cli:<epoch>). Only this CLI prints the confirmed row to stdout: library callers keep stdout
 clean because the MCP server speaks its protocol there and `python -m wtdd chat_post` prints the result itself.
@@ -32,7 +33,7 @@ from typing import Any
 
 from .. import config, ledger
 from ..ledger import log
-from . import db, memory, send
+from . import db, memory, oncall, send
 from .housemates import HOUSEMATES
 from .triggers import is_wake
 
@@ -70,7 +71,7 @@ def claim(trigger: str) -> None:
 
 def post_step(guid: str, trigger: str, kind: str, text: str | None, file: str | None) -> dict[str, Any]:
     """The send inside one chat.post ledger row (after gate and claim); state_after is the confirmed row {guid, rowid, ts}."""
-    args = {"guid": guid, "kind": kind, "trigger": trigger, "text": text, "file": file}
+    args = {"guid": guid, "kind": kind, "trigger": trigger, "text": text, "file": file, "shift_id": oncall.shift_id()}
     with ledger.step("central", "chat.post", "imessage", args, {"max_rowid": db.max_rowid()}) as r:
         row = send.send_file(guid, file, text) if file else send.send_text(guid, text or "")
         r["state_after"] = row
