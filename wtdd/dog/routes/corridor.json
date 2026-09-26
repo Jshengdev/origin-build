@@ -1,0 +1,13 @@
+[
+  {"cmd": "StandUp"},
+  {"cmd": "BalanceStand"},
+  {"sleep": 2},
+  {"move": {"x": 0.3, "y": 0, "z": 0, "seconds": 5}},
+  {"cmd": "Sit"},
+  {"sleep": 2},
+  {"look": true},
+  {"cmd": "RiseSit"},
+  {"sleep": 2},
+  {"move": {"x": -0.3, "y": 0, "z": 0, "seconds": 5}},
+  {"cmd": "StandDown"}
+]

@@ -1,0 +1,104 @@
+{
+ "written": "2026-09-13 13:05",
+ "rows": [
+  {
+   "scenario": "twice",
+   "trial": 1,
+   "grade": "pass",
+   "seconds": 0.0,
+   "why": "",
+   "detail": "2 wakes in one armed window: 1 post (wake:eval-1789328925-1)",
+   "ran": "2026-09-13 12:52"
+  },
+  {
+   "scenario": "twice",
+   "trial": 2,
+   "grade": "pass",
+   "seconds": 0.0,
+   "why": "",
+   "detail": "claim('eval-claim-1789328925') twice: True, False",
+   "ran": "2026-09-13 12:52"
+  },
+  {
+   "scenario": "walk",
+   "trial": 1,
+   "grade": "pass",
+   "why": "",
+   "seconds": 65.2,
+   "detail": "63.7 s, 68 writes, 0 errors, 7 room crossings, stops []; Hue Iris 2 796 ms, Go table l 791 ms, special 807 ms, sticky can 881 ms, LED strip 771 ms",
+   "ran": "2026-09-13 12:52"
+  },
+  {
+   "scenario": "walk",
+   "trial": 2,
+   "grade": "pass",
+   "why": "",
+   "seconds": 65.1,
+   "detail": "63.7 s, 68 writes, 0 errors, 7 room crossings, stops []; Hue Iris 2 792 ms, Go table l 778 ms, special 818 ms, sticky can 836 ms, LED strip 692 ms",
+   "ran": "2026-09-13 12:52"
+  },
+  {
+   "scenario": "walk",
+   "trial": 3,
+   "grade": "pass",
+   "why": "",
+   "seconds": 65.0,
+   "detail": "63.6 s, 66 writes, 0 errors, 7 room crossings, stops []; Hue Iris 2 775 ms, Go table l 790 ms, special 807 ms, sticky can 839 ms, LED strip 706 ms",
+   "ran": "2026-09-13 12:52"
+  },
+  {
+   "scenario": "look",
+   "trial": 1,
+   "grade": "pass",
+   "why": "",
+   "seconds": 7.0,
+   "detail": "pitch -15.2 deg, fired True, vision 975 ms, person True, out_of_place ['backpack', 'bag']; \"someone standing in the kitchen holding a cup. someone sitting at the table. backpack on a chair. bag on the floor.\"",
+   "ran": "2026-09-13 13:05"
+  },
+  {
+   "scenario": "look",
+   "trial": 2,
+   "grade": "pass",
+   "why": "",
+   "seconds": 7.1,
+   "detail": "pitch -15.3 deg, fired True, vision 1361 ms, person True, out_of_place ['pink bottle']; \"someone is standing drinking from a white cup and holding food, someone else is sitting at the table, a pink bottle is on the table\"",
+   "ran": "2026-09-13 13:05"
+  },
+  {
+   "scenario": "look",
+   "trial": 3,
+   "grade": "pass",
+   "why": "",
+   "seconds": 6.5,
+   "detail": "pitch -15.3 deg, fired True, vision 791 ms, person True, out_of_place ['cup']; \"someone standing in the kitchen looking at their phone, someone else at the counter, a cup on the floor\"",
+   "ran": "2026-09-13 13:05"
+  },
+  {
+   "scenario": "person",
+   "trial": 1,
+   "grade": "pass",
+   "why": "",
+   "seconds": 7.1,
+   "detail": "pitch -15.5 deg, fired True, vision 1236 ms, person True, out_of_place ['camera on tripod', 'red cup']; \"someone sitting at the table using a laptop. camera on tripod next to them. red cup on the table.\"",
+   "ran": "2026-09-13 12:58"
+  },
+  {
+   "scenario": "person",
+   "trial": 2,
+   "grade": "pass",
+   "why": "",
+   "seconds": 7.3,
+   "detail": "pitch -15.5 deg, fired True, vision 1539 ms, person True, out_of_place ['tripod', 'yellow bin']; \"someone sitting at the desk using a laptop. tripod with camera next to desk. pink bottle on desk. yellow bin on floor.\"",
+   "ran": "2026-09-13 12:58"
+  },
+  {
+   "scenario": "person",
+   "trial": 3,
+   "grade": "pass",
+   "why": "",
+   "seconds": 6.9,
+   "detail": "pitch -15.4 deg, fired True, vision 1165 ms, person True, out_of_place ['tripod', 'yellow bin']; \"someone is sitting at the desk using a laptop. a tripod with a camera is next to the desk. a pink bottle is on the desk. a yellow bin is in\"",
+   "ran": "2026-09-13 12:58"
+  }
+ ]
+}

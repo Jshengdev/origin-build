@@ -1,0 +1,6 @@
+{
+  "a": {"lights": ["1e53ff31-2dcc-496a-ad93-3cc25eb50bad"], "names": ["Hue Iris 2"]},
+  "b": {"lights": ["56ecb61c-00c8-46ac-8dca-abe789ba27c3", "6c2556e3-bf37-4efd-9a04-b60ebd1b3452"], "names": ["Go table lamp 1", "special"]},
+  "c": {"lights": ["d7b0ae35-f044-429c-9eed-a3164173d340"], "names": ["sticky canbo"]},
+  "living room": {"lights": ["1e53ff31-2dcc-496a-ad93-3cc25eb50bad", "56ecb61c-00c8-46ac-8dca-abe789ba27c3", "6c2556e3-bf37-4efd-9a04-b60ebd1b3452", "d7b0ae35-f044-429c-9eed-a3164173d340"], "names": ["Hue Iris 2", "Go table lamp 1", "special", "sticky canbo"]}
+}
