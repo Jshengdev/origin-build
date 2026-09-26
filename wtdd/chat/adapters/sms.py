@@ -86,8 +86,12 @@ def message_from(m: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ok(r: Any) -> dict[str, Any]:
-    """Twilio's JSON body, or its own error code and message raised (never read as a success)."""
-    body = r.json()
+    """Twilio's JSON body, or its own error code and message raised (never read as a success). A body that is not JSON
+    (an edge's 5xx page, a captive portal, a tunnel's error page) is raised with its HTTP status and first 200 chars."""
+    try:
+        body = r.json()
+    except ValueError:   # requests' JSONDecodeError is a ValueError
+        raise RuntimeError(f"twilio {r.status_code} non-JSON body: {r.text[:200]!r}") from None
     if r.status_code >= 300:
         raise RuntimeError(f"twilio {r.status_code} code={body.get('code')}: {body.get('message')}")
     return body
