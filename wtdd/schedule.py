@@ -77,9 +77,9 @@ def quote(m: dict[str, Any], price_per_stop_night: float | None = None, nights: 
     with step("schedule", "quote.night", "map", args, _counts(m)) as r:
         p = float(get("WTDD_PRICE_PER_STOP_NIGHT") if price_per_stop_night is None else price_per_stop_night)
         k, n = int(float(nights)), len(_stops(m))
-        args.update(price_per_stop_night=p, nights=k)   # the row carries the numbers priced, not the raw input
         if not n or not 0 < p < math.inf or k < 1 or k != float(nights):
             raise ValueError(f"no quote for {n} stops x {nights} nights x {p} per stop-night: each must be above zero, nights whole")
+        args.update(price_per_stop_night=p, nights=k)   # priced: the row carries the numbers priced; refused: what was asked
         ref = {"value": float(get("WTDD_GUARD_SHIFT_USD")), "cite": get("WTDD_GUARD_SHIFT_CITE")}
         r["state_after"] = out = {"shift_id": sid, "stops": n, "nights": k, "price": round(n * k * p, 2), "guard_shift_ref": ref}
     log("schedule", "quote", shift=sid, stops=n, nights=k, price=out["price"], guard_shift=ref["value"], ms=r["latency_ms"])
