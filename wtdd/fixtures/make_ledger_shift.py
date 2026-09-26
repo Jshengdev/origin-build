@@ -9,10 +9,12 @@ answered "thats my friend" 14 s later on chat.db's clock; 23: the nod refused by
 error), the follow and the walk rows, "dog done", a housemate's correction nine minutes later ("thats a tarp not a
 cup", acked 556 s after the post it corrects), and one refused claim (never twice). Shift 2026-09-26, signed: the
 same round with the flag at stop 22 unanswered (the round held, then moved on: no verdict row), signed by the on-call
-stand-in the next morning, then a second signature refused with its own ok=false row. Around them, rows of no shift:
-a calibration hours before the first wake, a light write at noon between the two nights, a calibration after the
-signature. Row shapes are the take's (docs/evidence/ledger-take-2026-09-13.jsonl) plus 03's fields (shift_id on every
-post, reply and signature; acked_ms; kind "escalate"); handles are E.164-shaped stand-ins, never real ones."""
+stand-in the next morning, then a second signature refused with its own ok=false row. Between them, a light write at
+noon, unstamped, falls into the unsigned shift's open window (its window runs to the next shift's opener: the reason
+an unsigned shift must be signed). Only the two calibrations are in no shift: one hours before the first wake, one
+after the signature. Row shapes are the take's (docs/evidence/ledger-take-2026-09-13.jsonl) plus 03's fields
+(shift_id on every post, reply and signature; acked_ms; kind "escalate"); handles are E.164-shaped stand-ins, never
+real ones."""
 from __future__ import annotations
 import json
 from pathlib import Path
