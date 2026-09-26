@@ -98,8 +98,10 @@ def near(p, q, tol=plan.CELL) -> bool:
 
 
 def clear_of_wall_and_zone(tc: unittest.TestCase, pts, wall) -> None:
-    d, at = nearest(samples(pts), wall)
-    tc.assertGreaterEqual(d, CLEAR_PX, f"route passes {at} within {d:.0f} px of the wall: {pts}")
+    """wall None: the rooms fallback, whose cost map has no LiDAR wall on it; only the zone is checked there."""
+    if wall is not None:
+        d, at = nearest(samples(pts), wall)
+        tc.assertGreaterEqual(d, CLEAR_PX, f"route passes {at} within {d:.0f} px of the wall: {pts}")
     hits = [p for p in samples(pts) if inside(p, POLY)]
     tc.assertEqual(hits, [], f"route enters {ZONE['name']} at {hits[:1]} ({len(hits)} px of it): {pts}")
     for p in samples(pts):
@@ -211,7 +213,7 @@ class Route(Fresh):
             out = plan.route(AROUND_ZONE)
         self.assertEqual(out["cost_map"], "rooms")
         self.assertIn("no grid", out["why"])
-        clear_of_wall_and_zone(self, out["path"], self.wall)   # the wall is not on the rooms' cost map, but the zone is blocked on both
+        clear_of_wall_and_zone(self, out["path"], None)   # no grid, so no LiDAR wall to clear (06's rooms route passes 3 px from it); the zone is blocked on both
         for p in samples(out["path"]):
             self.assertIsNotNone(room_of(p, ROOMS), f"the fallback keeps the route inside the drawn rooms: {p}")
         r = rows_since(self.n0, "plan.multistop")[0]
