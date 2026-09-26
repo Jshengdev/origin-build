@@ -24,6 +24,17 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
   mode:       RTC_TOPIC["MOTION_SWITCHER"] api 1001 (query) / 1002 (set {"name": "normal"}); the dog stands up
               while switching, the example waits 5 s.
   state:      pub_sub.subscribe(RTC_TOPIC["LF_SPORT_MOD_STATE"], cb); message["data"] is the state dict.
+  vitals:     state() also forwards gyroscope, accelerometer, imu_temp (imu_state.temperature), error_code (the raw int,
+              never translated), foot_force and skew_ms (arrival wall time minus stamp.sec + nanosec). One stderr line per
+              state second, `state zeros=... n hz skew_ms`: a WARN while foot_force or range_obstacle is all zeros or any
+              of the six is absent. streams() serves each stream's n, age_ms and stale (the card's 2 s rule).
+  faults:     errors / add_error / rm_error arrive pushed, no subscribe (constants.py:16-18); the driver only prints them
+              (webrtc_datachannel.py:87-99 -> msgs/error_handler.py:66-97). _watch_faults wraps the instance's
+              handle_response at connect into Body.faults and one dog.fault row each, written by loop.call_soon after
+              the callback returns (a ledger write inside it would stall the 20 Hz stream).
+              UNVERIFIED on the dog: the temperature's unit, error_code's meaning (100 at rest on 2026-09-13), the fault
+              path (never seen on this dog), whether foot_force or range_obstacle ever leave zero on this topic, the frame
+              of state.velocity (body or odometry), and whether an errors snapshot arrives before the wrapper is in.
   avoidance:  RTC_TOPIC["OBSTACLES_AVOID"] with OBSTACLES_AVOID_API {SWITCH_SET 1001, SWITCH_GET 1002, MOVE 1003,
               USE_REMOTE_COMMAND_FROM_API 1004}; MOVE has no reply. Joystick-style drive also exists via
               publish_without_callback(RTC_TOPIC["WIRELESS_CONTROLLER"], {lx, ly, rx, ry, keys}) at 50 Hz (unused).
@@ -70,6 +81,7 @@ from unitree_webrtc_connect import (
 )
 from unitree_webrtc_connect.constants import DATA_CHANNEL_TYPE
 from unitree_webrtc_connect.unitree_auth import _probe_tcp_port
+from unitree_webrtc_connect.msgs.error_handler import get_error_code_text, integer_to_hex_string
 
 from .. import config
 from ..ledger import log, step
@@ -240,6 +252,9 @@ class Body:
         self._st_n = 0
         self._st_t0 = 0.0
         self._st_at = 0.0
+        self._st_wall = 0.0               # time.time() of the newest state message (skew_ms against the dog's stamp)
+        self._st_log = 0.0                # monotonic time of the last per-state-second line
+        self.faults: list[dict] = []      # active faults the dog pushed; replaced whole, never mutated (HTTP threads read it)
         self._fr = None                   # latest av.VideoFrame
         self._fr_n = 0
         self._fr_at = 0.0
@@ -268,6 +283,7 @@ class Body:
                 await conn.disconnect()
                 raise TimeoutError(f"connect to {self.ip} did not complete within {CONNECT_TIMEOUT_S}s") from None
             self.conn = conn
+            self._watch_faults(conn.datachannel)   # after connect: an errors snapshot sent during validation is missed (UNVERIFIED)
             # Registered before the channel is ever switched on, so the first frame is handed to us.
             conn.video.add_track_callback(self._drain)
             conn.datachannel.pub_sub.subscribe(RTC_TOPIC["LF_SPORT_MOD_STATE"], self._on_state)
@@ -299,10 +315,42 @@ class Body:
         if self._st_n == 0:
             self._st_t0 = now
         self._st, self._st_n, self._st_at = d, self._st_n + 1, now
+        self._st_wall = time.time()
+        if now - self._st_log >= 1.0:
+            self._st_log = now
+            self._vitals_line()
 
     def raw(self) -> dict | None:
         """The last full LF_SPORT_MOD_STATE data dict, untouched."""
         return self._st
+
+    def _skew_ms(self, d: dict) -> int | None:
+        """Arrival wall time of the newest message minus its stamp (the dog's clock, epoch s). None without a full stamp."""
+        s = d.get("stamp")
+        if not isinstance(s, dict) or s.get("sec") is None or s.get("nanosec") is None:
+            return None
+        return round((self._st_wall - (s["sec"] + s["nanosec"] / 1e9)) * 1000)
+
+    def _vitals_line(self) -> None:
+        """One stderr line per state second: `state zeros=<keys all zero or -> [absent=<keys>] n hz skew_ms`. A WARN while
+        foot_force or range_obstacle is all zeros (every row on this dog so far) or any of the six vitals keys is absent."""
+        st = self.state()
+        zeros = [k for k in ("foot_force", "range_obstacle") if isinstance(st[k], list) and st[k] and not any(st[k])]
+        absent = [k for k in ("gyroscope", "accelerometer", "imu_temp", "error_code", "foot_force", "skew_ms") if st[k] is None]
+        log("dog", ("WARN " if zeros or absent else "") + "state", zeros=",".join(zeros) or "-",
+            **({"absent": ",".join(absent)} if absent else {}), n=st["n"], hz=st["hz"], skew_ms=st["skew_ms"])
+
+    def streams(self) -> dict:
+        """{state|video|lidar: {on, n, age_ms, stale}}: age_ms None until the first message; stale while on and the newest
+        message is FRAME_STALE_S or older (the remote's 2 s rule on the dog card, served so the page derives nothing)."""
+        now = time.monotonic()
+
+        def one(on: bool, n: int, at: float) -> dict:
+            age = round((now - at) * 1000) if n else None
+            return {"on": on, "n": n, "age_ms": age, "stale": bool(on and age is not None and age >= FRAME_STALE_S * 1000)}
+
+        return {"state": one(True, self._st_n, self._st_at), "video": one(self._video, self._fr_n, self._fr_at),
+                "lidar": one(self._lidar_on, self._lidar_n, self._lidar_at)}
 
     def state(self) -> dict | None:
         """Compact snapshot of the latest state message plus the measured rate. None until the first sample."""
@@ -313,6 +361,8 @@ class Body:
         hz = round((self._st_n - 1) / span, 1) if self._st_n > 1 and span > 0 else None
         imu = d.get("imu_state") or {}
         return {"mode": d.get("mode"), "gait_type": d.get("gait_type"), "progress": d.get("progress"),
+                "gyroscope": imu.get("gyroscope"), "accelerometer": imu.get("accelerometer"), "imu_temp": imu.get("temperature"),
+                "error_code": d.get("error_code"), "foot_force": d.get("foot_force"), "skew_ms": self._skew_ms(d),
                 "position": d.get("position"), "velocity": d.get("velocity"), "yaw_speed": d.get("yaw_speed"),
                 "body_height": d.get("body_height"), "range_obstacle": d.get("range_obstacle"), "rpy": imu.get("rpy"),
                 "n": self._st_n, "hz": hz, "age_ms": round((now - self._st_at) * 1000)}
@@ -329,6 +379,85 @@ class Body:
                 raise RuntimeError(msg)
             log("dog", "WARN " + msg)
         return self.state()
+
+    # ---- faults: errors / add_error / rm_error, pushed by the dog with no subscribe
+
+    def _watch_faults(self, dc) -> None:
+        """Wraps the data channel's handle_response (webrtc_datachannel.py:87-99, which only prints faults through
+        msgs/error_handler.py:66-97). The instance attribute is replaced: on_message resolves self.handle_response at call
+        time (webrtc_datachannel.py:79). A fault message goes to _on_fault first; every message, faults included, then
+        reaches the driver's own handler, because validation, heartbeat and rtc_inner_req depend on it."""
+        orig, kinds = dc.handle_response, {DATA_CHANNEL_TYPE[k] for k in ("ERRORS", "ADD_ERROR", "RM_ERROR")}
+
+        async def handle_response(msg: dict) -> None:
+            try:
+                if isinstance(msg, dict) and msg.get("type") in kinds:
+                    self._on_fault(msg)
+            finally:
+                await orig(msg)
+
+        dc.handle_response = handle_response
+
+    def _on_fault(self, msg: dict) -> None:
+        """Runs inside the driver's message handler: memory only, the rows are scheduled on the loop (a ledger write here
+        would stall the 20 Hz state stream). errors is the dog's full snapshot, diffed against Body.faults (one add row per
+        new id, one rm row per id gone); add_error / rm_error carry one [ts, source, code] each and write one row each."""
+        loop, at, kind = asyncio.get_running_loop(), time.time(), msg["type"]
+        data = msg.get("data")
+        if isinstance(data, list) and data and not isinstance(data[0], (list, tuple)):
+            data = [data]   # a single tuple, normalised as the driver does
+        try:
+            if not isinstance(data, list) or (kind != "errors" and len(data) != 1):
+                raise ValueError(f"{kind} data is not [ts, source, code]")
+            got = {e["id"]: e for e in (self._fault(t, at) for t in data)}
+        except (TypeError, ValueError) as e:
+            log("dog", "WARN fault message not parsed", type=kind, err=str(e)[:120], data=str(data)[:120])
+            loop.call_soon(self._fault_bad, msg, f"{type(e).__name__}: {e}", [f["id"] for f in self.faults])
+            return
+        before = self.faults
+        held = {f["id"]: f for f in before}
+        if kind == "errors":
+            after = [held.get(i, e) for i, e in got.items()]
+            changes = [("add", e) for i, e in got.items() if i not in held] + [("rm", f) for f in before if f["id"] not in got]
+        elif kind == "add_error":
+            e = next(iter(got.values()))
+            after = before if e["id"] in held else before + [e]
+            changes = [("add", held.get(e["id"], e))]
+        else:
+            e = next(iter(got.values()))
+            if e["id"] not in held:
+                log("dog", "WARN fault rm for an id not held", id=e["id"], held=",".join(held) or "-")
+            after = [f for f in before if f["id"] != e["id"]]
+            changes = [("rm", e)]
+        self.faults = after
+        ids0, ids1 = [f["id"] for f in before], [f["id"] for f in after]
+        for k, e in changes:
+            log("dog", f"WARN fault {k} {e['id']} {e['text']}", active=len(after))
+            loop.call_soon(self._fault_row, k, e, ids0, ids1, msg)
+
+    @staticmethod
+    def _fault(t, at: float) -> dict:
+        """One [ts, source, code] as {ts (the dog's epoch s), at (ours), source, code, id, text}: id is the driver's table
+        key (code in hex, 16 -> '300_10'), text its own get_error_code_text (its '<src>-<hex>' fallback when unmapped)."""
+        ts, src, code = t
+        if not isinstance(ts, (int, float)) or not isinstance(src, int) or not isinstance(code, int):
+            raise ValueError(f"not [ts, source, code]: {t!r}")
+        h = integer_to_hex_string(code)
+        return {"ts": ts, "at": at, "source": src, "code": code, "id": f"{src}_{h}", "text": get_error_code_text(src, h)}
+
+    def _fault_row(self, kind: str, e: dict, ids0: list[str], ids1: list[str], msg: dict) -> None:
+        """One dog.fault row, on the loop after the driver's callback returned. state_after carries hz and n: the receipt
+        that the state stream kept its rate while the fault was handled."""
+        with step("dog", "dog.fault", "unitree", {"kind": kind, "source": e["source"], "code": e["code"], "text": e["text"]}, ids0) as r:
+            r["response_or_error"] = msg
+            r["state_after"] = {"faults": ids1, "hz": (self.state() or {}).get("hz"), "n": self._st_n}
+
+    def _fault_bad(self, msg: dict, err: str, ids: list[str]) -> None:
+        """A fault message that did not parse: one dog.fault row with ok false, Body.faults unchanged (the raise is the
+        loop handler's to log)."""
+        with step("dog", "dog.fault", "unitree", {"kind": msg.get("type")}, ids) as r:
+            r["state_after"] = {"faults": ids, "hz": (self.state() or {}).get("hz"), "n": self._st_n}
+            raise ValueError(f"fault message not parsed: {err}; raw: {str(msg)[:300]}")
 
     # ---- requests
 
