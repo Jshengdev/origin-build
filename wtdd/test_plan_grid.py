@@ -366,10 +366,11 @@ class Follower(unittest.TestCase):
         self.assertEqual(len(fs["replans"]), 1, fs)
         rp = fs["replans"][0]
         self.assertEqual((rp["at"], rp["rejoin"], rp["skipped_stops"]), (3, 6, [4]))
-        self.assertEqual(rp["waypoints"], i600 - i400)
+        self.assertEqual(rp["waypoints"], i600 - i400 - 1, "the detour's own points, every one driven, the taught rejoin not among them")
         rows = rows_since(self.n0, "plan.replanned")
         self.assertEqual(len(rows), 1, "one plan.replanned row")
         self.assertTrue(rows[0]["ok"])
+        self.assertEqual(rows[0]["state_after"]["waypoints"], rp["waypoints"])
         self.assertEqual((rows[0]["args"]["blocked"]["index"], rows[0]["args"]["rejoin"]["index"]), (3, 6))
         f = rows_since(self.n0, "dog.follow")
         self.assertEqual(len(f), 1, "one dog.follow row")
