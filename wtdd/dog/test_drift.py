@@ -1,16 +1,20 @@
-"""The verifying command of roadmap item 05a: python -m unittest wtdd.dog.test_drift. No dog, no ledger writes.
+"""The verifying command of roadmap item 05a: python -m unittest wtdd.dog.test_drift. No dog; the real ledger is untouched.
 
 Checks wtdd/dog/drift.py on fixtures/pose_rows.jsonl (planted drift, made by fixtures/make_pose_rows.py): the pose
 source the follower uses is chosen by env WTDD_POSE_SOURCE (default sport, anything else refused); a rt/utlidar/
 robot_pose message parses to x, y, yaw or is refused loud; a pose.sample row has the contract's fields
 {source, x, y, yaw} in args (plus shift_id) and its map projection in state_after; the report measures each source's
-end error per walk from where the dog actually stood (the drag after the walk) or, without one, from the taught route
-end, says which, names who drove, and names the lower-drift source; a ledger without pose.sample rows fails loud.
-WTDD_LEDGER is pointed at a scratch file before anything is imported, so the real ledger is never touched."""
+end error per walk from where the dog actually stood (the drag after the walk, refused when the dog moved before it) or,
+without one, from the taught route end, says which, names who drove, and names the lower-drift source; a ledger without
+pose.sample rows fails loud. Session drives the real wtdd/dog/session.py (calibrate, follow, _follow, _sample_poses,
+state) with FakeBody in place of the dog on a three-waypoint route: both ties on the drag row, both poses on every
+follow, the driver and the counts on the follow row, a silent utlidar as a zero and a WARN, a refused drag as a row.
+WTDD_LEDGER and session.CAL_FILE are pointed at a scratch dir before anything runs, so nothing real is written."""
 from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import os
 import tempfile
 import time
@@ -20,7 +24,8 @@ from pathlib import Path
 _TMP = tempfile.mkdtemp(prefix="wtdd-drift-test-")
 os.environ["WTDD_LEDGER"] = str(Path(_TMP) / "ledger.jsonl")
 
-from wtdd.dog import drift, nav  # noqa: E402
+from wtdd import ledger  # noqa: E402
+from wtdd.dog import drift, nav, session  # noqa: E402
 from wtdd.dog.fixtures import make_pose_rows as gen  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "pose_rows.jsonl"
@@ -222,6 +227,134 @@ class Cli(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("WARN", err.getvalue())
         self.assertIn("pose.sample", err.getvalue())
+
+
+PATH = [[448, 455], [448, 500], [448, 545]]   # three waypoints straight down the map, 45 px apart: a walk under a second
+H0 = nav.heading_of(PATH[0], PATH[1])
+
+
+class FakeBody:
+    """The part of wtdd/dog/body.Body that DogSession's calibrate, follow, _follow and _halt call, without a dog. A true
+    pose integrated from the session's velocity (FAST x real time); the sport odometry is that pose from power-on, the
+    utlidar pose is the same motion in a rotated, offset frame (its own tie absorbs that), or silent (ut=False)."""
+    FAST = 5.0
+
+    def __init__(self, sess, ut: bool = True):
+        self.sess, self.ut, self._avoid = sess, ut, True
+        self.x = self.y = self.th = 0.0
+        self.t = time.monotonic()
+
+    def state(self) -> dict:
+        now = time.monotonic()
+        dt, self.t = (now - self.t) * self.FAST, now
+        vx, _, wz = self.sess.vel
+        self.th += wz * dt
+        self.x, self.y = self.x + vx * dt * math.cos(self.th), self.y + vx * dt * math.sin(self.th)
+        a = 0.7
+        ut = {"x": 1.3 + self.x * math.cos(a) - self.y * math.sin(a), "y": -0.4 + self.x * math.sin(a) + self.y * math.cos(a),
+              "yaw": nav.wrap(self.th + a), "n": 1, "age_ms": 20} if self.ut else None
+        return {"position": [self.x, self.y, 0.3], "rpy": [0.0, 0.0, self.th], "velocity": [0.0, 0.0, 0.0], "n": 1, "age_ms": 10,
+                "utpose": ut, "utpose_errors": 0}
+
+    async def fresh_state(self, required: bool = False) -> dict:
+        return self.state()
+
+    async def cmd(self, name: str, parameter=None) -> int:
+        return 0
+
+    async def _tick(self, kind: str, x: float, y: float, z: float) -> None:
+        return None
+
+
+class Session(unittest.TestCase):
+    def setUp(self):
+        self._had = os.environ.pop("WTDD_POSE_SOURCE", None)
+        self._cal_file = session.CAL_FILE
+        session.CAL_FILE = Path(_TMP) / "dog_cal.json"
+        session.CAL_FILE.unlink(missing_ok=True)
+
+    def tearDown(self):
+        session.CAL_FILE = self._cal_file
+        os.environ.pop("WTDD_POSE_SOURCE", None)
+        if self._had is not None:
+            os.environ["WTDD_POSE_SOURCE"] = self._had
+
+    def _session(self, source: str, ut: bool = True) -> "session.DogSession":
+        os.environ["WTDD_POSE_SOURCE"] = source
+        session.CAL_FILE.unlink(missing_ok=True)   # each session starts untied
+        s = session.DogSession()
+        s.body = FakeBody(s, ut)
+        self.addCleanup(s.loop.call_soon_threadsafe, s.loop.stop)
+        return s
+
+    def _walk(self, s) -> list[dict]:
+        n0 = len(ledger.rows())
+        s.follow(PATH, [], reach_px=30.0)
+        s._follower.result(10)
+        return ledger.rows()[n0:]
+
+    def test_the_drag_ties_both_sources_and_puts_both_on_its_row(self):
+        s = self._session("sport")
+        n0 = len(ledger.rows())
+        s.calibrate(PATH[0], H0)
+        row = [r for r in ledger.rows()[n0:] if r["tool"] == "dog.calibrate"][-1]
+        self.assertIs(row["ok"], True)
+        self.assertEqual(sorted(row["state_after"]["cals"]), sorted(drift.SOURCES))
+        self.assertEqual(row["state_after"]["cal"]["odom"], row["state_after"]["cals"]["sport"]["odom"])   # cal keeps the sport tie
+        self.assertEqual(sorted(json.loads(session.CAL_FILE.read_text())["cals"]), sorted(drift.SOURCES))
+        st = s.state()
+        self.assertEqual((st["pose_source"], st["calibrated"]), ("sport", True))
+        for src in drift.SOURCES:
+            self.assertEqual(st["poses"][src]["p"], PATH[0], src)
+
+    def test_a_follow_on_either_source_records_both_poses_and_names_its_driver(self):
+        for src in drift.SOURCES:
+            with self.subTest(source=src):
+                s = self._session(src)
+                s.calibrate(PATH[0], H0)
+                rows = self._walk(s)
+                fol = [r for r in rows if r["tool"] == "dog.follow"]
+                self.assertEqual(len(fol), 1)
+                fol = fol[0]
+                self.assertIs(fol["ok"], True, fol["response_or_error"])
+                self.assertEqual(fol["args"]["pose_source"], src)
+                self.assertEqual(fol["state_after"]["reached"], [0, 1, 2])
+                samples = [r for r in rows if r["tool"] == "pose.sample"]
+                counts = {x: sum(r["args"]["source"] == x for r in samples) for x in drift.SOURCES}
+                self.assertEqual(fol["state_after"]["samples"], counts)
+                for r in samples:
+                    self.assertEqual(sorted(r["args"]), ["shift_id", "source", "x", "y", "yaw"])
+                    self.assertIsNotNone(r["state_after"]["map"], r)
+                ends = {r["args"]["source"]: r["state_after"]["map"]["p"] for r in rows[rows.index(fol) - 2:rows.index(fol)]}
+                self.assertEqual(sorted(ends), sorted(drift.SOURCES))   # the last sample of each source lands right before the follow row
+                self.assertLessEqual(math.dist(ends[src], PATH[-1]), 30.0)   # the driver stopped inside reach of the end
+                self.assertLessEqual(math.dist(ends["sport"], ends["utlidar"]), 2.0)   # no drift in FakeBody: each tie projects the same spot
+
+    def test_a_silent_utlidar_is_a_zero_on_the_follow_row_and_a_warn(self):
+        s = self._session("sport", ut=False)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            s.calibrate(PATH[0], H0)
+            rows = self._walk(s)
+        self.assertIn("WARN no utlidar pose at this drag", err.getvalue())
+        fol = [r for r in rows if r["tool"] == "dog.follow"][0]
+        self.assertIs(fol["ok"], True, fol["response_or_error"])
+        self.assertEqual(fol["state_after"]["samples"]["utlidar"], 0)
+        self.assertGreater(fol["state_after"]["samples"]["sport"], 0)
+        self.assertIn("WARN 0 utlidar pose samples on this walk", err.getvalue())
+        self.assertFalse([r for r in rows if r["tool"] == "pose.sample" and r["args"]["source"] == "utlidar"])
+
+    def test_utlidar_selected_without_a_utlidar_pose_is_a_failed_drag_row_and_no_follow(self):
+        s = self._session("utlidar", ut=False)
+        n0 = len(ledger.rows())
+        with self.assertRaises(RuntimeError):
+            s.calibrate(PATH[0], H0)
+        row = [r for r in ledger.rows()[n0:] if r["tool"] == "dog.calibrate"][-1]
+        self.assertIs(row["ok"], False)
+        self.assertIn("no utlidar pose", row["response_or_error"])
+        with self.assertRaises(RuntimeError) as cm:
+            s.follow(PATH, [], reach_px=30.0)
+        self.assertIn("not calibrated for utlidar", str(cm.exception))
 
 
 if __name__ == "__main__":
