@@ -41,6 +41,13 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
               no waypoint navigation here. A route is a scripted list of moves with avoidance on
               (TrajectoryFollow 1018 exists for short trajectories if ever needed).
 
+The live view. jpeg_cached() encodes the newest frame once per frame number (PIL, on the dog loop) and every reader
+shares that one encode: GET /dog/frame.jpg, GET /dog/stream.mjpg, and watch.py through frame.jpg. video() is its health
+on GET /dog/state: fps from _fr_n deltas over the last second, the age of the newest frame, and the cached encode's
+bytes, size and sha. jpeg() and the receipted frame() (quality 85) are unchanged. UNVERIFIED on the dog: the fps
+delivered through one multipart connection (the take ledger measured 14.3 into _drain), the codec the dog's SDP answer
+names, and what the encode costs the dog loop against the 10 Hz drive tick.
+
 Johnny must do. 1) Put the dog on the house Wi-Fi in STA mode via the Unitree Go app and set UNITREE_ROBOT_IP
 in .env. 2) Read the firmware version in the app; if 1.1.15 or newer, fetch the key (above) into
 UNITREE_AES_128_KEY. 3) Clear a 3 m corridor and stand by the dog for the first `cmd` calls.
@@ -51,6 +58,7 @@ Never. No command to the dog unless probe() passed in this process (connect() en
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import io
 import json
@@ -245,6 +253,9 @@ class Body:
         self._fr_at = 0.0
         self._vid_t0 = 0.0
         self._video = False
+        self._jpg: dict | None = None     # the one live-view encode {bytes, sha, n, w, h, at}, shared by every reader (jpeg_cached)
+        self._fr_times: collections.deque = collections.deque(maxlen=64)   # (monotonic t, _fr_n) per arrival: video()'s fps
+        self.video_source = "live"        # "stub" only on the DEMO_CACHE video stub (wtdd/dog/video_stub.py)
         self._lidar: dict | None = None   # newest decoded voxel frame (wtdd/dog/lidar.py decode), None until the first
         self._lidar_n = 0
         self._lidar_err = 0
@@ -575,6 +586,7 @@ class Body:
             if self._fr_n == 0:
                 log("dog", f"first frame {f.width}x{f.height} after {round((now - self._vid_t0) * 1000)} ms")
             self._fr, self._fr_n, self._fr_at = f, self._fr_n + 1, now
+            self._fr_times.append((now, self._fr_n))
             if self._fr_n % 300 == 0:
                 log("dog", f"video frames={self._fr_n}")
 
@@ -600,6 +612,37 @@ class Body:
         buf = io.BytesIO()
         f.to_image().save(buf, "JPEG", quality=quality)
         return buf.getvalue(), f, age
+
+    async def jpeg_cached(self, quality: int = 70) -> dict:
+        """The newest frame as {bytes, sha, n, w, h, at}, encoded once per frame number however many readers ask
+        (GET /dog/frame.jpg, GET /dog/stream.mjpg, watch.py through the first). No ledger row: a read, like jpeg().
+        There is no await between the check and the store, so the loop serializes readers and each n costs one encode."""
+        await self._video_on()
+        age = time.monotonic() - self._fr_at
+        if age > FRAME_STALE_S:
+            raise RuntimeError(f"video stale: last frame {age:.1f}s ago (frames={self._fr_n})")
+        if self._jpg is None or self._jpg["n"] != self._fr_n:
+            f, n, at = self._fr, self._fr_n, self._fr_at
+            buf = io.BytesIO()
+            f.to_image().save(buf, "JPEG", quality=quality)
+            data = buf.getvalue()
+            self._jpg = {"bytes": data, "sha": hashlib.sha256(data).hexdigest(), "n": n, "w": f.width, "h": f.height, "at": at}
+        return self._jpg
+
+    def video(self) -> dict | None:
+        """The live view's health for GET /dog/state: fps from _fr_n deltas over the last second (the take ledger's
+        frames_seen arithmetic), the age of the newest frame, and the cached encode's size and sha. None before a frame.
+        age_ms is the time since the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp)."""
+        if self._fr is None:
+            return None
+        now = time.monotonic()
+        win = [(t, n) for t, n in self._fr_times if now - t <= 1.0]
+        fps = round((win[-1][1] - win[0][1]) / (win[-1][0] - win[0][0]), 1) if len(win) >= 2 and win[-1][0] > win[0][0] else None
+        c, age = self._jpg, now - self._fr_at
+        return {"fps": fps, "age_ms": round(age * 1000), "bytes": len(c["bytes"]) if c else None,
+                "w": c["w"] if c else self._fr.width, "h": c["h"] if c else self._fr.height, "frames": self._fr_n,
+                "n": c["n"] if c else None, "sha": c["sha"] if c else None, "stale": age > FRAME_STALE_S,
+                "source": self.video_source}
 
     async def frame(self, out: Path | str | None = None) -> bytes:
         """JPEG bytes of the newest video frame. Writes `out` if given. The row carries the sha256 of the exact bytes."""
