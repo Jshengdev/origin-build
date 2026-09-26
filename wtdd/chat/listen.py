@@ -34,9 +34,10 @@ The listener reads both chats (read(), one watermark each, every message tagged 
 answers flags: a verdict or a correction, from that person's own messages; a wake phrase or command there never arms
 the dog. Replies go back to the chat that answered. intruder.verdict and chat.correction rows carry acked_ms (the post's
 confirmed chat.db time to the reply's chat.db time, UTC, whole seconds; None + acked_error + a WARN when there is no
-confirmed post), shift_id and chat. No person configured: one WARN at boot, and a flag is posted to the group as its
-error under the same alarm: key (no question opened, no hold). UNVERIFIED until the first live run: a reply landing in
-the 1:1 chat as read here, and the send to it (send.py)."""
+confirmed post), shift_id and chat. No person configured, or the send to them failed: one WARN at boot for the first,
+and either is posted to the group as its error under escalate-fail:<key> (never alarm:<key>, which a failed send has
+already claimed), no question opened, no hold, the round goes on. UNVERIFIED until the first live run: a reply landing
+in the 1:1 chat as read here, and the send to it (send.py)."""
 from __future__ import annotations
 import json
 import re
@@ -148,8 +149,9 @@ class Listener:
         if seen.get("person") and ask:   # the intruder check: someone in frame, flag the on-call person, hold here for their verdict
             try:
                 to = self.escalate(f"alarm:{k}", "who dis?!", seen.get("file"))
-            except Exception as e:  # noqa: BLE001  (nobody to flag, or the flag failed: posted to the group as its error, no hold)
-                self.say(f"alarm:{k}", f"couldn't escalate: {type(e).__name__}: {str(e)[:100]}")
+            except Exception as e:  # noqa: BLE001  (nobody to flag, or the flag failed: posted to the group as its error, no hold;
+                # its own key, since a send that failed after its claim has consumed alarm:<k> and the stop is never re-flagged)
+                self.say(f"escalate-fail:{k}", f"couldn't escalate: {type(e).__name__}: {str(e)[:100]}")
                 return
             PENDING.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": seen.get("file"), "seconds": 5,
                                            "trigger": f"alarm:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes")}))
