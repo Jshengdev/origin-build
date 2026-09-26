@@ -46,6 +46,9 @@ as ui/map.json is now, not as it was that night (the ledger holds the stop indic
 off today's path is listed as such. Models label, they never draw: every shape is the map's polygons and path, no
 row's text becomes geometry. No DEMO_CACHE here: the record is a pure read with no live path to flip; a page built
 from fixture rows (cached=true, source="stub") says so in its header.
+
+UNVERIFIED on a real night: every join above was checked against listen.py's code and the fixture, never against rows
+a live 03 round wrote; the first live render (Needs the dog) confirms them.
 """
 from __future__ import annotations
 import argparse
