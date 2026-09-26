@@ -281,7 +281,8 @@ class NeverTwice(Offline):
             cli.post(SMS, "alarm:s1:11", "escalate", "who dis?!", "/tmp/look-level-boxed.jpg")
         rows = ledger.rows()
         gate = [r for r in rows if r["tool"] == "chat.gate" and r["args"]["guid"] == SMS]
-        self.assertEqual([(r["ok"], r["app"], r["cached"], r["source"]) for r in gate], [(True, "sms", True, "stub")])
+        # one gate row per post(): the second post passes the gate and is refused at the claim (the two claim rows below)
+        self.assertEqual([(r["ok"], r["app"], r["cached"], r["source"]) for r in gate], [(True, "sms", True, "stub")] * 2)
         claims = [r for r in rows if r["tool"] == "chat.claim" and r["args"]["trigger"] == "alarm:s1:11"]
         self.assertEqual([(r["ok"], r["app"], r["cached"], r["source"]) for r in claims], [(True, "memory", True, "stub"), (False, "memory", True, "stub")])
         posts = [r for r in rows if r["tool"] == "chat.post" and r["args"]["trigger"] == "alarm:s1:11"]
