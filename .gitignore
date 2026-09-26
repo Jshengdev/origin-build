@@ -41,3 +41,6 @@ intruder.on
 listen.json
 pending.json
 field.stop
+
+# sources of truth (the origin folder), read locally, never committed
+context/
