@@ -1,10 +1,13 @@
 """Item 10, the morning page: `python -m wtdd.record --shift <id> --html <path>` renders one shift's record from the
 ledger and the map, every number computed, "unsigned" until an ok record.signed row exists. Run:
     python -m unittest wtdd.test_record -v
-Offline: WTDD_LEDGER is pointed at wtdd/fixtures/ledger_shift.jsonl BEFORE wtdd.ledger is imported (the recipe is
-wtdd/fixtures/make_ledger_shift.py: two shifts, 2026-09-25 unsigned and 2026-09-26 signed, every row labeled
-cached=true source="stub"), WTDD_MEMORY at a scratch dir, WTDD_SHIFT pinned to the unsigned shift so the CLI's default
-is tested too. The fixture is tracked: every test checks its bytes did not change (the record reads, never appends).
+Offline: WTDD_LEDGER is pointed at a scratch copy of wtdd/fixtures/ledger_shift.jsonl BEFORE wtdd.ledger is imported
+(the recipe is wtdd/fixtures/make_ledger_shift.py: two shifts, 2026-09-25 unsigned and 2026-09-26 signed, every row
+labeled cached=true source="stub"), WTDD_MEMORY at a scratch dir, WTDD_SHIFT pinned to the unsigned shift inside the
+CLI default test only (set at import it would leak into test_oncall, which reads it at call time). The tracked fixture
+is never the process's ledger: wtdd.ledger reads WTDD_LEDGER once, at its first import, so a later test module in the
+same process that appends (test_oncall's record_sign) would write into it. The copy is checked byte-for-byte against
+the tracked file, and every test checks the copy's bytes did not change (the record reads, never appends).
 
 The binding rule the tests pin (wtdd/record.py's docstring states it): a shift's rows are every row stamped
 args.shift_id == id (03 stamps every post, reply and signature), plus the unstamped rows of its window. The window
@@ -15,18 +18,21 @@ Expected numbers were counted by hand from the recipe, once, and are written her
 from __future__ import annotations
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-FIXTURE = HERE / "fixtures" / "ledger_shift.jsonl"
+FIXTURE = HERE / "fixtures" / "ledger_shift.jsonl"      # tracked: copied and hashed, never the ledger
 _TMP = Path(tempfile.mkdtemp(prefix="wtdd-record-test-"))
-os.environ["WTDD_LEDGER"] = str(FIXTURE)
+LEDGER = _TMP / "ledger_shift.jsonl"                     # the process's ledger: a scratch copy of the fixture
+shutil.copyfile(FIXTURE, LEDGER)
+os.environ["WTDD_LEDGER"] = str(LEDGER)
 os.environ["WTDD_MEMORY"] = str(_TMP / "memory.db")
-os.environ["WTDD_SHIFT"] = "2026-09-25"
 
 from wtdd import ledger, record  # noqa: E402
 from wtdd.fixtures import make_ledger_shift  # noqa: E402
@@ -43,6 +49,8 @@ def _sha(p: Path) -> str:
 class Fixture(unittest.TestCase):
     def test_fixture_matches_its_recipe_and_every_row_is_labeled_stub(self):
         rows = ledger.rows()
+        self.assertEqual(ledger.LEDGER, LEDGER, "another test module imported wtdd.ledger first in this process: run this one alone")
+        self.assertEqual(_sha(LEDGER), _sha(FIXTURE))
         self.assertEqual(rows, make_ledger_shift.rows(), "regenerate: python -m wtdd.fixtures.make_ledger_shift")
         self.assertEqual(len(rows), 71)
         for r in rows:
@@ -52,13 +60,13 @@ class Fixture(unittest.TestCase):
 
 
 class Guard(unittest.TestCase):
-    """The record reads the ledger and the map, never appends: the tracked fixture is byte-identical after every test."""
+    """The record reads the ledger and the map, never appends: the ledger it reads is byte-identical after every test."""
 
     def setUp(self):
-        self.before = _sha(FIXTURE)
+        self.before = _sha(LEDGER)
 
     def tearDown(self):
-        self.assertEqual(_sha(FIXTURE), self.before, "the record wrote to the ledger it was rendering")
+        self.assertEqual(_sha(LEDGER), self.before, "the record wrote to the ledger it was rendering")
 
 
 class Unsigned(Guard):
@@ -197,7 +205,8 @@ class Cli(Guard):
 
     def test_default_shift_is_wtdd_shift(self):
         out = _TMP / "default.html"
-        self.assertEqual(record.main(["--html", str(out)]), 0)
+        with mock.patch.dict(os.environ, {"WTDD_SHIFT": A}):   # pinned here, not at import: another module may set it, and this one must not leak it
+            self.assertEqual(record.main(["--html", str(out)]), 0)
         h = out.read_text()
         self.assertIn(A, h)
         self.assertIn("unsigned", h)
@@ -213,7 +222,7 @@ class Cli(Guard):
 
     def test_the_goal_command_as_a_process(self):
         out = _TMP / "process.html"
-        env = {**os.environ, "WTDD_LEDGER": str(FIXTURE)}
+        env = {**os.environ, "WTDD_LEDGER": str(LEDGER)}
         p = subprocess.run([sys.executable, "-m", "wtdd.record", "--shift", B, "--html", str(out)],
                            cwd=HERE.parent, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
