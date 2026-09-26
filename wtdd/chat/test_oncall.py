@@ -188,6 +188,7 @@ class Escalate(unittest.TestCase):
         ])
         pend = json.loads((_TMP / "pending.json").read_text())
         self.assertEqual(pend["trigger"], "alarm:g1")
+        self.assertEqual(pend["chat"], ONCALL)             # the question names the chat that was asked; only it answers
 
     def test_escalation_is_claimed_once(self):
         confirmed = {"guid": "P-1", "rowid": 60001, "ts": "2026-09-27 12:18:10",
@@ -377,6 +378,59 @@ class Acked(unittest.TestCase):
         self.assertEqual(row["args"]["shift_id"], SHIFT)
         self.assertEqual(posts[-1][0], ONCALL)              # "noted: ..." goes back to the chat that answered
         self.assertTrue(posts[-1][3].startswith("noted:"))
+
+
+class Answers(unittest.TestCase):
+    """Who may answer an open flag, through handle() and the real allowed() (never overridden here): only the on-call
+    person's own words, in their 1:1, decide it. A from-me bubble in that chat (the dog's own "who dis?!" caption read
+    back, or Johnny's phone on the dog's account under WTDD_ALLOW_SELF) and a message in the group are not the verdict.
+    light_alarm is patched to fail the test if it ever sounds."""
+
+    def setUp(self):
+        self.posts: list[tuple] = []
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            self.l = L.Listener(GROUP, lambda g, k, kind, t, f: self.posts.append((g, k, kind, t, f)), listen_s=60)
+        self.trigger = f"alarm:{self._testMethodName}"
+        self.pend = _TMP / f"pending-{self._testMethodName}.json"
+        self.pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": "/tmp/f.jpg", "seconds": 5,
+                                         "trigger": self.trigger, "chat": ONCALL}))
+        self.addCleanup(lambda: self.pend.unlink(missing_ok=True))
+
+    def _handle(self, m: dict, **env: str) -> None:
+        with mock.patch.dict(os.environ, env), mock.patch.object(L, "PENDING", self.pend), \
+             mock.patch.object(L, "STATE", _TMP / "state-answers.json"), \
+             mock.patch("wtdd.tools.call", side_effect=AssertionError("the alarm must not sound in a test")):
+            self.l.handle(m)
+
+    def _verdicts(self) -> list[dict]:
+        return [r for r in ledger.rows() if r["tool"] == "intruder.verdict" and r["args"]["asked"] == self.trigger]
+
+    def test_a_from_me_bubble_in_the_one_to_one_is_not_the_answer(self):
+        # chat.db gives a from-me row in a 1:1 the other party's handle, so the sender alone cannot tell them apart.
+        own = {**_msg("D-1", "who dis?!", ONCALL), "is_from_me": 1}    # the dog's own caption, read back while it holds
+        mine = {**_msg("D-2", "idk", ONCALL), "is_from_me": 1}        # typed on a phone signed in to the dog's account
+        self._handle(own)
+        self._handle(own, WTDD_ALLOW_SELF="1")
+        self._handle(mine, WTDD_ALLOW_SELF="1")
+        self.assertEqual(self._verdicts(), [])
+        self.assertTrue(self.pend.exists())
+        self.assertEqual(self.posts, [])
+
+    def test_a_group_message_does_not_answer_the_on_call_flag(self):
+        self._handle(_msg("G-1", "idk", GROUP, sender="+15550003333"))
+        self.assertEqual(self._verdicts(), [])
+        self.assertTrue(self.pend.exists())
+        self.assertEqual(self.posts, [])
+        self._handle(_msg("R-7", "thats my friend", ONCALL))             # then the person asked answers, and that closes it
+        self.assertEqual([(r["args"]["chat"], r["state_after"]["verdict"]) for r in self._verdicts()], [(ONCALL, "known")])
+        self.assertFalse(self.pend.exists())
+        self.assertEqual(self.posts, [(ONCALL, "ok:R-7", "listen", "ok, standing down", None)])
+
+    def test_the_on_call_person_answers_when_housemates_leaves_them_out(self):
+        with mock.patch.dict(L.HOUSEMATES, {"+15550003333": "Ana"}):
+            self._handle(_msg("R-8", "thats my friend", ONCALL))
+        self.assertEqual(len(self._verdicts()), 1)
+        self.assertEqual(self.posts, [(ONCALL, "ok:R-8", "listen", "ok, standing down", None)])
 
 
 class Sign(unittest.TestCase):
