@@ -16,7 +16,10 @@ at the first stamped row when there is no wake; it closes at the shift's ok reco
 next shift's opener, else at the end of the ledger (an open shift). A row stamped with another shift never joins.
 Expected numbers were counted by hand from the recipe, once, and are written here, not derived."""
 from __future__ import annotations
+import contextlib
 import hashlib
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -248,6 +251,18 @@ class Cli(Guard):
             code = e.code
         self.assertNotEqual(code, 0)
         self.assertFalse(out.exists())
+
+    def test_a_map_without_its_shapes_is_a_warn_not_a_quiet_blank(self):
+        bare = _TMP / "bare"                                   # a repo root whose ui/map.json lost its rooms, path and lights
+        (bare / "ui").mkdir(parents=True, exist_ok=True)
+        (bare / "ui" / "map.json").write_text(json.dumps(EMPTY_SITE))
+        for root, warn in ((record.ROOT, False), (bare, True)):
+            err = io.StringIO()
+            with mock.patch.object(record, "ROOT", root), contextlib.redirect_stderr(err):
+                self.assertEqual(record.main(["--shift", A, "--html", str(_TMP / "map.html")]), 0)
+            self.assertEqual("WARN" in err.getvalue(), warn, err.getvalue())
+        for k in ("0 map rooms", "0 map path", "0 map lights", "map=rooms:0,lights:0,path:0"):
+            self.assertIn(k, err.getvalue())
 
     def test_the_goal_command_as_a_process(self):
         out = _TMP / "process.html"
