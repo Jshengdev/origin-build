@@ -67,6 +67,12 @@
   .occ { fill: rgba(38,35,35,.6); stroke: none; pointer-events: none; }   /* one square per grid cell (not ".grid": that is the page layout) */
   .occlbl { opacity: .85; }
   /* 01 · occupancy · end */
+  /* 07 · objects · start */
+  .obj .pin { fill: rgba(220,30,30,.85); stroke: #fff; stroke-width: 2; pointer-events: none; }
+  .obj image { pointer-events: none; }   /* the thumbnail never takes a click meant for the map */
+  .obj.stale { opacity: .35; }
+  .objmsg { font-size: 11px; opacity: .8; }
+  /* 07 · objects · end */
 </style>
 </head>
 <body>
@@ -268,6 +274,7 @@ function App() {
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
+            <${ObjectsLayer}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
               const a = [x + L * Math.cos(h - half), y + L * Math.sin(h - half)], b = [x + L * Math.cos(h + half), y + L * Math.sin(h + half)], tip = [x + L * Math.cos(h), y + L * Math.sin(h)];
@@ -384,6 +391,25 @@ function GridLayer() {
     <text class="lbl occlbl" x="12" y="28">grid · ${g ? `${c.length} cells seen ${g.threshold ?? "?"}+ times` : "…"}${g?.frames ? ` · ${g.frames} frames` : ""}${g?.source ? ` · ${g.source}` : ""}${g?.why ? ` · ${g.why}` : ""}${g?.error ? ` · FAILED ${g.error}` : ""}${g?.cb_errors ? ` · FAILED to take ${g.cb_errors} frames` : ""}</text></g>`;
 }
 // 01 · occupancy · end
+// 07 · objects · start
+// The live object layer (GET /dog/objects, wtdd/dog/objects.py): one pin per placed object at the LiDAR cell its bearing
+// met, its label and probability as text, its thumbnail and its drafted line (or FAILED when the draft failed); stale
+// ones fade. No polygon, rect or path per object: shapes come from the points (the grid and the dots), words and photos
+// from the store. Polled every 2 s with or without a dog (objects decay by detector windows, not by the connection). The
+// body line is always drawn; zero objects says why, a failed read says FAILED.
+function ObjectsLayer() {
+  const [o, setO] = useState(null);
+  useEffect(() => { const f = () => fetch(`${API}/dog/objects`).then(r => r.json()).then(setO).catch(e => setO({ n: 0, objects: [], error: `GET /dog/objects failed: ${e}` })); f(); const t = setInterval(f, 2000); return () => clearInterval(t); }, []);
+  const all = o?.objects || [], placed = all.filter(x => x.pos_px), stale = all.filter(x => x.stale).length, off = all.find(x => !x.pos_px);
+  return html`<g>
+    ${placed.map(x => { const [cx, cy] = x.pos_px, line = x.message || (x.message_source?.startsWith("FAILED") ? `draft ${x.message_source}` : null); return html`<g key=${x.id} class=${"obj" + (x.stale ? " stale" : "")} data-id=${x.id}>
+      <circle class="pin" cx=${cx} cy=${cy} r="9"/>
+      ${x.thumb && html`<image href=${x.thumb} x=${cx + 14} y=${cy - 52} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
+      <text class="lbl objlbl" x=${cx + 14} y=${cy + 8}>${x.label} · ${(+x.p).toFixed(2)}${x.stale ? " · stale" : ""}</text>
+      ${line && html`<text class="lbl objmsg" x=${cx + 14} y=${cy + 24}>${line}</text>`}</g>`; })}
+    <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
+}
+// 07 · objects · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
