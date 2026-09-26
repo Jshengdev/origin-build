@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -389,6 +390,32 @@ class ListenAsk(unittest.TestCase):
 
     def test_the_ask_line_is_the_dogs_own(self):
         self.assertTrue(decide.ask_line({"label": "out_of_place", "p": 0.42}).startswith(self.L.OWN_OPENERS))
+
+    def _answer(self, kind, trigger, text):
+        self.pending.write_text(json.dumps({"kind": kind, "t": time.time(), "file": "/tmp/look-down-boxed.jpg", "seconds": 5,
+                                            "trigger": trigger}))
+        with mock.patch.object(self.L, "PENDING", self.pending), \
+                mock.patch("wtdd.tools.call", return_value={"signaled": [], "errors": []}) as call:
+            self.assertTrue(self.l.verdict({"guid": "r1", "sender": "someone", "text": text}))
+        return call
+
+    def test_idk_to_a_decide_question_never_sounds_the_alarm(self):
+        """The answer to "not sure: ... what is it?" is the intruder.verdict row joined by args.asked, and it stands down:
+        only "who dis?!" (WTDD_ALARM=1, or a stop whose map action has ask) may strobe the room. A housemate's "idk" to
+        a cup stop must not sound light_alarm."""
+        call = self._answer("decide", "decide:g1:10", "idk")
+        call.assert_not_called()
+        self.assertEqual(self.posts, [("ok:r1", "ok, standing down", None)])
+        row = ledger.rows(1)[0]
+        self.assertEqual((row["tool"], row["args"]["asked"], row["args"]["text"]), ("intruder.verdict", "decide:g1:10", "idk"))
+        self.assertEqual(row["state_after"], {"verdict": "known"})
+        self.assertFalse(self.pending.exists())
+
+    def test_idk_to_who_dis_still_sounds_the_alarm(self):
+        call = self._answer("who_dis", "alarm:g1:22", "idk")
+        call.assert_called_once_with("light_alarm", seconds=5)
+        self.assertEqual(self.posts[0][:2], ("danger:r1", "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!"))
+        self.assertEqual(ledger.rows(1)[0]["state_after"], {"verdict": "stranger"})
 
     def test_a_housemates_not_sure_is_an_answer(self):
         """Johnny's phone shares the dog's account (WTDD_ALLOW_SELF=1): the dog's own question is refused, a reply that
