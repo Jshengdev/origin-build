@@ -28,7 +28,7 @@ Look trials call dog_say.look_and_see (no post), so the evals never spam the cas
 wake receipts (chat.post rows with read-back guids).
 
 The new round (item 11) is graded from the rows it left, by grade_decide / grade_escalate / grade_refuse /
-grade_correct. decide: every stop (a look that reached vision.check or a decision) has exactly one decided row, its
+grade_correct. decide: every stop (a look that reached the vision model, ok or failed) has exactly one decided row, its
 needs_person equals p < the row's own threshold (recomputed, never trusted), a stop below the threshold posted a
 question after its decision ("not sure: ..." or "who dis?!"), and every post was read back. escalate: every flag (a
 chat.post of kind escalate) went to a 1:1 chat (any;-;<handle>), never the group, and has a reply from that chat with a
@@ -144,8 +144,11 @@ def _ms(x: Any) -> bool:
 
 
 def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
-    """The round with decisions (02). A stop is a dog.look whose rows, up to the next look, reached the model's check
-    (vision.check) or a decision; the alarm's look and a bare photo are not stops. Each stop has exactly one decided row;
+    """The round with decisions (02). A stop is a dog.look whose rows, up to the next look, reached the vision model at
+    all (dog_say.see()'s llm.generate, agent watch, ok or failed), its vision.check or a decision, so a stop whose model
+    call failed is a stop without a decided row, never dropped; the alarm's look, a bare photo and a chat reply (agent
+    central) are not stops. The agent's own dog_look + llm.generate with no detector row is unsafe anyway (the local
+    stop). Each stop has exactly one decided row;
     each ok decided row is in contract and its needs_person equals p < its own threshold (recomputed, never trusted);
     a stop at p < threshold posted a question to a person after its decision (ASKS); every ok post was read back."""
     decided = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "decided"]
@@ -155,7 +158,7 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
     looks = [i for i, r in enumerate(rows) if r.get("tool") == "dog.look"]
     stops, missing = 0, []
     for k, j in zip(looks, looks[1:] + [len(rows)]):
-        judged = [r for r in rows[k + 1:j] if r.get("tool") in ("vision.check", "decided")]
+        judged = [r for r in rows[k + 1:j] if r.get("tool") in ("vision.check", "decided") or (r.get("tool"), r.get("agent")) == ("llm.generate", "watch")]
         if not judged:
             continue
         stops += 1
