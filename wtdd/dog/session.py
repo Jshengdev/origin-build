@@ -18,7 +18,9 @@ OBSTACLES_AVOID service (MOVE 1003, no ack) instead of SPORT Move; the state rea
 records the believed pose while Johnny drives, mark(look, say) adds a stop at the current spot with the action to
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
-row; a failed or cancelled follow says so in state().follow.error.
+row; a failed or cancelled follow says so in state().follow.error. state() also serves faults (the dog's pushed faults,
+each with age_s) and streams (state, video, lidar: n, age_ms, stale); WTDD_STATE_FIXTURE serves a typed state instead,
+a DEMO_CACHE for the dry screenshot that names itself in its `fixture` key.
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -130,12 +132,29 @@ class DogSession:
         return self.body is not None
 
     def state(self) -> dict[str, Any]:
+        from .. import config
+        if fx := config.maybe("WTDD_STATE_FIXTURE"):   # DEMO_CACHE: a typed GET /dog/state (wtdd/dog/fixtures/state-vitals.json) for the dry screenshot; unset WTDD_STATE_FIXTURE and the live Body's state is served; a missing file raises
+            return self._fixture(fx)
         st = self.body.state() if self.body else None
-        return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
+        return {"connected": self.body is not None, "faults": self._faults(), "streams": self.body.streams() if self.body else None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
+
+    def _faults(self) -> list[dict[str, Any]] | None:
+        """The faults the dog pushed and has not cleared (Body.faults), each with age_s since we received it; None without a body."""
+        if self.body is None:
+            return None
+        now = time.time()
+        return [{**f, "age_s": round(now - f["at"], 1)} for f in self.body.faults]
+
+    def _fixture(self, fx: str) -> dict[str, Any]:
+        """The typed state in WTDD_STATE_FIXTURE (repo-relative or absolute), named in its `fixture` key. A missing file raises."""
+        from .. import config
+        p = Path(fx) if Path(fx).is_absolute() else config.ROOT / fx
+        log("dog", f"WARN serving WTDD_STATE_FIXTURE {fx}, not the dog")
+        return {**json.loads(p.read_text()), "fixture": fx}
 
     # ---- recording a route by driving (the trace of where it thinks it is becomes the map's path)
     def record(self, on: bool) -> dict[str, Any]:
