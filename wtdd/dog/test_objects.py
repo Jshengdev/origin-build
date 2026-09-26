@@ -45,6 +45,7 @@ The contract under test (wtdd/dog/objects.py):
 from __future__ import annotations
 import base64
 import io
+import contextlib
 import json
 import math
 import os
@@ -345,6 +346,63 @@ class StoreTests(unittest.TestCase):
         r = self.observe(s2, pose={"position": [0.0, 0.0], "yaw": math.pi}, threshold=3)   # facing -x: nothing there
         self.assertEqual(sorted(r["unplaced"]), ["o1", "o2"])
         self.assertIn("blob", s2.to_list()[0]["why"])
+
+    def test_a_window_that_cannot_place_a_known_object_does_not_spawn_a_second_one(self):
+        s = self.store()
+        self.observe(s, threshold=3)
+        r = self.observe(s, {**frame(), "t": frame()["t"] + 1}, pose=None, threshold=3)
+        self.assertEqual((r["new"], sorted(r["seen"])), ([], ["o1", "o2"]))
+        objs = {o["id"]: o for o in s.to_list()}
+        self.assertEqual(objs["o1"]["pos_px"], px_of([2.0, 0.0]), "the last pin stays until a window places it again")
+        self.assertIn("pose", objs["o1"]["why"])
+        self.assertEqual([r["args"]["event"] for r in self.rows], ["new", "new"])
+
+    def test_a_known_unplaced_object_takes_its_first_pin_instead_of_a_second_one(self):
+        s = self.store()
+        self.observe(s, pose=None, threshold=3)   # boxed before the dog's pose (or the calibration) is there
+        r = self.observe(s, {**frame(), "t": frame()["t"] + 1}, threshold=3)
+        self.assertEqual((r["new"], sorted(r["seen"]), r["unplaced"]), ([], ["o1", "o2"], []))
+        objs = {o["id"]: o for o in s.to_list()}
+        self.assertEqual(objs["o1"]["pos_px"], px_of([2.0, 0.0]))
+        self.assertIsNone(objs["o1"]["why"])
+        self.assertEqual([r["args"]["event"] for r in self.rows], ["new", "new"])
+
+    def test_an_unplaced_box_does_not_revive_a_stale_pin(self):
+        s = self.store(stale_windows=1)
+        t0 = frame()["t"]
+        self.observe(s, threshold=3)
+        self.observe(s, empty_frame(t0 + 1), threshold=3)   # o1, o2 stale: the continuity is gone
+        r = self.observe(s, {**frame(), "t": t0 + 2}, pose=None, threshold=3)
+        self.assertEqual(r["new"], ["o3", "o4"], "a pin is a claim: only a placement near it brings a stale object back")
+        self.assertTrue({o["id"]: o for o in s.to_list()}["o1"]["stale"])
+        self.assertNotIn("seen_again", [r["args"]["event"] for r in self.rows])
+
+    def test_an_unknown_draft_mode_fails_every_draft_loud_not_live(self):
+        with mock.patch.dict(os.environ, {"WTDD_OBJECTS_DRAFT": "stubb"}):
+            d = objects.drafter()
+        self.assertIsNot(d, objects.draft_live, "a mistyped mode must not quietly call the model")
+        s = objects.Store(append=self.rows.append, draft=d)
+        self.observe(s, threshold=3)
+        with self.assertRaises(ValueError):
+            s.draft()
+        bad = [r for r in self.rows if r["args"]["event"] == "drafted"]
+        self.assertEqual((len(bad), bad[0]["ok"]), (1, False))
+        self.assertIn("WTDD_OBJECTS_DRAFT", bad[0]["response_or_error"])
+        self.assertIn("FAILED", {o["id"]: o for o in s.to_list()}["o1"]["message_source"])
+
+    def test_an_old_detector_frame_is_logged_once_not_every_second(self):
+        s = self.store()
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(err):
+            w = Path(tmp) / "watch.json"
+            w.write_text(json.dumps(frame()))
+            whys = []
+            for age in (10, 11, 12):
+                os.utime(w, (time.time() - age,) * 2)
+                whys.append(objects.tick(s, w, POSE, self.g, CAL, FOV))
+        self.assertIn("10 s old", whys[0], "the body keeps the age")
+        self.assertIn("12 s old", whys[2])
+        self.assertEqual(err.getvalue().count("detector frame"), 1, err.getvalue())
 
     def test_a_decide_hook_sets_label_and_p(self):
         calls = []
