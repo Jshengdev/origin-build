@@ -4,7 +4,8 @@ the grid path in map pixels, ready to be the map's `path`. Limit, stated: ui/hou
 no walls or doors between them, so a planned route can cross a shared wall; the demo's route is recorded by driving
 (wtdd/dog/session.py record), and this planner is for point-to-point routes inside a room or across drawn doorways.
 No-go zones (map zones with nogo: true, wtdd/nogo.py) are blocked like the outside of a room, before the same HALF_WIDTH
-erosion, so the dog's body and not only the route's line stays out; the plan.route row names them in args.nogo.
+erosion, so the dog's body and not only the route's line stays out; the plan.route row names them in args.nogo. A
+malformed one (nogo not exactly true, or a poly under 3 points) fails the plan.route row instead of being planned through.
 WTDD_MAP (process env, wtdd/field.py) points the planner at another map, e.g. the fixture with one zone:
   WTDD_MAP=wtdd/fixtures/map_nogo.json python -m wtdd plan_path from=300,1100 to=650,1100   a detour around nogo-1
 
@@ -52,8 +53,9 @@ def plan(a, b) -> dict[str, Any]:
     from pathfinding.core.grid import Grid
     from pathfinding.finder.a_star import AStarFinder
     m = json.loads(MAP.read_text())
-    zs = nogo.zones(m)
-    with step("plan", "plan.route", "map", {"from": list(a), "to": list(b), "cell_px": CELL, "nogo": [z["name"] for z in zs]}) as r:
+    with step("plan", "plan.route", "map", {"from": list(a), "to": list(b), "cell_px": CELL}) as r:
+        zs = nogo.zones(m)                         # inside the step: a malformed zone fails this row, never an unplanned-around trench
+        r["args"]["nogo"] = [z["name"] for z in zs]
         g = Grid(matrix=grid(m["rooms"], zs))
         start, end = g.node(int(a[0]) // CELL, int(a[1]) // CELL), g.node(int(b[0]) // CELL, int(b[1]) // CELL)
         if not start.walkable or not end.walkable:

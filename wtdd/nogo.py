@@ -4,7 +4,8 @@ the walk (field.walk) and the follower (DogSession.follow) refuse a route that t
 refusal is the superintendent's drawing applied, never the dog's judgment and never a probability: one `route.refused`
 ledger row sourced to the map, one stderr line, then ValueError. The only place zone semantics live.
 
-  zones(m)                   the map's no-go zones (entries with nogo: true)
+  zones(m)                   the map's no-go zones (entries with nogo: true); no nogo key or nogo: false is skipped, and
+                             any other nogo value or a poly under 3 points raises: a malformed zone, never a silently inert one
   hit(path, zs)              the first place the route touches a zone, or None: {zone, waypoint: [x, y], index}
   refuse(path, agent, m)     no hit: one stderr line, returns; a hit: the row, the line, then ValueError
 
@@ -29,7 +30,17 @@ STEP_PX = 10   # = plan.CELL (plan imports this module, so this module never imp
 
 
 def zones(m: dict[str, Any]) -> list[dict[str, Any]]:
-    return [z for z in m.get("zones", []) if z.get("nogo") is True]
+    out = []
+    for z in m.get("zones", []):
+        if "nogo" not in z or z["nogo"] is False:   # a lighting zone (a, b, c), or a zone switched off by hand
+            continue
+        n = len(z.get("poly") or [])
+        if z["nogo"] is not True or n < 3:         # a hand-edited zone the planner and refuse() could not honour: never inert
+            log("nogo", "FAILED malformed no-go zone", zone=z.get("name"), nogo=repr(z["nogo"]), poly_pts=n)
+            raise ValueError(f"zone {z.get('name')!r}: nogo must be true and poly needs at least 3 points "
+                             f"(got nogo={z['nogo']!r}, {n} points); fix it in {MAP}")
+        out.append(z)
+    return out
 
 
 def hit(path: list, zs: list[dict[str, Any]]) -> dict[str, Any] | None:
