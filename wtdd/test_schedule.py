@@ -166,6 +166,9 @@ class Quote(Base):
             schedule.quote(_map(), 0)                                        # a free night is not a quote
         with self.assertRaises(ValueError):
             schedule.quote(_map(), 10, nights=0)
+        with self.assertRaises(ValueError):
+            schedule.quote(_map(), 10, nights=1.5)                           # a part night is refused
+        self.assertEqual(ledger.rows(1)[0]["args"]["nights"], 1.5)           # and its FAILED row keeps what was asked
 
     def test_row(self):
         q = schedule.quote(_map(), 12.5, nights=2)
