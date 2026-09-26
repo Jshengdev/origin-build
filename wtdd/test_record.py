@@ -32,6 +32,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 FIXTURE = HERE / "fixtures" / "ledger_shift.jsonl"      # tracked: copied and hashed, never the ledger
+TAKE = HERE.parent / "docs" / "evidence" / "ledger-take-2026-09-13.jsonl"   # the shipped take, pre-03: read only
 _TMP = Path(tempfile.mkdtemp(prefix="wtdd-record-test-"))
 LEDGER = _TMP / "ledger_shift.jsonl"                     # the process's ledger: a scratch copy of the fixture
 shutil.copyfile(FIXTURE, LEDGER)
@@ -218,6 +219,20 @@ class Signed(Guard):
         self.assertNotIn("unsigned", h)
         self.assertIn("unanswered", h)
         self.assertIn("already signed", h)
+
+
+class ByHand(Guard):
+    def test_a_look_pressed_by_hand_keeps_the_post_that_confirmed_it(self):
+        """The README's by-hand path: dog_say from the page posts under say-<epoch> (kind remote), not say:<wake>:<n>.
+        On the shipped take the tilt look on line 145 is confirmed by the post on line 151 (rowid 54682). Its rows
+        carry no shift id (pre-03): the posts are stamped in memory; the evidence file is only read."""
+        rows = [json.loads(line) for line in TAKE.read_text().splitlines() if line.strip()]
+        for r in rows:
+            if r["tool"] == "chat.post":
+                r["args"]["shift_id"] = "take"
+        last = record.build("take", rows=rows, site=EMPTY_SITE)["stops"][-1]
+        self.assertEqual((last["ts"], last["kind"], last["ok"], last["index"]), ("2026-09-13T15:19:36", "tilt", True, None))
+        self.assertEqual(last["posted"], {"rowid": 54682, "ts": "2026-09-13 22:19:44", "file": "look-down-boxed.jpg"})
 
 
 class Isolation(Guard):
