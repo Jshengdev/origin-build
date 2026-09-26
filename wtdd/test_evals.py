@@ -217,6 +217,12 @@ class Decide(unittest.TestCase):
         self.assertTrue(ok, why)
         self.assertIn("3 stops", detail)
 
+    def test_decisions_without_any_look_fail(self):
+        """Three decided rows and no dog.look: decisions tied to no stop are receipts out of order, never a pass."""
+        ok, why, _ = evals.grade_decide(without(rows("decide"), "dog.look"))
+        self.assertFalse(ok)
+        self.assertIn("no stop", why)
+
 
 class Escalate(unittest.TestCase):
     def test_the_fixture_shift_passes(self):
@@ -305,6 +311,21 @@ class Refuse(unittest.TestCase):
         rs.append({**rs[at(rs, "route.refused")], "step": "dog.follow", "tool": "dog.follow", "agent": "dog", "app": "unitree",
                    "args": {"n": 3}, "ok": True, "response_or_error": None, "state_after": {"done": True}})
         ok, why, _ = evals.grade_refuse(rs, refuse_map())
+        self.assertFalse(ok)
+        self.assertIn("after the refusal", why)
+
+    def test_a_move_after_a_new_wake_is_not_after_the_refusal(self):
+        """The move check runs up to the next chat.wake / chat.command (a person asking again, maybe after redrawing the
+        map): a move after it is a new request, said in the detail, never hidden; a move before it still fails."""
+        rs = rows("refuse")
+        wake = copy.deepcopy(rs[at(rs, "chat.wake")])
+        follow = {**rs[at(rs, "route.refused")], "step": "dog.follow", "tool": "dog.follow", "agent": "dog", "app": "unitree",
+                  "args": {"n": 3}, "ok": True, "response_or_error": None, "state_after": {"done": True}}
+        ok, why, detail = evals.grade_refuse(rs + [wake, follow], refuse_map())
+        self.assertTrue(ok, why)
+        self.assertIn("before the next wake", detail)      # the bound is said, not a bare "moved after: nothing"
+        self.assertIn("dog.follow", detail)                # the move after the next wake is named, not dropped
+        ok, why, _ = evals.grade_refuse(rs + [follow, wake], refuse_map())
         self.assertFalse(ok)
         self.assertIn("after the refusal", why)
 
