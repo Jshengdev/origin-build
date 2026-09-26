@@ -368,6 +368,7 @@ class DogSession:
                     for s, n in fs["samples"].items():
                         if n == 0:
                             log("dog", f"WARN 0 {s} pose samples on this walk")
+                    log("dog", "pose samples on this walk", **fs["samples"], seconds=round(time.time() - fs["started"], 1))
                     r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose(),
                                         "samples": dict(fs["samples"])}
         except asyncio.CancelledError:
