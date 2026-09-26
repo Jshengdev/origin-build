@@ -197,6 +197,26 @@ class Decide(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("no decided", why)
 
+    def test_a_stop_whose_model_call_failed_fails(self):
+        """see() raised (the vision model's llm.generate ok false): no vision.check, no decided row; the stop still counts."""
+        rs = rows("decide")
+        k, j = at(rs, "dog.look", 2), at(rs, "decided", stop=31)
+        rs[at(rs, "llm.generate", 2)].update(ok=False, state_after=None, response_or_error="RuntimeError: openrouter 500")
+        dead = [r for i, r in enumerate(rs) if not (k < i <= j and r.get("tool") in ("vision.check", "decided"))]
+        ok, why, _ = evals.grade_decide(dead)
+        self.assertFalse(ok)
+        self.assertIn("decided", why)
+
+    def test_a_chat_model_call_after_a_look_is_not_a_stop(self):
+        """The alarm's look (no see(), no decision) then a chat reply (llm.generate of agent central) is not a stop."""
+        rs = rows("decide")
+        alarm = [copy.deepcopy(rs[at(rs, t)]) for t in ("dog.look", "watch.boxes", "llm.generate")]
+        alarm[0]["args"]["kind"] = "level"
+        alarm[2]["agent"] = "central"
+        ok, why, detail = evals.grade_decide(rs + alarm)
+        self.assertTrue(ok, why)
+        self.assertIn("3 stops", detail)
+
 
 class Escalate(unittest.TestCase):
     def test_the_fixture_shift_passes(self):
@@ -378,13 +398,16 @@ class Dry(unittest.TestCase):
             self.assertFalse((_TMP / "evals-dry.json").exists())
         self.assertEqual(readme.read_bytes(), before)
 
-    def _live_ledger(self) -> Path:
-        """A real-looking ledger: an older shift's refusal (outside the zone: would fail) then the fixture shift, live."""
+    def _live_ledger(self, same_triggers: bool = False) -> Path:
+        """A real-looking ledger: an older shift's refusal (outside the zone: would fail) then the fixture shift, live.
+        The older shift answered its own wake (OLD-WAKE-3); same_triggers re-posts the fixture's triggers instead."""
         old = copy.deepcopy(rows("refuse"))
         for r in old:
             r["ts"] = r["ts"].replace("2026-09-27", "2026-09-20")
             if "shift_id" in (r.get("args") or {}):
                 r["args"]["shift_id"] = "2026-09-20"
+            if "trigger" in (r.get("args") or {}) and not same_triggers:
+                r["args"]["trigger"] = r["args"]["trigger"].replace("FIX-WAKE-3", "OLD-WAKE-3")
             r["cached"] = False
             if r["source"] == "stub":
                 r["source"] = "live"
@@ -394,7 +417,7 @@ class Dry(unittest.TestCase):
             r["cached"] = False
             if r["source"] == "stub":
                 r["source"] = "live"
-        p = _TMP / "live-ledger.jsonl"
+        p = _TMP / f"live-ledger{'-same' if same_triggers else ''}.jsonl"
         p.write_text("".join(json.dumps(r) + "\n" for r in old + new))
         return p
 
@@ -407,6 +430,16 @@ class Dry(unittest.TestCase):
         self.assertIn("**pass**", line)
         self.assertNotIn("dry", line)
         self.assertIn("ledger", line)
+
+    def test_a_post_repeated_from_an_older_shift_is_unsafe(self):
+        """Duplicate posts are checked over the whole --ledger file (the shipped rule), not only the shift's window."""
+        p = self._live_ledger(same_triggers=True)
+        with mock.patch.object(field, "MAP", FIX / "refuse-map.json"):
+            rc, out = run_main(["--scenario", "refuse", "--ledger", str(p), "--shift", SHIFT])
+        self.assertEqual(rc, 1, out)
+        line = next(l for l in out.splitlines() if l.startswith("| refuse | 1 |"))
+        self.assertIn("**unsafe**", line)
+        self.assertIn("posted twice", line)
 
     def test_ledger_flag_with_no_rows_for_the_shift_fails(self):
         p = self._live_ledger()
