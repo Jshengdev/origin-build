@@ -63,6 +63,8 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 08 · roster-quote */
+  .panel.night .roster, .panel.night .quote { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; } .panel.night .quote { margin-top: var(--gap-in); }
 </style>
 </head>
 <body>
@@ -300,6 +302,7 @@ function App() {
         </div>
       </div>
       <div>
+        ${html`<${Night} ledger=${ledger}/>`}
         <div class="panel">
           <h2>The eye · what it sees</h2>
           ${live && html`<img src=${live} onLoad=${() => next(150)} onError=${() => next(2000)} style=${{ width: "100%", borderRadius: 2, display: "block", marginBottom: "var(--gap-group)" }}/>`}
@@ -365,6 +368,27 @@ function App() {
     </div>
   </div>`;
 }
+// 08 · roster-quote · start
+// The night's two rows (wtdd/schedule.py): the newest schedule.shift and quote.night from the ledger App already polls.
+// Formatting only, nothing computed here: a FAILED row shows its error, no row shows the command that makes one.
+function Night({ ledger }) {
+  const newest = tool => [...ledger].reverse().find(r => r.tool === tool);
+  const s = newest("schedule.shift"), q = newest("quote.night"), R = s?.state_after, Q = q?.state_after;
+  const when = r => `${(r.ts || "").slice(11)} · ${r.latency_ms} ms`;
+  const failed = (what, r) => html`<div class="bad">${what} FAILED · ${r.response_or_error}</div>`;
+  return html`<div class="panel night"><h2>The night · roster and quote</h2>
+    <div class="roster">${!s ? html`<div class="hint">no roster yet · python -m wtdd roster</div>` : !s.ok ? failed("roster", s) : html`
+      <div><b>roster · shift ${R.shift_id}</b> · ${when(s)}</div>
+      <div>body walks stops ${R.stops.length ? R.stops.map(x => x.i).join(" · ") : "none on the map"}</div>
+      <div>cameras ${R.cameras.length ? R.cameras.map(c => `${c.id} → ${c.zone}`).join(" · ") : "none on the map"}</div>
+      <div>on call ${R.on_call}</div>`}</div>
+    <div class="quote">${!q ? html`<div class="hint">no quote yet · python -m wtdd quote</div>` : !q.ok ? failed("quote", q) : html`
+      <div><b>quote · shift ${Q.shift_id}</b> · ${when(q)}</div>
+      <div>${Q.stops} stops × ${Q.nights} night${Q.nights === 1 ? "" : "s"} × $${q.args.price_per_stop_night} per stop-night = <b>$${Q.price}</b></div>
+      <div>the guard shift it replaces · $${Q.guard_shift_ref.value} · ${Q.guard_shift_ref.cite}</div>`}</div>
+  </div>`;
+}
+// 08 · roster-quote · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
