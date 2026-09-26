@@ -249,7 +249,7 @@ def grade_refuse(rows: list[dict[str, Any]], m: dict[str, Any]) -> tuple[bool, s
         if not told:
             log("evals", "WARN refuse: nobody was told (no ok post saying refused)", zone=zone)
         parts.append(f"refused by {r.get('agent')}: point {(a.get('index') if isinstance(a.get('index'), int) else -2) + 1} at "
-                     f"{','.join(map(str, wp or []))} inside {zone}; moved after: {', '.join(moved) or 'nothing'}; told: {'yes' if told else 'no'}")
+                     f"{','.join(map(str, wp or []))}, zone {zone}; moved after: {', '.join(moved) or 'nothing'}; told: {'yes' if told else 'no'}")
     return not bad, "; ".join(bad), f"{'; '.join(parts)} ({len(zs)} no-go zone(s) on the map)"
 
 
