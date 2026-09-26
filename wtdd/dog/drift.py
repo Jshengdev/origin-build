@@ -10,11 +10,13 @@ follower steers on, the drag requires and GET /dog/state calls "map"; the dog.fo
 How. `python -m wtdd.dog.drift --ledger ledger.jsonl` cuts any ledger into walks at the dog.follow rows (the samples
 before a follow row are that walk's) and measures, per source, how far the walk's last sample is from where the dog
 really stood. The reference is the first dog.calibrate after the walk, within DRAG_WINDOW_S: the drag on the remote,
-the shipped correction ("the dot is dragged on camera and the correction is a row"). Without a drag it is the taught
-route end (ui/route-saved.json path[-1]); then the driving source's error is only under reach_px by construction (the
-follower stops where its own source believes the end is) and the other's is only the disagreement, so every walk says
-which reference it used and who drove. A walk that did not reach the end and has no drag has no reference: no number.
-The report names the source with the lower mean end error.
+the shipped correction ("the dot is dragged on camera and the correction is a row"), and only if the dog had not moved
+since: the drag's state_before (the steering source's belief at the drag) must sit within the walk's reach_px of that
+source's last sample, else it is a later drag (hand-driven back to the start, say) and is refused, WARN. Without
+one it is the taught route end (ui/route-saved.json path[-1]); then the driving source's error is only under reach_px
+by construction (the follower stops where its own source believes the end is) and the other's is only the
+disagreement, so every walk says which reference it used and who drove. A walk that did not reach the end and has no
+drag has no reference: no number. The report names the source with the lower mean end error.
 
 UNVERIFIED on this dog (the first live run confirms; the PR's Needs the dog): the shape of rt/utlidar/robot_pose
 (utpose_xyyaw reads a ROS PoseStamped, a guess: the driver names the topic and parses nothing); whether the dog publishes
@@ -115,6 +117,13 @@ def report(rows: list[dict], route_end) -> dict:
             if q.get("tool") == "dog.calibrate" and q.get("ok"):
                 drag = q if _t(q) - _t(r) <= DRAG_WINDOW_S else None
                 break
+        if drag is not None:   # the walk's end only if the driver's belief at the drag is still where the walk left it
+            at, was = (drag.get("state_before") or {}).get("p"), last.get(args.get("pose_source"))
+            moved = round(math.dist(at, was)) if at and was else None
+            if moved is None or moved > args["reach_px"]:
+                log("drift", f"WARN walk {len(walks) + 1}: the drag at {drag['args']['p']} came after the dog moved "
+                    f"{'an unknown distance' if moved is None else f'{moved} px'} from where the walk ended: not this walk's reference")
+                drag = None
         if drag is not None:
             truth, truth_p = "drag", drag["args"]["p"]
         elif r.get("ok"):   # ok only when the follower reached the last waypoint (a replay from mid-route reaches fewer than of)
