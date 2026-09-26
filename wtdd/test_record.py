@@ -245,6 +245,31 @@ class Signed(Guard):
         self.assertNotIn("no dog.look row", h)
         self.assertIn("1 post stamped after the signature, not on the record", h)
 
+    def test_an_escalate_post_after_the_signature_neither_pings_a_signed_stop_nor_adds_a_flag(self):
+        """intruder_alarm fired the next morning with WTDD_SHIFT still set: its look, boxes, gate and claim are unstamped
+        and after the signature (outside the window), its escalate post intruder-<epoch> to the on-call is stamped B
+        (every stamped row joins). The signed page keeps stop 23 unpinged and its one flag; the post is listed as after
+        the signature. In memory; the ledger is untouched."""
+        m, rows, base = make_ledger_shift, ledger.rows(), self.rec
+        sig = next(i for i, r in enumerate(rows) if r["tool"] == "record.signed" and r["ok"])
+        late = [m.look("2026-09-27T10:00:00", "late-dog", "level", 9001),
+                m.row("2026-09-27T10:00:04", "late-chat", "watch", "watch.boxes", "yolo", {"file": "look-level.jpg"},
+                      {"file": "look-level-boxed.jpg", "classes": {"person": 1}, "n": 1, "ms": 900}, ms=900),
+                m.gate("2026-09-27T10:00:06", "late-chat", ONCALL, m.NAME),
+                m.claim("2026-09-27T10:00:06", "late-chat", "intruder-1790500000"),
+                m.post("2026-09-27T10:00:09", "late-chat", ONCALL, "escalate", "intruder-1790500000", "who dis?!",
+                       "look-level-boxed.jpg", B, 90001, "2026-09-27 17:00:08")]
+        rec = record.build(B, rows=rows[:sig + 2] + late + rows[sig + 2:])   # after the signature and the refused second one
+        self.assertEqual(len(rec["stops"]), 3)
+        self.assertEqual([(s["index"], s["pinged"]) for s in rec["stops"]], [(10, False), (22, True), (23, False)])
+        self.assertEqual(rec["flags"], base["flags"])
+        self.assertEqual(len(rec["flags"]), 1)
+        self.assertEqual(rec["signed"], {"by": "Sam Stand-in", "at": "2026-09-27T06:05:00"})
+        self.assertEqual(rec["after_signature"], [{"ts": "2026-09-27T10:00:09", "trigger": "intruder-1790500000", "rowid": 90001}])
+        h = record.html(rec)
+        self.assertIn("Flags (1)", h)
+        self.assertIn("1 post stamped after the signature, not on the record", h)
+
 
 class ByHand(Guard):
     def test_a_look_pressed_by_hand_keeps_the_post_that_confirmed_it(self):
