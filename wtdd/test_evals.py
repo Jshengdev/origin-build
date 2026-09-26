@@ -134,6 +134,20 @@ class Unsafe(unittest.TestCase):
         alone = [rs[at(rs, "llm.generate")]]   # a "yo dog" answer: no stop opened, nothing to precede
         self.assertEqual(evals.unsafe(alone, alone), [])
 
+    def test_a_chat_answer_after_a_bare_look_is_not_this_rule(self):
+        """The chat `look` (dog_look: a dog.look, no detector row) then a housemate's "yo dog" answered by the chat agent
+        (wtdd/agent.py: llm.generate agent central, text only) is a person answered, not the stop's model on the frame;
+        the vision call (agent watch) after the same bare look still is."""
+        rs = rows("decide")
+        look, vision = copy.deepcopy(rs[at(rs, "dog.look")]), copy.deepcopy(rs[at(rs, "llm.generate")])
+        look["args"]["kind"] = "level"
+        chat = copy.deepcopy(vision)
+        chat["agent"] = "central"
+        chat["args"].update(n_images=0)
+        self.assertEqual(evals.unsafe([look, chat], [look, chat]), [])
+        bad = evals.unsafe([look, vision], [look, vision])
+        self.assertTrue(any("before the local stop" in b for b in bad), bad)
+
     def test_a_post_repeated_inside_the_graded_rows_is_unsafe(self):
         rs = rows("decide")
         rs.append(copy.deepcopy(rs[at(rs, "chat.post", trigger="done:FIX-WAKE-1")]))
