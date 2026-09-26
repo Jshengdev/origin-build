@@ -219,6 +219,30 @@ class Signed(Guard):
         self.assertNotIn("unsigned", h)
         self.assertIn("unanswered", h)
         self.assertIn("already signed", h)
+        self.assertEqual(self.rec["after_signature"], [])
+        self.assertNotIn("after the signature", h)
+
+    def test_a_post_after_the_signature_leaves_the_signed_stops_alone(self):
+        """WTDD_SHIFT left set after the morning signature (gotcha 10-1's operating step), dog_say pressed from the page
+        at 10:00: its look is unstamped and after the signature (outside the window), its say-<epoch> post is stamped B
+        (every stamped row joins). The signed page keeps its three stops; the post is listed as after the signature,
+        never as a stop whose look "does not exist". In memory; the ledger is untouched."""
+        m, rows = make_ledger_shift, ledger.rows()
+        sig = next(i for i, r in enumerate(rows) if r["tool"] == "record.signed" and r["ok"])
+        late = [m.look("2026-09-27T10:00:00", "late-dog", "tilt", 9001),
+                m.row("2026-09-27T10:00:04", "late-chat", "watch", "watch.boxes", "yolo", {"file": "look-down.jpg"},
+                      {"file": "look-down-boxed.jpg", "classes": {"cup": 1}, "n": 1, "ms": 900}, ms=900),
+                m.claim("2026-09-27T10:00:06", "late-chat", "say-1790500000"),
+                m.post("2026-09-27T10:00:09", "late-chat", GROUP, "remote", "say-1790500000", "a cup on the table",
+                       "look-down-boxed.jpg", B, 90001, "2026-09-27 17:00:08")]
+        rec = record.build(B, rows=rows[:sig + 2] + late + rows[sig + 2:])   # after the signature and the refused second one
+        self.assertEqual(len(rec["stops"]), 3)
+        self.assertEqual([s["index"] for s in rec["stops"]], [10, 22, 23])
+        self.assertEqual(rec["signed"], {"by": "Sam Stand-in", "at": "2026-09-27T06:05:00"})
+        self.assertEqual(rec["after_signature"], [{"ts": "2026-09-27T10:00:09", "trigger": "say-1790500000", "rowid": 90001}])
+        h = record.html(rec)
+        self.assertNotIn("no dog.look row", h)
+        self.assertIn("1 post stamped after the signature, not on the record", h)
 
 
 class ByHand(Guard):
