@@ -54,6 +54,18 @@ class Fixture(unittest.TestCase):
             self.assertEqual(r["args"]["shift_id"], gen.SHIFT_ID)
         self.assertEqual({r["args"]["source"] for r in samples}, set(drift.SOURCES))
 
+    def test_each_follow_rows_sample_count_matches_its_rows(self):
+        # state_after.samples is a receipt: the pose.sample rows of each source since the previous dog.follow row
+        seen, walks = {s: 0 for s in drift.SOURCES}, 0
+        for r in _rows():
+            if r["tool"] == "pose.sample":
+                seen[r["args"]["source"]] += 1
+            elif r["tool"] == "dog.follow":
+                walks += 1
+                self.assertEqual(r["state_after"]["samples"], seen, f"walk {walks}")
+                seen = {s: 0 for s in drift.SOURCES}
+        self.assertEqual(walks, len(gen.DROVE))
+
 
 class Select(unittest.TestCase):
     def setUp(self):
