@@ -15,7 +15,8 @@ WTDD_GUARD_SHIFT_USD (the one guard shift the night replaces, a number Johnny en
 number comes from, shown beside it), WTDD_PRICE_PER_STOP_NIGHT (the quote's default price). The shift id is WTDD_SHIFT,
 else today's date (YYYY-MM-DD); it is in every row's args and state_after. Every check runs inside the row's step, so a
 refusal is a FAILED row with the error, never a silent default. The remote draws the newest of each row (ui/index.html,
-08 · roster-quote) from the ledger poll it already makes. Nothing is cached here: there is no DEMO_CACHE path.
+08 · roster-quote) from its own poll of the last 2000 ledger rows, and names that window when it finds none. Nothing is
+cached here: there is no DEMO_CACHE path.
 UNVERIFIED: nothing here touches the dog. The camera-to-zone rule has run only on the test fixture: the shipped map has no
 cameras until 09 adds them. The guard-shift figure is whatever is in .env; this code does not check its source.
 """
