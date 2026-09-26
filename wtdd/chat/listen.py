@@ -53,7 +53,7 @@ GATHER_S = 6.0                # after "yo dog ...", the same sender's next messa
 Poster = Callable[[str, str, str, str | None, str | None], Any]   # (guid, trigger_key, kind, text, file)
 OWN_OPENERS = ("the dog is doin", "dog doin", "dog done", "on it:", "couldn't", "here's what i see", "yo, we don't know", "noted:",
                "who dis", "stranger danger", "ok, standing down", "ok, done listening",
-               "living room lights", "did:", "listening for", "not sure")   # how the dog's own text posts begin
+               "living room lights", "did:", "listening for", "not sure:")   # how the dog's own text posts begin
 
 
 def _flag(key: str) -> bool:

@@ -232,7 +232,8 @@ def at_stop(stop: int | None, seen: dict, det: dict | None, frame_file: str) -> 
 
 
 def ask_line(d: dict) -> str:
-    """The one line posted with the photo when needs_person; begins "not sure" (chat/listen.py OWN_OPENERS)."""
+    """The one line posted with the photo when needs_person; begins "not sure:" (chat/listen.py OWN_OPENERS, colon included
+    so a housemate's "not sure, ..." is still read as an answer)."""
     return f"not sure: {d['label'].replace('_', ' ')} at {int(round(d['p'] * 100))} percent. what is it?"
 
 
