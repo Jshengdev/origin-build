@@ -28,6 +28,8 @@
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
+  POST /cam/<id>/frame  raw image/jpeg   a fixed camera's frame (python -m wtdd.cam): saved, detected out of process, cam.frame + cam.detect rows, the who-dis ask when armed
+  GET  /cam                       every fixed camera's newest detections {<id>: {classes, boxes, ms, t, age_ms, error?}}; GET /cam/<id>/frame.jpg its raw frame
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -125,6 +127,15 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().grid_px(t))
             except Exception as e:  # noqa: BLE001  (a bad threshold or an unreadable ui/grid.json is reported, the page shows it)
                 return self._json(500, {"n": 0, "cells_px": [], "error": f"{type(e).__name__}: {e}"})
+        if u.path == "/cam" or u.path.startswith("/cam/"):   # 09 · fixed-cam: the fixed cameras (wtdd/cam), {} until one posts
+            from . import cam
+            if u.path == "/cam":
+                return self._json(200, cam.read_all())
+            parts = u.path.split("/")   # "", "cam", <id>, "frame.jpg"
+            f = cam.cams() / f"{parts[2]}.jpg"
+            if len(parts) != 4 or parts[3] != "frame.jpg" or not cam.ID.fullmatch(parts[2]) or not f.is_file():
+                return self._json(404, {"error": f"no frame for camera {parts[2][:64]}"})
+            return self._send(200, "image/jpeg", f.read_bytes())
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -229,6 +240,17 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        if u.path.startswith("/cam/") and u.path.endswith("/frame"):   # 09 · fixed-cam: a raw JPEG body, so it is read here, never through _body()
+            from . import cam
+            cam_id = u.path[len("/cam/"):-len("/frame")]
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                out = cam.ingest(cam_id, body)
+            except ValueError as e:   # a bad id or not a JPEG: its FAILED cam.frame row is written
+                return self._json(400, {"ok": False, "cam": cam_id[:64], "error": f"{type(e).__name__}: {e}"})
+            except Exception as e:  # noqa: BLE001  (a disk error: the frame not written, or cams/ unreadable; reported, never hidden)
+                return self._json(500, {"ok": False, "cam": cam_id[:64], "error": f"{type(e).__name__}: {e}"})
+            return self._json(200 if out["ok"] else 500, out)
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
         name, args = u.path[len("/tools/"):], self._body()
