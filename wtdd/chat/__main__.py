@@ -5,7 +5,8 @@
   listen [--dry-run] [--once]             wake phrase arms the dog, commands run, results posted (listen.py)
   simulate "text" ...                     feed texts through the listener: dry-run posts, REAL commands
   triggers ["phrase" ...]                 print the wake phrases and commands, test phrases against them
-  send --text T [--trigger K]             one gated text post (kind send); --guid "any;-;<handle>" = the on-call 1:1
+  send --text T [--trigger K]             one gated text post (kind send); --guid "any;-;<handle>" = the on-call 1:1,
+                                          --guid "sms:<handle>" = the on-call person on SMS (item 12, WTDD_ON_CALL_CHANNEL=sms)
   update --text T                         same as send, one line only (kind update)
   photo --file P [--text T]               one gated file post with an optional caption (kind photo)
   spam --text T --n 5 --every 2           bounded burst: n capped at SPAM_CAP, each message its own claim K#i, suffixed (i/n)
@@ -17,7 +18,10 @@ listener), goes through post(): gate (chat.gate row), claim (chat.claim row), th
 whose state_after is the confirmed from-me row {guid, rowid, ts}, then memory.confirm (a photo's caption is a second
 bubble, confirmed under <trigger>#caption so posted_guids() knows it too). Every chat.post row carries args.shift_id
 (oncall.shift_id()); kind "escalate" is a flag (photo + "who dis?!") to the on-call person's 1:1 (item 03, oncall.py),
-the only target besides the group; chat.gate's state_after names who the gate verified. A refused gate or claim is a
+the only target besides the group; chat.gate's state_after names who the gate verified. The transport is the target's
+channel adapter (chat/adapters/, item 12): chat.db guids are iMessage (send.py + db.py), sms:<handle> is SMS (Twilio, or
+its labeled DEMO_CACHE stub, whose gate, claim and post rows carry cached: true, source: "stub"); chat.gate and chat.post
+carry the adapter's app, and the same gate, claim and read-back apply to every adapter. A refused gate or claim is a
 ledger row with ok=False and a PermissionError (exit 2 here). --guid defaults to WTDD_CHAT_GUID; --trigger is the
 idempotence key (default cli:<epoch>). Only this CLI prints the confirmed row to stdout: library callers keep stdout
 clean because the MCP server speaks its protocol there and `python -m wtdd chat_post` prints the result itself.
@@ -33,7 +37,7 @@ from typing import Any
 
 from .. import config, ledger
 from ..ledger import log
-from . import db, memory, oncall, send
+from . import adapters, db, memory, oncall
 from .housemates import HOUSEMATES
 from .triggers import is_wake
 
@@ -57,27 +61,35 @@ def _trigger(a: argparse.Namespace) -> str:
 def gate(guid: str) -> None:
     """The target gate as its own receipt: a refused target is a ledger row with ok=False, then PermissionError. The
     receipt names who was verified: the group's name, or the on-call person's name for their 1:1."""
-    with ledger.step("central", "chat.gate", "imessage", {"guid": guid}) as r:
-        r["state_after"] = {"guid": guid, "name": send.gate(guid)}
+    a = adapters.for_target(guid)
+    with ledger.step("central", "chat.gate", a.app, {"guid": guid}) as r:
+        r.update(adapters.label(guid))
+        r["state_after"] = {"guid": guid, "name": a.gate(guid)}
 
 
-def claim(trigger: str) -> None:
-    """The never-twice gate as its own receipt: a refused claim is a ledger row with ok=False, then PermissionError."""
+def claim(trigger: str, label: dict[str, Any] | None = None) -> None:
+    """The never-twice gate as its own receipt: a refused claim is a ledger row with ok=False, then PermissionError.
+    label: the target adapter's stub label (adapters.label), so a stub post's claim row never claims to be live."""
     with ledger.step("central", "chat.claim", "memory", {"trigger": trigger}) as r:
+        r.update(label or {})
         if not memory.claim(trigger):
             raise PermissionError(f"gate refused: trigger {trigger!r} already claimed")
         r["state_after"] = {"trigger": trigger, "claimed": True}
 
 
 def post_step(guid: str, trigger: str, kind: str, text: str | None, file: str | None) -> dict[str, Any]:
-    """The send inside one chat.post ledger row (after gate and claim); state_after is the confirmed row {guid, rowid, ts}."""
+    """The send inside one chat.post ledger row (after gate and claim); state_after is the confirmed row {guid, rowid, ts}.
+    state_before.max_rowid is the adapter's watermark (chat.db MAX(ROWID); unix seconds for sms)."""
+    a = adapters.for_target(guid)
     args = {"guid": guid, "kind": kind, "trigger": trigger, "text": text, "file": file, "shift_id": oncall.shift_id()}
-    with ledger.step("central", "chat.post", "imessage", args, {"max_rowid": db.max_rowid()}) as r:
-        row = send.send_file(guid, file, text) if file else send.send_text(guid, text or "")
+    with ledger.step("central", "chat.post", a.app, args, {"max_rowid": a.mark()}) as r:
+        r.update(adapters.label(guid))
+        row = a.post_photo(guid, file, text) if file else a.post_text(guid, text or "")
         r["state_after"] = row
     memory.confirm(trigger, row["guid"])
-    if file and text:   # the caption is a second from-me bubble: claimed and confirmed under <trigger>#caption so the
-        memory.claim(f"{trigger}#caption")   # listener (WTDD_ALLOW_SELF) can never read the dog's own sentence as a command
+    if file and text and "caption" in row:   # iMessage's caption is a second from-me bubble (an MMS is one message):
+        memory.claim(f"{trigger}#caption")   # claimed and confirmed under <trigger>#caption so the listener
+        # (WTDD_ALLOW_SELF) can never read the dog's own sentence as a command
         memory.confirm(f"{trigger}#caption", row["caption"]["guid"])
     return row
 
@@ -85,7 +97,7 @@ def post_step(guid: str, trigger: str, kind: str, text: str | None, file: str | 
 def post(guid: str, trigger: str, kind: str, text: str | None = None, file: str | None = None) -> dict[str, Any]:
     """Gate, claim, send, confirm: the one way anything posts. Returns the confirmed from-me row {guid, rowid, ts}."""
     gate(guid)
-    claim(trigger)
+    claim(trigger, adapters.label(guid))
     return post_step(guid, trigger, kind, text, file)
 
 
@@ -135,12 +147,14 @@ def cmd_chats(a: argparse.Namespace) -> None:
 
 def cmd_watch(a: argparse.Namespace) -> None:
     guid = _guid(a)
+    ad = adapters.for_target(guid)   # sms:<handle> reads the person's SMS replies (Twilio, or the stub's empty inbox)
     show_text = guid == config.maybe("WTDD_CHAT_GUID")   # full text only for the target group; other chats: handle + length
-    last = a.since if a.since is not None else db.max_rowid()   # no replay at boot
-    log("chat", f"watch guid={guid}", from_rowid=last, every=a.every, once=a.once, text="shown" if show_text else "hidden")
+    last = a.since if a.since is not None else ad.mark()   # no replay at boot
+    log("chat", f"watch guid={guid}", adapter=ad.app + ("/stub" if ad.stub else ""), from_rowid=last, every=a.every, once=a.once,
+        text="shown" if show_text else "hidden")
     while True:
         t0 = time.perf_counter()
-        msgs = db.new_messages(guid, last)
+        msgs = ad.replies_since(guid, last)
         if msgs:
             n = memory.store(guid, msgs)
             last = msgs[-1]["rowid"]
@@ -190,7 +204,7 @@ def cmd_reply(a: argparse.Namespace) -> None:
     if trig is None:
         log("chat", "WARN no trigger", guid=guid, known=len(HOUSEMATES))
         raise SystemExit("[wtdd:chat] no wake-phrase message from a known housemate stored for this chat (run watch; fill HOUSEMATES)")
-    claim(trig["guid"])
+    claim(trig["guid"], adapters.label(guid))
     text = generate(memory.context(guid, a.n), trig["text"])
     print(json.dumps(post_step(guid, trig["guid"], "reply", text, None)), flush=True)
 
