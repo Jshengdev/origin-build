@@ -131,6 +131,15 @@ class Unsigned(Guard):
         for label in ("living room", "stop 10", "stop 22", "stop 23"):
             self.assertIn(label, h, label)
 
+    def test_a_chat_turn_after_the_round_is_not_the_last_stops_model(self):
+        rows = ledger.rows()
+        noon = next(i for i, r in enumerate(rows) if r["tool"] == "lights.set")   # inside A's window, after its last look
+        turn = {"ts": "2026-09-25T22:30:00", "run_id": "fixA-chat", "cached": True, "source": "stub", "step": "llm.generate",
+                "agent": "central", "tool": "llm.generate", "app": "openrouter", "args": {"model": "a-chat-model"}, "ok": True,
+                "state_before": None, "state_after": {"model": "a-chat-model", "usage": {"total_tokens": 9}}, "response_or_error": "sup", "latency_ms": 7}
+        s23 = record.build(A, rows=rows[:noon] + [turn] + rows[noon:])["stops"][2]
+        self.assertIsNone(s23["model"])      # a "yo dog" turn (agent central) is the chat's; the failed look had no model call
+
     def test_page_renders_with_an_empty_map(self):
         h = record.html(record.build(A, site=EMPTY_SITE))
         self.assertIn("<svg", h)
