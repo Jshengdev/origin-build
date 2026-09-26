@@ -29,7 +29,10 @@ is the llm.generate of agent watch (dog_say's; a chat turn after the round is ag
 last stop), and a correction joins it when its args.corrects.at is that post's ledger ts. A say post with no dog.look
 of its own before it (the stop before already has its post, or there is no stop yet) is a look that never reached the
 dog (README: "the dog drops or is unreachable ... the look posts the error"; the API is down, so no dog.look row
-exists): it opens its own stop, ok false, kind none, its error the post's text, never joined to the stop before. A
+exists): it opens its own stop, ok false, kind none, its error the post's text, never joined to the stop before. Its
+error says what was searched, "no dog.look row in this shift's window": the page vouches for its window, not the
+ledger, and the usual other cause is a look that lies outside it (a night crossing midnight without WTDD_SHIFT set,
+gotcha 10-1, puts a stop's look on the other page). A
 say post stamped with the shift after its signature (dog_say pressed the next morning with WTDD_SHIFT still set: the
 post joins, being stamped, while its unstamped look lies past the window the signature closed) is never a stop, so a
 signed page's stops do not change on re-render; it is listed under after_signature and in one line on the page. A
@@ -133,8 +136,8 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         if say and sig and r["ts"] > sig["ts"]:   # dog_say pressed after signing with WTDD_SHIFT still set: its look is outside the window
             after_sig.append({"ts": r["ts"], "trigger": a.get("trigger"), "rowid": after.get("rowid")})
             continue
-        if say and (cur is None or cur["posted"] is not None):   # a look that never reached the dog: no dog.look row, only its post
-            cur = stop(r, error=f"no dog.look row before this post: {a.get('text')}")
+        if say and (cur is None or cur["posted"] is not None):   # a look that never reached the dog, or one outside the window
+            cur = stop(r, error=f"no dog.look row in this shift's window before this post: {a.get('text')}")
         if cur is None or not r.get("ok"):
             continue
         if r["tool"] == "watch.boxes":
