@@ -2,7 +2,9 @@
 one sentence plus the photo are posted to the castle behind the gate and the never-twice claim. Returns the look's
 fields (file_up, file_down, pitch_deg, pitch_down_deg, fired, attempts), text, person, out_of_place, pick (1 = the
 floor picture, 2 = the room), why, file (the picked one, boxed by the detector when it ran, the one posted), detector
-({file, classes, n, ms} or {error}), baseline, model, vision_ms and the confirmed post row. The caption gets a
+({file, classes, n, ms} or {error}), baseline, model, vision_ms, state and decision (wtdd/decide.py: the stop in
+words and {label, p, needs_person, model}, or {error}), the confirmed post row, and ask (the "not sure" question with
+the photo, posted when needs_person; the chat listener, not this tool, reads the reply). The caption gets a
 "[detector: cup, chair x2]" suffix when the detector saw something. look_and_see() is the half without the post: the chat listener calls it and posts under the wake message's
 guid (say:<guid>), and sounds light_alarm when person is true.
 
@@ -174,6 +176,8 @@ def look_and_see(look: str = "tilt", stop: int | None = None) -> dict:
     except Exception as e:  # noqa: BLE001  (its watch.boxes row has ok=False; the model then sees no labels)
         det = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
     seen = see(shot["file"], tidy if has else None, shot.get("file_down"), labels=det.get("classes") if "classes" in det else None)
+    from ..decide import at_stop   # after boxed() and see(): the decided row lands after watch.boxes (the local stop)
+    state, decision = at_stop(stop, seen, det, floor)
     files = {1: shot.get("file_down"), 2: shot["file"]}
     picked = files[seen["pick"]] or shot["file"]
     text = seen["text"]
@@ -187,7 +191,7 @@ def look_and_see(look: str = "tilt", stop: int | None = None) -> dict:
         except Exception as e:  # noqa: BLE001  (the plain picked frame is posted; the failure is on its watch.boxes row)
             det = {**det, "error": f"{type(e).__name__}: {str(e)[:100]}"}
     return {**shot, **seen, "text": text, "vision_ms": seen.pop("ms"), "stop": stop, "baseline": tidy if has else None,
-            "file_up": shot["file"], "file": picked, "detector": det}   # file = the picture the model picked, boxed when the detector ran
+            "file_up": shot["file"], "file": picked, "detector": det, "state": state, "decision": decision}   # file = the picture the model picked, boxed when the detector ran
 
 
 def run(look="tilt", trigger=None, baseline=False, stop=None):
@@ -201,5 +205,14 @@ def run(look="tilt", trigger=None, baseline=False, stop=None):
         shutil.copy2(shot["file"], tidy_path(look, stop))
         return {**shot, "baseline": tidy_path(look, stop), "text": "tidy baseline captured"}
     out = look_and_see(look, stop)
-    out["post"] = chat_post.run(text=out["text"], file=out["file"], trigger=trigger or f"say-{int(time.time())}")
+    trigger = trigger or f"say-{int(time.time())}"
+    out["post"] = chat_post.run(text=out["text"], file=out["file"], trigger=trigger)
+    if out["decision"].get("needs_person"):   # not sure: one question with the photo; the listener process reads the reply
+        import json
+        from ..config import ROOT
+        from ..decide import ask_line
+        out["ask"] = chat_post.run(text=ask_line(out["decision"]), file=out["file"], trigger=f"{trigger}:decide")
+        (ROOT / "pending.json").write_text(json.dumps({"kind": "decide", "t": time.time(), "file": out["file"], "seconds": 5,
+                                                       "trigger": f"{trigger}:decide", "classes": out["detector"].get("classes"),
+                                                       "decision": out["decision"]}))
     return out
