@@ -174,6 +174,7 @@ class Unsigned(Guard):
         self.assertIs(s22["ok"], False)
         self.assertIsNone(s22["sentence"])
         self.assertIn("couldn't look", s22["error"])
+        self.assertIn("no dog.look row in this shift's window before this post", s22["error"])   # true on a midnight split too
         first = record.build(A, rows=_unreached(ledger.rows(), 10))["stops"]   # the round's first stop never reached the dog
         self.assertEqual([s["index"] for s in first], [10, 22, 23])
         self.assertIsNone(first[0]["kind"])
