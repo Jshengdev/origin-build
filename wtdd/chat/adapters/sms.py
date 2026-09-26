@@ -17,7 +17,9 @@ Live (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM set), over `requests` (
              group as escalate-fail), never a silent photo-less flag.
 Units. A Twilio message has no row id, so "rowid" is its date_sent as unix seconds and mark() is the clock now in the
 same unit; ts and ts_utc are date_sent in UTC "%Y-%m-%d %H:%M:%S", so oncall.acked_ms works across adapters (both ends
-on Twilio's clock). A received MMS's media is counted in the log line, never fetched: attachments is [].
+on Twilio's clock). Two replies in one second share a rowid: both reach the listener, memory.db keeps the first (its
+rowid is the primary key), and replies_since says so in a WARN line. A received MMS's media is counted in the log
+line, never fetched: attachments is [].
 
 The stub: see the DEMO_CACHE comment above class Sms.
 
@@ -203,10 +205,14 @@ class Sms:
         keep = [m for m in listed if m.get("direction") == "inbound" and m.get("from") == h and m["sid"] not in self.seen
                 and epoch(m.get("date_sent") or m["date_created"]) >= after]
         self.seen.update(m["sid"] for m in keep)
+        out = sorted(map(message_from, keep), key=lambda x: x["rowid"])
         if keep:
             log("chat", f"sms replies n={len(keep)}", listed=len(listed), after=after, stub=self.stub,
                 media_not_fetched=sum(int(m.get("num_media") or 0) for m in keep), ms=round((time.perf_counter() - t0) * 1000))
-        return sorted(map(message_from, keep), key=lambda x: x["rowid"])
+        same = [m["guid"] for m in out if [x["rowid"] for x in out].count(m["rowid"]) > 1]
+        if same:   # every one reaches the listener; memory.db's rowid primary key stores the first (INSERT OR IGNORE)
+            log("chat", "WARN same-second sms replies: memory.db keeps one per rowid", n=len(same), sids=",".join(same))
+        return out
 
     def receive(self, from_: str, body: str, date_sent: str | None = None) -> dict[str, Any]:
         """Stub only: the person typing a reply on their phone, appended to the inbox as Twilio would list it."""
