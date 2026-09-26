@@ -22,14 +22,16 @@ of the ledger (an open shift). A row stamped with another shift never joins. Whe
 shift's opener exist, the window closes at whichever comes first, so a shift signed after the next one began never
 takes the next one's looks.
 
-A stop is a dog.look row plus the rows up to the next look (so a look pressed by hand shows too); its map index is
-read from its say:<wake>:<n> post, its model call is the llm.generate of agent watch (dog_say's; a chat turn after the
-round is agent central and never lands on the last stop), and a correction joins it when its args.corrects.at is that
-post's ledger ts. A say post with no dog.look of its own before it (the stop before already has its post, or there is
-no stop yet) is a look that never reached the dog (README: "the dog drops or is unreachable ... the look posts the
-error"; the API is down, so no dog.look row exists): it opens its own stop, ok false, kind none, its error the post's
-text, never joined to the stop before. A refusal is an ok=false row whose error is a PermissionError or whose tool
-ends in .refused; every other ok=false row is a failure. Both are listed, never hidden.
+A stop is a dog.look row plus the rows up to the next look (so a look pressed by hand shows too); its post is the
+listener's say:<wake>:<n> (the map index is its n) or, pressed by hand, dog_say's say-<epoch> (kind remote, no map
+index; dog_say raises before it posts when its look fails, so a say- post always follows its own look), its model call
+is the llm.generate of agent watch (dog_say's; a chat turn after the round is agent central and never lands on the
+last stop), and a correction joins it when its args.corrects.at is that post's ledger ts. A say post with no dog.look
+of its own before it (the stop before already has its post, or there is no stop yet) is a look that never reached the
+dog (README: "the dog drops or is unreachable ... the look posts the error"; the API is down, so no dog.look row
+exists): it opens its own stop, ok false, kind none, its error the post's text, never joined to the stop before. A
+refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every other ok=false row
+is a failure. Both are listed, never hidden.
 
 Honest edges. A shift with no chat.wake (a round started from the page) opens at the nearest earlier unstamped wake
 when no stamped row lies between, else at its first stamped row: on a ledger that still holds pre-03 rows, the first
@@ -118,7 +120,7 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
 
     for r in members:
         a, after = r.get("args") or {}, r.get("state_after") or {}
-        say = ok(r, "chat.post") and str(a.get("trigger") or "").startswith("say:")
+        say = ok(r, "chat.post") and str(a.get("trigger") or "").startswith(("say:", "say-"))   # the listener's, dog_say's by hand
         if r.get("tool") == "dog.look":
             cur = stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"), pitch_deg=after.get("pitch_deg"),
                        error=None if r.get("ok") else r.get("response_or_error"))
