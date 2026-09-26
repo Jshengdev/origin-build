@@ -14,14 +14,20 @@ Labels: ui/map.json `labels` (a non-empty list of distinct non-empty strings) or
 a ValueError, never a silent default. needs_person = p < WTDD_DECIDE_THRESHOLD (default 0.7; not a float in [0, 1] is
 a ValueError). Who decides: Jev (TypeSafe System One, a Choice question over the labels, POST JEV_URL with model
 JEV_MODEL, default typesafe/jev-1.13, Bearer JEV_API_KEY) when JEV_API_KEY is set; otherwise the deterministic
-DEMO_CACHE stub below, whose rows say cached=True, source="stub". p is the probability Jev gives the chosen label. One
+DEMO_CACHE stub below, whose rows say cached=True, source="stub". p is the probability Jev gives the chosen label
+(answers.stop.probabilities[choice]), not the reply's `confidence`, a separate number (0.75 beside a chosen 0.84 in
+OpenRouter's example), so WTDD_DECIDE_THRESHOLD is tuned against the per-label probability. One
 request, no retry, no fallback model, no fallback to the stub: a live failure is the decided row with ok=False, raised.
 Row: tool "decided", agent "decide", app "stub" | "openrouter"; args {stop, shift_id, state_chars, threshold};
 state_before {labels}; state_after = the returned decision; response_or_error = the stub's rule or Jev's raw reply.
 Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD, WTDD_SHIFT.
-UNVERIFIED: the live Jev call has not been run with a key; the request and reply shape is TypeSafe's System One doc
-(api.typesafe.ai/v1/systemone), which OpenRouter lists at JEV_URL for typesafe/jev-1.13 without its own example. A
-TypeSafe-native key needs JEV_URL = https://api.typesafe.ai/v1/systemone and JEV_MODEL=jev-latest instead."""
+UNVERIFIED: the live Jev call has not been run with a key. The body and the parse follow OpenRouter's own API reference,
+"Submit a System One request" (POST https://openrouter.ai/api/v1/systemone, Bearer key; {model, state, questions} in;
+{id, model, provider, answers: {<question>: {type, choice, confidence, probabilities}}, usage} out), and its Jev guide;
+an unauthenticated POST to JEV_URL answers 401 where an unknown path answers 404 (checked 2026-09-26), so the route
+exists. If the first live call 404s, the documented alternate path on the same OpenRouter key is
+https://openrouter.ai/api/alpha/decisions (same body and reply; edit JEV_URL). Only a TypeSafe-native key, not an
+OpenRouter one, needs JEV_URL = https://api.typesafe.ai/v1/systemone with JEV_MODEL=jev-latest."""
 from __future__ import annotations
 import argparse
 import json

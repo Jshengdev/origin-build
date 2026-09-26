@@ -299,8 +299,11 @@ class Ordering(unittest.TestCase):
 
 
 class LiveReply(unittest.TestCase):
-    """The live path against TypeSafe's documented System One reply, with requests.post patched (no network, no key):
-    the state and the labels go out as one Choice question, the chosen label's probability is p, the row says live."""
+    """The live path with requests.post patched (no network, no key): the state and the labels go out as one Choice
+    question, the chosen label's probability is p, the row says live. REPLY is shaped on the example reply OpenRouter
+    publishes in its API reference "Submit a System One request" (model typesafe/jev-1.13-20260917, usage 476 in and
+    70 out, a choice answer carrying choice, confidence and probabilities); its answer is rewritten to this question and
+    these labels. It is not a live reply."""
     REPLY = {"model": "typesafe/jev-1.13-20260917", "usage": {"input_tokens": 476, "output_tokens": 70},
              "answers": {"stop": {"type": "choice", "choice": "person", "confidence": 0.7,
                                   "probabilities": {"clear": 0.05, "out_of_place": 0.1, "hazard": 0.03, "person": 0.82}}}}
