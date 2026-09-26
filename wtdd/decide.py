@@ -212,13 +212,21 @@ def _frame_wh(file: str) -> tuple[int, int] | None:
 
 def at_stop(stop: int | None, seen: dict, det: dict | None, frame_file: str) -> tuple[str | None, dict]:
     """dog_say.look_and_see's one call, after boxed() and see(): (state, decision), or (state or None, {error}) when
-    the state or the decision failed (the decided row, when it was reached, has ok=False; logged loud here)."""
-    state = None
+    the state or the decision failed, logged loud here. Every stop leaves exactly one decided row: decide()'s own, ok
+    or failed, or, when the state failed before decide() was reached, a failed one appended here."""
+    state, t0 = None, time.perf_counter()
     try:
         state = state_for_stop(stop_name(stop), seen, det, _frame_wh(frame_file))
         return state, decide(state, stop=stop)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  (recorded on a decided row, logged, and returned as {error})
         err = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
+        if state is None:   # decide() never opened its step: this stop's receipt is written here
+            key = config.maybe("JEV_API_KEY")
+            ledger.append({"step": "decided", "agent": "decide", "tool": "decided", "app": JEV_APP if key else "stub",
+                           "args": {"stop": stop, "shift_id": shift_id(), "state_chars": 0, "threshold": None},
+                           "state_before": None, "state_after": None, "ok": False,
+                           "response_or_error": f"{type(e).__name__}: {e}", "latency_ms": round((time.perf_counter() - t0) * 1000),
+                           **({} if key else {"cached": True, "source": "stub"})})
         ledger.log("decide", f"FAILED no decision at this stop: {err['error']}", stop=stop)
         return state, err
 
