@@ -29,8 +29,10 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
          re-sending it every 2 s does nothing.
   sit:   Sit, 1.8 s, frame at 48 deg up, RiseSit.
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
-un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
-the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+un-receipted newest frame's one shared encode (Body.jpeg_cached) behind GET /dog/frame.jpg; frames() is the stream behind
+GET /dog/stream.mjpg, the remote's live view at the rate the dog delivers: one part per new frame number, ended when the
+newest frame is older than FRAME_STALE_S. state() carries video (Body.video: fps, age, bytes, size, sha, stale). lidar(on)
+is the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
 """
 from __future__ import annotations
 import asyncio
@@ -42,7 +44,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import log, step
-from . import lidar, nav
+from . import body, lidar, nav
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -134,6 +136,7 @@ class DogSession:
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
+                "video": self.body.video() if self.body else None,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
 
@@ -332,9 +335,25 @@ class DogSession:
     def cmd(self, name: str, parameter: Any = None) -> int:
         return self.run(self.with_body(lambda b: b.cmd(name, parameter)))
 
-    def snapshot(self) -> bytes:
-        """The newest camera frame as JPEG, no ledger row (the remote's live view)."""
-        return self.run(self.with_body(lambda b: b.jpeg()))[0]
+    def snapshot(self) -> dict[str, Any]:
+        """The newest camera frame's one shared encode {bytes, sha, n, w, h, at}, no ledger row (GET /dog/frame.jpg and
+        each part of GET /dog/stream.mjpg). Raises with no dog or a frame older than FRAME_STALE_S."""
+        return self.run(self.with_body(lambda b: b.jpeg_cached()))
+
+    def frames(self):
+        """The stream behind GET /dog/stream.mjpg: the current encode, then one per new frame number, none for a repeat.
+        Returns (the response ends) once the newest frame is older than FRAME_STALE_S: never a stale image. The wait polls
+        _fr_n from the HTTP thread, not the dog loop, so N viewers cost no loop time until a frame lands, then one encode."""
+        c = self.snapshot()   # raises before any byte: no dog, or already stale
+        yield c
+        while True:
+            b = self.body
+            while b is not None and b._fr_n == c["n"]:
+                if time.monotonic() - b._fr_at > body.FRAME_STALE_S:
+                    return
+                time.sleep(0.01)
+            c = self.snapshot()   # a failure here (stale since the wake, the dog gone) ends the response; the API logs it
+            yield c
 
     # ---- hold-to-move
     def drive(self, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict[str, Any]:

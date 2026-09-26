@@ -25,6 +25,11 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /dog/stream.mjpg           the live view as multipart/x-mixed-replace (boundary=frame): the current frame, then one part
+                                  per new frame number; the response ends when the newest frame is older than FRAME_STALE_S,
+                                  503 {error} before any part. It and /dog/frame.jpg carry X-Frame-Sha (sha256 of the JPEG)
+                                  and X-Frame-N, one shared encode per frame (Body.jpeg_cached); /dog/state gains video {fps,
+                                  age_ms, bytes, w, h, frames, n, sha, stale, source}; /watch gains frames_behind (29)
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -50,11 +55,13 @@ UI = ROOT / "ui"
 
 
 class H(BaseHTTPRequestHandler):
-    def _send(self, code: int, ctype: str, body: bytes) -> None:
+    def _send(self, code: int, ctype: str, body: bytes, headers: dict[str, str] | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -100,6 +107,10 @@ class H(BaseHTTPRequestHandler):
             if f.exists():
                 d["age_ms"] = round((time.time() - f.stat().st_mtime) * 1000)
             d["intruder"] = (ROOT / "intruder.on").exists()
+            from .dog.session import DogSession   # 29: how far the boxes lag the live view; a read, never a connect
+            s = DogSession.get()
+            v = s.body.video() if s.body else None
+            d["frames_behind"] = v["n"] - d["frame_n"] if v and v["n"] is not None and d.get("frame_n") is not None else None
             return self._json(200, d)
         if u.path == "/dog/state":
             from .dog.session import DogSession
@@ -110,9 +121,39 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/dog/frame.jpg":
             from .dog.session import DogSession
             try:
-                return self._send(200, "image/jpeg", DogSession.get().snapshot())
-            except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
+                c = DogSession.get().snapshot()
+            except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page names it in a red tile)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+            return self._send(200, "image/jpeg", c["bytes"], {"X-Frame-Sha": c["sha"], "X-Frame-N": str(c["n"])})
+        # 29 · live-stream
+        if u.path == "/dog/stream.mjpg":   # one part per new frame; the response ends on a stall (never a stale image)
+            from itertools import chain
+            from .dog.session import DogSession
+            t0, parts, why = time.monotonic(), 0, "stale"
+            it = DogSession.get().frames()
+            try:
+                first = next(it)
+            except Exception as e:  # noqa: BLE001  (no dog, or stale video: the page shows the error in its red tile)
+                log("api", "WARN stream refused", err=f"{type(e).__name__}: {str(e)[:100]}")
+                return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                for c in chain([first], it):
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\nX-Frame-Sha: %s\r\nX-Frame-N: %d\r\n\r\n"
+                                     % (len(c["bytes"]), c["sha"].encode(), c["n"]) + c["bytes"] + b"\r\n")
+                    self.wfile.flush()
+                    parts += 1
+            except (BrokenPipeError, ConnectionResetError):
+                why = "viewer left"
+            except Exception as e:  # noqa: BLE001  (the dog went away mid-stream: named on the log line, the response ends)
+                why = f"{type(e).__name__}: {str(e)[:100]}"
+            log("api", ("WARN " if parts == 0 else "") + "stream ended", why=why, parts=parts, s=round(time.monotonic() - t0, 1))
+            self.close_connection = True
+            return
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
