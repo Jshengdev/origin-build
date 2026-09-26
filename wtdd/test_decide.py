@@ -186,6 +186,37 @@ class Row(unittest.TestCase):
         self.assertIsNone(row["args"]["stop"])
 
 
+class AtStop(unittest.TestCase):
+    """dog_say.look_and_see's one call: every stop leaves exactly one decided row, even when the state itself fails
+    before decide() is reached (drill row 3: no stop without its decided column)."""
+
+    def _decided_since(self, n0):
+        return [r for r in ledger.rows()[n0:] if r["tool"] == "decided"]
+
+    def test_a_stop_whose_state_fails_still_has_its_decided_row(self):
+        n0 = len(ledger.rows())
+        state, d = decide.at_stop(10, {"person": False}, DET, str(Path(_TMP) / "no-such-frame.jpg"))   # see() gave no sentence
+        self.assertIsNone(state)
+        self.assertIn("KeyError", d["error"])
+        rows = self._decided_since(n0)
+        self.assertEqual(len(rows), 1, rows)
+        self.assertFalse(rows[0]["ok"])
+        self.assertEqual(rows[0]["args"]["stop"], 10)
+        self.assertEqual((rows[0]["source"], rows[0]["cached"], rows[0]["app"]), ("stub", True, "stub"))
+        self.assertIn("KeyError", rows[0]["response_or_error"])
+        self.assertIsInstance(rows[0]["latency_ms"], int)
+
+    def test_a_failed_decision_is_one_row_not_two(self):
+        n0 = len(ledger.rows())
+        with mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "abc"}):
+            state, d = decide.at_stop(10, SEEN, DET, str(Path(_TMP) / "no-such-frame.jpg"))
+        self.assertTrue(state)
+        self.assertIn("ValueError", d["error"])
+        rows = self._decided_since(n0)
+        self.assertEqual(len(rows), 1, rows)
+        self.assertFalse(rows[0]["ok"])
+
+
 class Live(unittest.TestCase):
     """The live half of the verifying command, without a key: exit 2 and a message naming JEV_API_KEY. With a key and
     an endpoint that refuses the connection: the failure is raised and is a row, never a stub decision."""
