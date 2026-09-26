@@ -32,7 +32,8 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
               the av and cv2 wheels both bundle libavdevice and clash.
   lidar:      wtdd/dog/lidar.py (lidar_on/lidar_off/lidar_points here): disableTrafficSaving(True), set_decoder("native"),
               "on" to rt/utlidar/switch, subscribe rt/utlidar/voxel_map_compressed; frames arrive LZ4-decoded as meters
-              in the voxel frame. Not yet run on this dog.
+              in the voxel frame; each decoded frame is also handed to the session's accumulator (wtdd/dog/occupancy.py).
+              Not yet run on this dog.
   auth:       firmware 1.1.15+ needs aes_128_key, fetched once with
               `unitree-fetch-aes-key --email <unitree account> --password '...' --device-type Go2`.
   discovery:  discover_ip_sn() is multicast 231.1.1.1:10131; a dog in STA mode on another subnet does not answer.
@@ -58,7 +59,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from unitree_webrtc_connect import (
@@ -249,6 +250,8 @@ class Body:
         self._lidar_n = 0
         self._lidar_err = 0
         self._lidar_at = 0.0
+        self._lidar_cb: Callable[[dict], None] | None = None   # the session's per-frame accumulator (wtdd/dog/occupancy.py), set by lidar_on
+        self._lidar_cb_err = 0                                  # frames whose callback raised: counted and logged, never raised into the driver
         self._lidar_on = False
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
 
@@ -511,8 +514,10 @@ class Body:
 
     # ---- lidar (wtdd/dog/lidar.py)
 
-    async def lidar_on(self) -> None:
-        """The dog's LiDAR voxel stream on, once per connection; decoded frames land in _on_lidar, the newest is kept."""
+    async def lidar_on(self, on_frame: Callable[[dict], None] | None = None) -> None:
+        """The dog's LiDAR voxel stream on, once per connection; decoded frames land in _on_lidar, the newest is kept and
+        each is handed to on_frame (the session's occupancy grid) when given."""
+        self._lidar_cb = on_frame
         if self._lidar_on:
             return
         await lidar.subscribe(self.conn, self._on_lidar, self._on_utpose)
@@ -548,6 +553,13 @@ class Body:
                 log("dog", "WARN lidar window center is far from the LF_SPORT_MOD_STATE position: the voxel frame may not be that odometry",
                     center_vs_odom_m=round(off, 2), frame_id=d["frame"], utlidar_pose=str(self._utpose)[:160])
         self._lidar, self._lidar_n, self._lidar_at = d, self._lidar_n + 1, now
+        if self._lidar_cb:
+            try:
+                self._lidar_cb(d)
+            except Exception as e:  # noqa: BLE001  (counted, logged, reported as cb_errors; an accumulator bug must not stop the stream)
+                self._lidar_cb_err += 1
+                if self._lidar_cb_err <= 5 or self._lidar_cb_err % 100 == 0:
+                    log("dog", "WARN lidar frame callback failed", err=f"{type(e).__name__}: {str(e)[:120]}", errors=self._lidar_cb_err)
         if self._lidar_n % 100 == 0:
             log("dog", f"lidar frames={self._lidar_n}", voxels=d["n"], errors=self._lidar_err)
 
@@ -558,7 +570,7 @@ class Body:
         """The newest decoded voxel frame and the counts: {on, n (frames), errors, age_ms, frame (None until the first:
         id, stamp, origin, resolution, width, center, voxels), points (float64 (N, 3) meters or None), utlidar_pose}."""
         d = self._lidar
-        return {"on": self._lidar_on, "n": self._lidar_n, "errors": self._lidar_err,
+        return {"on": self._lidar_on, "n": self._lidar_n, "errors": self._lidar_err, "cb_errors": self._lidar_cb_err,
                 "age_ms": round((time.monotonic() - self._lidar_at) * 1000) if d else None,
                 "frame": {"id": d["frame"], "stamp": d["stamp"], "origin": d["origin"], "resolution": d["resolution"],
                           "width": d["width"], "center": d["center"], "voxels": d["n"]} if d else None,

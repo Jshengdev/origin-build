@@ -30,7 +30,9 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
   sit:   Sit, 1.8 s, frame at 48 deg up, RiseSit.
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
-the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
+frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
+are rows, reads are not.
 """
 from __future__ import annotations
 import asyncio
@@ -42,11 +44,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import log, step
-from . import lidar, nav
+from . import lidar, nav, occupancy
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
 CAL_FILE = Path(__file__).resolve().parents[2] / "dog_cal.json"   # the last human calibration, so an API restart keeps it (runtime file)
+GRID_FILE = Path(__file__).resolve().parents[2] / "ui" / "grid.json"   # the last saved occupancy grid, POST /dog/grid {save} (runtime file, gitignored)
 DRIVE_MAX = {"x": 0.4, "y": 0.4, "z": 0.6}   # m/s, m/s, rad/s for the hand-driven remote
 DRIVE_HOLD_S = 0.6                            # a velocity older than this is a released key
 LOOKS = ("level", "tilt", "sit")
@@ -89,6 +92,9 @@ class DogSession:
         self._follower: asyncio.Task | None = None
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
+        self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
+        self._grid_lock = threading.Lock()           # frames arrive on the driver's dispatcher, reads on HTTP threads
+        self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -101,6 +107,8 @@ class DogSession:
             if st and st["age_ms"] > STALE_MS:   # the peer is gone (power cycle, hotspot drop): one logged reconnect, no loop
                 log("dog", "WARN session stale, reconnecting once", age_ms=st["age_ms"], state_n=st["n"])
                 self.recheck = True   # the page asks for the dog's position to be confirmed (a power cycle resets the odometry frame)
+                if (g := self.grid) is not None:   # not cleared here: the code cannot tell a hotspot drop (odometry kept) from a power cycle (reset)
+                    log("dog", "WARN grid kept across the reconnect: if the dog was power-cycled its odometry frame reset; clear it (POST /dog/grid {clear: true})", grid_frames=g.frames)
                 if self._driver:
                     self._driver.cancel()
                 try:
@@ -209,15 +217,17 @@ class DogSession:
 
     def lidar(self, on: bool | None = None) -> dict[str, Any]:
         """GET/POST /dog/lidar. on=True switches the dog's LiDAR voxel stream on (connecting first), on=False off, None
-        reads. Returns {on, n (frames), errors, age_ms, frame, points_px, why?}: points_px is the newest frame's
+        reads. Returns {on, n (frames), errors, cb_errors (frames the grid failed to take), grid_frames, age_ms, frame,
+        points_px, why?}; switching on hands every frame to the session grid (_on_frame). points_px is the newest frame's
         floor-to-head band in map pixels through the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
         frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
-            self.run(self.with_body(lambda b: b.lidar_on() if on else b.lidar_off()))
+            self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if self.body is None:
             return {"on": False, "n": 0, "errors": 0, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
         lp = self.body.lidar_points()
-        out = {k: lp[k] for k in ("on", "n", "errors", "age_ms", "frame", "utlidar_pose")}
+        out = {k: lp[k] for k in ("on", "n", "errors", "cb_errors", "age_ms", "frame", "utlidar_pose")}
+        out["grid_frames"] = g.frames if (g := self.grid) is not None else 0
         st = self.body.state()
         if lp["points"] is None:
             return {**out, "points_px": [], "why": "no frame yet" if lp["on"] else "lidar off"}
@@ -225,6 +235,66 @@ class DogSession:
             return {**out, "points_px": [], "why": "not calibrated"}
         xy = lidar.top_down(lp["points"])
         return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, st["position"], st["rpy"][2])}
+
+    # ---- the occupancy grid (wtdd/dog/occupancy.py): every LiDAR window this session, accumulated in odometry metres
+    def _on_frame(self, d: dict) -> None:
+        """Body._on_lidar hands every decoded frame here, on the driver's dispatcher: one count per cell per frame. A raise
+        is counted by Body (cb_errors, on GET /dog/lidar and /dog/grid) and logged there; it never stops the stream."""
+        with self._grid_lock:
+            if self.grid is None:
+                self.grid = occupancy.Grid.from_frame(d)
+                log("dog", "grid started", frame_id=d["frame"], resolution=d["resolution"], origin=[round(v, 2) for v in d["origin"][:2]])
+            t0 = time.perf_counter()
+            touched = self.grid.update_frame(d)
+            if self.grid.frames % 100 == 0:
+                log("dog", "grid", frames=self.grid.frames, cells=int((self.grid.counts > 0).sum()), shape=self.grid.shape,
+                    touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1))
+
+    def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
+        """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
+        `source` naming the grid drawn, plus cb_errors while a dog is connected. No ledger row: a read, like /dog/state."""
+        errs = {"cb_errors": self.body.lidar_points()["cb_errors"]} if self.body else {}
+        with self._grid_lock:
+            if self.grid is not None:
+                return {**occupancy.response(self.grid, self.cal, threshold, "session"), **errs}
+            # DEMO_CACHE: ui/grid.json, the last grid saved by POST /dog/grid {save: true} (or a fixture planted with
+            # `python -m wtdd.dog.occupancy --replay wtdd/dog/fixtures/voxel_frames.npz --png /tmp/g.png --save ui/grid.json`),
+            # drawn while this session has taken no LiDAR frame so the page shows the site with no dog present. Live path:
+            # POST /dog/lidar {on: true}; the first frame starts the session grid and `source` flips to "session".
+            if GRID_FILE.exists():
+                mt = GRID_FILE.stat().st_mtime
+                if self._grid_file is None or self._grid_file[0] != mt:
+                    g = occupancy.Grid.load(GRID_FILE)
+                    self._grid_file = (mt, g)
+                    log("dog", "grid loaded from file", file="ui/grid.json", frames=g.frames, cells=int((g.counts > 0).sum()), frame_id=g.frame_id)
+                return {**occupancy.response(self._grid_file[1], self.cal, threshold, "ui/grid.json"), **errs}
+        return {**occupancy.response(None, self.cal, threshold, None), **errs}
+
+    def grid_save(self) -> dict[str, Any]:
+        """POST /dog/grid {save: true}: the session grid to ui/grid.json. One dog.grid_save row; with no session grid the
+        row fails (RuntimeError) and no file is written, never an empty one."""
+        with self._grid_lock:
+            g = self.grid
+            args = {"file": "ui/grid.json", "frames": g.frames if g else 0, "frame_id": g.frame_id if g else None,
+                    "resolution": g.resolution if g else None}
+            with step("dog", "dog.grid_save", "map", args, {"file_bytes": GRID_FILE.stat().st_size if GRID_FILE.exists() else None}) as r:
+                if g is None:
+                    raise RuntimeError("no grid this session: switch the LiDAR on and walk first (POST /dog/lidar {on: true})")
+                p = g.save(GRID_FILE)
+                r["state_after"] = {"file": "ui/grid.json", "bytes": p.stat().st_size, "cells": int((g.counts > 0).sum()),
+                                    "frames": g.frames, "extent_m": g.extent_m()}
+        return r["state_after"]
+
+    def grid_clear(self, why: str) -> dict[str, Any]:
+        """POST /dog/grid {clear: true, why}: drops the session grid (after a power cycle the odometry frame reset, so the
+        old counts belong to another frame). One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
+        with self._grid_lock:
+            g = self.grid
+            before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0}
+            with step("dog", "dog.grid_clear", "map", {"why": why, **before}) as r:
+                self.grid = None
+                r["state_after"] = {"cleared": True}
+        return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
