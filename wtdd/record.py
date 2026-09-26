@@ -33,9 +33,11 @@ exists): it opens its own stop, ok false, kind none, its error the post's text, 
 error says what was searched, "no dog.look row in this shift's window": the page vouches for its window, not the
 ledger, and the usual other cause is a look that lies outside it (a night crossing midnight without WTDD_SHIFT set,
 gotcha 10-1, puts a stop's look on the other page). A
-say post stamped with the shift after its signature (dog_say pressed the next morning with WTDD_SHIFT still set: the
-post joins, being stamped, while its unstamped look lies past the window the signature closed) is never a stop, so a
-signed page's stops do not change on re-render; it is listed under after_signature and in one line on the page. A
+post of any kind stamped with the shift after its signature (dog_say's say or intruder_alarm's escalate fired the next
+morning with WTDD_SHIFT still set: the post joins, being stamped, while its unstamped look lies past the window the
+signature closed) is never a stop, never a stop's ping and never a flag, so a signed page's stops, pinged cells and
+flags do not change on re-render; it is listed under after_signature, with its trigger, rowid and ts, in one red line
+on the page. The header's rows, posts and window still count it: they count what the page read, not the record. A
 refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every other ok=false row
 is a failure. Both are listed, never hidden.
 
@@ -120,8 +122,11 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
                    for r in members if ok(r, "chat.correction") for a in [r.get("args") or {}]]
     sig = oncall.signed(shift_id, members)
     stops: list[dict] = []
-    after_sig: list[dict] = []   # say posts stamped with the shift after its signature: never a stop of the signed record
+    after_sig: list[dict] = []   # posts stamped with the shift after its signature: never a stop, a ping or a flag of the signed record
     cur = None
+
+    def late(r: dict) -> bool:   # dog_say or intruder_alarm fired after signing with WTDD_SHIFT still set: its look is outside the window
+        return sig is not None and ok(r, "chat.post") and r["ts"] > sig["ts"]
 
     def stop(r: dict, **kv: Any) -> dict:
         stops.append({"n": len(stops) + 1, "index": None, "ts": r["ts"], "kind": None, "ok": False, "fired": None, "pitch_deg": None, "error": None,
@@ -136,7 +141,7 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
             cur = stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"), pitch_deg=after.get("pitch_deg"),
                        error=None if r.get("ok") else r.get("response_or_error"))
             continue
-        if say and sig and r["ts"] > sig["ts"]:   # dog_say pressed after signing with WTDD_SHIFT still set: its look is outside the window
+        if late(r):   # any kind: a say would open a stop with no look, an escalate would ping the last signed stop
             after_sig.append({"ts": r["ts"], "trigger": a.get("trigger"), "rowid": after.get("rowid")})
             continue
         if say and (cur is None or cur["posted"] is not None):   # a look that never reached the dog, or one outside the window
@@ -160,7 +165,7 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
     flags = []
     for r in members:
         a = r.get("args") or {}
-        if ok(r, "chat.post") and a.get("kind") == "escalate":
+        if ok(r, "chat.post") and a.get("kind") == "escalate" and not late(r):   # a flag after the signature is listed, not counted
             v = next((x for x in verdicts if x["args"].get("asked") == a.get("trigger")), None)
             flags.append({"ts": r["ts"], "trigger": a.get("trigger"), "stop": _index(a.get("trigger")), "to": a.get("guid"),
                           "text": a.get("text"), "file": a.get("file"),
@@ -256,7 +261,7 @@ def html(rec: dict[str, Any]) -> str:
               if planned is not None else "<li>no planned stops in this shift's rows (no field.walk or dog.follow with stops)</li>")
     stub = (f'<p class="stub">{rec["stub_rows"]} of {rec["rows"]} rows are cached/stub: a fixture, not a night</p>' if rec["stub_rows"] else "")
     late = rec["after_signature"]
-    late = (f'<p class="bad">{len(late)} post{"s" * (len(late) != 1)} stamped after the signature, not on the record: '
+    late = (f'<p class="bad">{len(late)} post{"s" * (len(late) != 1)} stamped after the signature, not on the record (no stop, ping or flag above counts it): '
             + "; ".join(f'{_e(x["trigger"])} rowid {_e(x["rowid"])} at {_e(x["ts"])}' for x in late) + "</p>") if late else ""
     median = f'{rec["acked_median_ms"]} ms (n={len(rec["acked_ms"])}: {", ".join(map(str, rec["acked_ms"]))})' if rec["acked_ms"] else "none"
     return f"""<!doctype html>
