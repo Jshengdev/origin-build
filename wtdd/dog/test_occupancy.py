@@ -15,7 +15,8 @@ The contract under test (the grid, in the odometry frame, metres):
   grid.walls(threshold)     (M, 2) float64 metres of the cells seen >= threshold times, at cell corners
                             (index * resolution + origin, the driver's own convention for the dots)
   grid.cell(x, y)           the count at a point (0 outside the extent)
-  grid.save / Grid.load     ui/grid.json: {resolution, origin, width, frames, frame_id, cells, saved_at}
+  grid.save / Grid.load     ui/grid.json: {resolution, origin, width, frames, frame_id, cells, saved_at, cal}
+  DogSession.grid_px        a saved ui/grid.json is drawn through the calibration it was saved under, not the current one
   to_map_px(xy, cal)        vectorised nav.to_map: map pixels through the same calibration as the dots
   response(grid, cal, threshold, source)   the GET /dog/grid JSON: {n, cells_px, cell_px, threshold, resolution,
                             frames, extent_m, source, why?}; zero cells always says why
@@ -29,9 +30,11 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -200,6 +203,31 @@ class Persistence(unittest.TestCase):
         self.assertEqual(g2.frame_id, g.frame_id)
         np.testing.assert_array_equal(g2.counts, g.counts)
         np.testing.assert_array_equal(g2.walls(3), g.walls(3))
+
+    def test_a_saved_grid_is_drawn_through_the_calibration_it_was_saved_under(self):
+        """The demo-day sequence: save, battery swap (odometry resets), clear, a new "dog is here" tie. The file's cells are
+        in the OLD odometry frame, so drawing them through the new calibration would place the site wrong, silently."""
+        from .. import ledger
+        from . import session
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(session, "GRID_FILE", Path(tmp) / "grid.json"), \
+                mock.patch.object(ledger, "LEDGER", Path(tmp) / "ledger.jsonl"):
+            s = session.DogSession()
+            try:
+                s.grid, s.cal = accumulated(), dict(CAL)
+                s.grid_save()
+                want = s.grid_px(2)["cells_px"]
+                s.grid_clear("test: power cycle")
+                s.cal = {"odom": [1.0, -2.0, 0.7], "map": [300.0, 900.0], "heading": 0.0, "at": "after the power cycle"}
+                r = s.grid_px(2)
+                saved = json.loads(session.GRID_FILE.read_text())
+            finally:
+                s.loop.call_soon_threadsafe(s.loop.stop)
+                while s.loop.is_running():
+                    time.sleep(0.01)
+                s.loop.close()
+        self.assertEqual((r["source"], r["n"]), ("ui/grid.json", len(want)))
+        self.assertEqual(r["cells_px"], want, "the file grid is drawn where it was when saved, not through the new tie")
+        self.assertEqual(saved.get("cal"), CAL, "ui/grid.json carries the calibration it was saved under")
 
 
 class Replay(unittest.TestCase):
