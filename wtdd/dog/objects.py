@@ -195,7 +195,7 @@ class Store:
         self.windows = 0
         self.last_t: float | None = None     # the watch.json `t` last taken (tick)
         self.last_draft = 0.0                # time.monotonic() of the last draft attempt (draft_due)
-        self.last_why: str | None = ""       # tick's last answer, so a change is logged once
+        self.last_kind: tuple | None = None  # tick's last (no field of view, frame absent | old | fresh): a change is logged once
         self._failed: set[str] = set()
         self._warned: set[str] = set()
 
@@ -341,23 +341,27 @@ class Store:
 def tick(store: Store, watch_path, pose: dict | None, grid: occupancy.Grid | None, cal: dict | None, fov_deg: float | None,
          grid_lock=None) -> str | None:
     """Takes the detector's newest window if it is new (observe under grid_lock); returns why nothing could be placed or
-    taken (no field of view, no detector frame, a stale one), None when all is well. A change is logged once."""
+    taken (no field of view, no detector frame, a stale one), None when all is well. A change of kind (field of view
+    set or not; frame absent, old or fresh) is logged once: the why carries the age, which changes every second."""
     p = Path(watch_path)
     whys = [] if fov_deg is not None else [FOV_WHY]
     if not p.exists():
+        kind = "absent"
         whys.append(f"no detector frame: {p.name} absent (python -m wtdd.watch)")
     elif (age := time.time() - p.stat().st_mtime) > FRESH_S:
+        kind = "old"
         whys.append(f"detector frame {age:.0f} s old: {p.name} (python -m wtdd.watch)")
     else:
+        kind = "fresh"
         d = json.loads(p.read_text())
         if d.get("t") != store.last_t:
             with grid_lock or contextlib.nullcontext():
                 store.observe(d, pose, grid, cal, fov_deg)
             store.last_t = d.get("t")
     why = " · ".join(whys) or None
-    if why != store.last_why:
+    if (fov_deg is None, kind) != store.last_kind:
         log("objects", ("WARN " + why) if why else "detector windows fresh", windows=store.windows)
-        store.last_why = why
+        store.last_kind = (fov_deg is None, kind)
     return why
 
 
