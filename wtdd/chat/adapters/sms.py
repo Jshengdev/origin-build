@@ -23,9 +23,13 @@ The stub: see the DEMO_CACHE comment above class Sms.
 
 UNVERIFIED (never run against a live account): the resource shapes are Twilio's documented 2010-04-01 Message
 resource (wtdd/chat/fixtures/sms-thread.jsonl, hand-written from the docs); MMS needs an MMS-capable (US/CA) number
-and a reachable TWILIO_MEDIA_BASE; a trial account only sends to verified numbers (error 21608); `DateSent>=` is
-date-granular, so `rowid >= after` plus the seen set is the real filter (a reply in the same second as the boot mark
-is still read, once); PageSize 50 is one page, newest first; the mark is this Mac's clock against Twilio's date_sent."""
+and a reachable TWILIO_MEDIA_BASE; a trial account only sends to verified numbers (error 21608); the day filter is
+sent as the query key `DateSent>` with the date as its value, exactly as twilio-python sends date_sent_after
+(rest/api/v2010/account/message/__init__.py: `"DateSent>": serialize.iso8601_datetime(date_sent_after)`), which is
+`DateSent%3E=<day>` on the wire, the docs' "`>=YYYY-MM-DD` (to find Messages with sent_dates on and after a specific
+date)"; a 400 there raises out of replies_since and stops the listener's poll, loud. It is date-granular, so
+`rowid >= after` plus the seen set is the real filter (a reply in the same second as the boot mark is still read,
+once); PageSize 50 is one page, newest first; the mark is this Mac's clock against Twilio's date_sent."""
 from __future__ import annotations
 import time
 import uuid
@@ -193,7 +197,8 @@ class Sms:
             listed = list(self.inbox)
         else:
             import requests
-            params = {"From": h, "To": self.from_, "DateSent>=": time.strftime("%Y-%m-%d", time.gmtime(after)), "PageSize": 50}
+            day = time.strftime("%Y-%m-%d", time.gmtime(after))   # "DateSent>" = day: on the wire DateSent>=<day> (docstring)
+            params = {"From": h, "To": self.from_, "DateSent>": day, "PageSize": 50}
             listed = _ok(requests.get(self._url(".json"), params=params, auth=(self.sid, self.token), timeout=TIMEOUT_S))["messages"]
         keep = [m for m in listed if m.get("direction") == "inbound" and m.get("from") == h and m["sid"] not in self.seen
                 and epoch(m.get("date_sent") or m["date_created"]) >= after]
