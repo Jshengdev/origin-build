@@ -223,6 +223,17 @@ class Decide(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("no stop", why)
 
+    def test_a_decision_out_of_contract_fails(self):
+        """02's decided row: p a number in [0, 1], label a string. A p that is text or a missing label is out of contract."""
+        for name, mutate in (("p is a string", lambda d: d["state_after"].update(p="0.8")),
+                             ("label is None", lambda d: d["state_after"].update(label=None))):
+            with self.subTest(name):
+                rs = rows("decide")
+                mutate(rs[at(rs, "decided", stop=10)])
+                ok, why, _ = evals.grade_decide(rs)
+                self.assertFalse(ok)
+                self.assertIn("contract", why)
+
 
 class Escalate(unittest.TestCase):
     def test_the_fixture_shift_passes(self):
@@ -271,6 +282,18 @@ class Escalate(unittest.TestCase):
         ok, why, detail = evals.grade_escalate(without(rows("escalate"), "record.signed"))
         self.assertTrue(ok, why)
         self.assertIn("unsigned", detail)
+
+    def test_each_escalate_check_fails_on_its_own(self):
+        """A reply from the group is not the on-call person's (drill rows 6 and 8); a flag with no shift_id joins no record."""
+        for name, mutate, pinned in (
+                ("reply from the group", lambda rs: rs[at(rs, "intruder.verdict")]["args"].update(chat=GROUP), "1:1"),
+                ("flag without shift_id", lambda rs: rs[at(rs, "chat.post", kind="escalate")]["args"].pop("shift_id"), "shift_id")):
+            with self.subTest(name):
+                rs = rows("escalate")
+                mutate(rs)
+                ok, why, _ = evals.grade_escalate(rs)
+                self.assertFalse(ok)
+                self.assertIn(pinned, why)
 
 
 class Refuse(unittest.TestCase):
@@ -334,6 +357,18 @@ class Refuse(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("no refusal", why)
 
+    def test_each_refusal_check_fails_on_its_own(self):
+        """04's route.refused: ok false (a refusal is not a success), a reason, a shift_id."""
+        for name, mutate, pinned in (("ok true", lambda r: r.update(ok=True), "ok false"),
+                                     ("no reason", lambda r: r.update(response_or_error=""), "reason"),
+                                     ("no shift_id", lambda r: r["args"].pop("shift_id"), "shift_id")):
+            with self.subTest(name):
+                rs = rows("refuse")
+                mutate(rs[at(rs, "route.refused")])
+                ok, why, _ = evals.grade_refuse(rs, refuse_map())
+                self.assertFalse(ok)
+                self.assertIn(pinned, why)
+
 
 class Correct(unittest.TestCase):
     def test_the_fixture_failure_shot_passes(self):
@@ -382,6 +417,14 @@ class Correct(unittest.TestCase):
         ok, why, _ = evals.grade_correct(rs)
         self.assertFalse(ok)
         self.assertIn("acked", why)
+
+    def test_a_failed_decision_after_the_correction_is_not_a_re_pin(self):
+        rs = rows("correct")
+        rs[at(rs, "decided", 1, stop=10)].update(ok=False, state_after=None, response_or_error="RuntimeError: jev 500")
+        ok, why, _ = evals.grade_correct(rs)
+        self.assertFalse(ok)
+        self.assertIn("re-pin", why)
+        self.assertIn("jev 500", why)
 
 
 class Dry(unittest.TestCase):
