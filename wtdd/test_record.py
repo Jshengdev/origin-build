@@ -13,8 +13,9 @@ The binding rule the tests pin (wtdd/record.py's docstring states it): a shift's
 args.shift_id == id (03 stamps every post, reply and signature), plus the unstamped rows of its window. The window
 opens at the round's chat.wake (the nearest one before the first stamped row, with no other shift's row between) or
 at the first stamped row when there is no wake; it closes at the shift's ok record.signed row (inclusive), else at the
-next shift's opener, else at the end of the ledger (an open shift). A row stamped with another shift never joins.
-Expected numbers were counted by hand from the recipe, once, and are written here, not derived."""
+next shift's opener, else at the end of the ledger (an open shift); when both exist, whichever comes first. A row
+stamped with another shift never joins. Expected numbers were counted by hand from the recipe, once, and are written
+here, not derived."""
 from __future__ import annotations
 import contextlib
 import hashlib
