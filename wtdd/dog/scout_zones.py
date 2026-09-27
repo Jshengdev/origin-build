@@ -76,7 +76,7 @@ from typing import Any, Callable
 import numpy as np
 import requests
 
-from .. import config, field, nogo
+from .. import config, field, nogo, shift
 from ..ledger import append as ledger_append, log
 from . import objects, occupancy
 
@@ -229,7 +229,7 @@ def decide_threshold() -> float:
 
 
 def shift_id() -> str:
-    return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    return shift.current()   # S11: the run in force (shift.json, else WTDD_SHIFT, else the date), as every stamp
 
 
 def words(kind: str, conf: float, dist_m: float | None, bearing_deg: float | None, area_m2: float) -> str:
