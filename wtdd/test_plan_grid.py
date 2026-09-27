@@ -52,6 +52,7 @@ The contract under test (wtdd/plan.py; the rows in the ledger; NIGHT-1 contracts
         draws from); grid=False, or no grid, is the rooms fallback. The result carries cost_map.
 """
 from __future__ import annotations
+import asyncio
 import io
 import json
 import math
@@ -704,6 +705,36 @@ class Stuck(_Harness):
             self.assertGreater(r["args"]["dist_m"], 0)
         self.assertIn((0.0, -0.15, 0.0), self.vels, "a sidestep toward the open side first (the dog's right is -y)")
         self.assertEqual([r for r in self.decided() if r["args"]["action"] == "gave up"], [])
+
+    def test_a_sweep_that_works_restarts_the_waypoint_clock(self):
+        """Head's review: the stuck wait plus a sweep that works can outlast WP_TIMEOUT_S counted from the first
+        approach, and the follow then failed on the next tick, just after it got unstuck. A recovery that made progress
+        restarts the clock (each needs STUCK_M of real progress, so this cannot loop forever). Here the body moves 20 px
+        a tick, the recovery takes 0.6 s and works, and WP_TIMEOUT_S is 0.5 s."""
+        from wtdd.dog import session
+        s, target = self.s, (self.believed[0] + 60, self.believed[1])
+        self.enterContext(mock.patch.object(session, "WP_TIMEOUT_S", 0.5))
+
+        def step(px, py, heading, tgt, reach_px):
+            d = math.dist((px, py), tgt)
+            if d <= reach_px:
+                return {"x": 0.0, "z": 0.0, "dist_px": round(d), "err_deg": 0.0, "reached": True}
+            k = min(1.0, 20 / d)
+            self.believed[:] = [px + (tgt[0] - px) * k, py + (tgt[1] - py) * k]
+            return {"x": 0.3, "z": 0.0, "dist_px": round(d), "err_deg": 0.0, "reached": False}
+
+        self.enterContext(mock.patch.object(session.nav, "steer", step))
+        s._view = lambda: ([], None)
+        fronts = iter([0.4])
+        self.enterContext(mock.patch.object(session.plan, "ahead", lambda *a, **k: next(fronts, None)))
+
+        async def unstick(*a, **k):
+            await asyncio.sleep(0.6)
+            return True
+
+        s._unstick = unstick
+        pose = s.run(s._goto(target, 10.0, {"trace": [], "planned": []}, "the test point"), timeout=10)
+        self.assertLessEqual(math.dist(pose["p"], target), 10.0)
 
     def test_a_failed_sweep_replans_once_then_gives_up_and_moves_on(self):
         self.live([])
