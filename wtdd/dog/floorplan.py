@@ -45,7 +45,7 @@ import numpy as np
 
 from .. import ledger
 from ..ledger import log
-from . import occupancy
+from . import nav, occupancy
 
 FLOOR = 0.10   # m: layers below this are floor clutter, never part of a cell's profile. UNVERIFIED until the first live frame shows where z = 0 sits
 GROUND = 0.30   # m: a cell whose lowest layer at or above FLOOR is below this stands on the floor (grounded). UNVERIFIED
@@ -195,6 +195,16 @@ def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: flo
         out["why"] = f"floor plan: {e}"
     out["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     return out
+
+
+def to_px(res: dict[str, Any], cal: dict) -> dict[str, Any]:
+    """A run()'s result in map pixels through a calibration (occupancy.to_map_px, the LiDAR dots' own projection):
+    {cell_px, segments_px [[x0, y0, x1, y1]], class_px {name: [[px, py]] cell corners}}."""
+    r, o = res["resolution"], np.asarray(res["origin"], dtype=np.float64)
+    return {"cell_px": round(r * nav.PX_PER_M, 1),
+            "segments_px": [occupancy.to_map_px([s[:2], s[2:4]], cal).reshape(-1).tolist() for s in res["segments"]],
+            "class_px": {name: occupancy.to_map_px(np.argwhere(res["cls"] == v)[:, ::-1] * r + o, cal).tolist()
+                         for v, name in CLASS_NAMES.items()}}
 
 
 def png(grid: occupancy.Grid, cls: np.ndarray, segs: list[tuple], path) -> None:

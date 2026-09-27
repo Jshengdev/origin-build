@@ -32,10 +32,13 @@ Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
-are rows, reads are not.
+are rows, reads are not. The floor plan (wtdd/dog/floorplan.py) runs on a copy of that grid on its own thread, started
+by lidar(on=True), at most once per FLOORPLAN_S and only when the grid advanced, and on POST /dog/floorplan; each run
+is one dog.floorplan row, and GET /dog/floorplan is a read.
 """
 from __future__ import annotations
 import asyncio
+import copy
 import json
 import math
 import threading
@@ -44,7 +47,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import log, step
-from . import lidar, nav, occupancy
+from . import floorplan, lidar, nav, occupancy
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -95,6 +98,12 @@ class DogSession:
         self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
         self._grid_lock = threading.Lock()           # frames arrive on the driver's dispatcher, reads on HTTP threads
         self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
+        self._fp: tuple[dict, str, dict | None] | None = None   # the newest floor plan: (floorplan.run's result, its grid source, a file grid's saved cal)
+        self._fp_t: float | None = None       # monotonic time of the last floor plan on the session grid
+        self._fp_frames: int | None = None    # grid.frames it ran on
+        self._fp_lock = threading.Lock()      # one floor plan at a time: the ticker and the button
+        self._fp_thread: threading.Thread | None = None   # the ticker, started once by lidar(on=True), never by _on_frame
+        self.fp_errors = 0                    # ticks that raised (each already a failed row)
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -223,6 +232,9 @@ class DogSession:
         frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
+        if on is True and self._fp_thread is None:   # the floor plan's own thread, off the driver's dispatcher
+            self._fp_thread = threading.Thread(target=self._fp_loop, name="floorplan", daemon=True)
+            self._fp_thread.start()
         if self.body is None:
             return {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "grid_frames": g.frames if (g := self.grid) is not None else 0,
                     "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
@@ -249,7 +261,7 @@ class DogSession:
             touched = self.grid.update_frame(d)
             if self.grid.frames % 100 == 0:
                 log("dog", "grid", frames=self.grid.frames, cells=int((self.grid.counts > 0).sum()), shape=self.grid.shape,
-                    touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1))
+                    touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1), z_rebased=self.grid.z_rebased, z_dropped=self.grid.z_dropped)
 
     def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
@@ -306,6 +318,85 @@ class DogSession:
                 self.grid = None
                 r["state_after"] = {"cleared": True}
         return {"cleared": True, "frames_before": before["frames_before"]}
+
+    # ---- the floor plan (wtdd/dog/floorplan.py): walls and furniture from the grid's height profile, off the dispatcher
+    def floorplan_tick(self, now: float | None = None) -> dict[str, Any] | None:
+        """One floorplan.run on a copy of the session grid when grid.frames advanced since the last run and at least
+        FLOORPLAN_S after it, else None. Called by the ticker (_fp_loop), never by _on_frame or a GET."""
+        now = time.monotonic() if now is None else now
+        with self._grid_lock:   # copied under the dispatcher's lock, classified outside it
+            g = self.grid
+            if g is None or g.frames == self._fp_frames or (self._fp_t is not None and now - self._fp_t < floorplan.FLOORPLAN_S):
+                return None
+            snap, self._fp_t, self._fp_frames = copy.deepcopy(g), now, g.frames
+        return self._fp_run(snap, occupancy.THRESHOLD, "session", None)
+
+    def _fp_run(self, g: occupancy.Grid, threshold: int, source: str, cal: dict | None) -> dict[str, Any]:
+        with self._fp_lock:
+            res = floorplan.run(g, threshold, grid_source=source)
+            self._fp = (res, source, cal)
+        return res
+
+    def _fp_loop(self) -> None:
+        """The ticker thread: floorplan_tick every FLOORPLAN_S / 4. A raise (its failed row already written by step) is
+        counted, logged and becomes the newest result, so the page shows FAILED in red; the loop goes on."""
+        while True:
+            time.sleep(floorplan.FLOORPLAN_S / 4)
+            try:
+                self.floorplan_tick()
+            except Exception as e:  # noqa: BLE001  (counted, logged, served as a FAILED floor plan; never hidden)
+                self.fp_errors += 1
+                err = f"{type(e).__name__}: {str(e)[:120]}"
+                log("floorplan", "WARN tick FAILED", err=err, errors=self.fp_errors)
+                self._fp = ({"ok": False, "why": f"FAILED floor plan tick ({self.fp_errors} so far): {err}", "threshold": occupancy.THRESHOLD,
+                             "frames": self._fp_frames, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}, "session", None)
+
+    def floorplan(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
+        """POST /dog/floorplan, the button: always one run and one dog.floorplan row, on a copy of the session grid,
+        else on ui/grid.json; with no grid at all (or an unreadable file) one failed row and a RuntimeError. Returns the
+        run's JSON summary {ok, why?, threshold, frames, cells, classes, segments, ms, ts, grid_source}."""
+        with self._grid_lock:
+            snap = copy.deepcopy(self.grid) if self.grid is not None else None
+            if snap is not None:
+                self._fp_t, self._fp_frames = time.monotonic(), snap.frames
+        if snap is not None:
+            res = self._fp_run(snap, threshold, "session", None)
+        else:
+            # DEMO_CACHE: ui/grid.json, the last saved grid (or a fixture planted with `python -m wtdd.dog.floorplan
+            # --replay wtdd/dog/fixtures/voxel_furniture.npz --png /tmp/fp.png --save ui/grid.json`), classified when this
+            # session has taken no LiDAR frame, so the page shows a floor plan with no dog; its row says cached=True,
+            # source="stub", and it is drawn through the calibration saved with it. Live path: POST /dog/lidar {on: true};
+            # the ticker then runs on the session grid and `source` flips to "session".
+            why = None
+            try:
+                fg = occupancy.Grid.load(GRID_FILE) if GRID_FILE.exists() else None
+            except Exception as e:  # noqa: BLE001  (an unreadable file is the failed row below, never skipped)
+                fg, why = None, f"ui/grid.json unreadable: {type(e).__name__}: {e}"
+            if fg is None:
+                with step("dog", "dog.floorplan", "map", {"threshold": threshold, "grid_source": "ui/grid.json" if why else None},
+                          {"cells": 0, "frames": 0}):
+                    raise RuntimeError(why or "no grid: no LiDAR frames this session and no ui/grid.json")
+            res = self._fp_run(fg, threshold, "ui/grid.json", fg.cal)
+        return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution")}
+
+    def floorplan_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
+        """GET /dog/floorplan: the newest floor plan in map pixels (floorplan.to_px) through a file grid's saved
+        calibration, else the session's: {ok, threshold, frames, ms, ts, source, cell_px, classes, segments_px,
+        class_px, why?}. A read: it never runs one and writes no row; nothing yet, not calibrated, no wall, a FAILED
+        tick and a result at another threshold each say why."""
+        empty = {"segments_px": [], "classes": {}, "class_px": {}}
+        if self._fp is None:
+            return {**empty, "source": None, "why": "no floor plan yet: switch the LiDAR on and walk, or press floor plan (POST /dog/floorplan)"}
+        res, source, fcal = self._fp
+        base = {"ok": res["ok"], "threshold": res["threshold"], "frames": res["frames"], "ms": res.get("ms"), "ts": res["ts"], "source": source}
+        if "cls" not in res:   # the ticker's last attempt raised
+            return {**empty, **base, "why": res["why"]}
+        if (cal := fcal or self.cal) is None:
+            return {**empty, **base, "why": "not calibrated: drag the dog to where it is (POST /dog/calibrate)"}
+        out = {**base, "classes": res["classes"], **floorplan.to_px(res, cal)}
+        whys = ([res["why"]] if not res["ok"] else []) + \
+            ([f"the newest floor plan is at threshold {res['threshold']}, not {threshold}: press floor plan"] if threshold != res["threshold"] else [])
+        return {**out, "why": " · ".join(whys)} if whys else out
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
