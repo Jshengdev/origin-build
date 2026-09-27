@@ -25,8 +25,9 @@ run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written at
   5. dry: stop here. ignore: a stderr line (phase `ignored`). ask: ask_line with the camera's frame, pending.json
      {kind: dispatch} (phase `asked`). dispatch: DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
      len(path) * session.WP_TIMEOUT_S then stop() (phase `following`); on arrival a level look (dog_say.look_and_see) and
-     one post with the photo, or the existing who-dis ask when the DETECTOR boxed a person (phase `arrived`). Never
-     STRANGER DANGER, never light_alarm: only the thread's verdict on a who-dis sounds the alarm.
+     one post with the photo, or the existing who-dis ask when the DETECTOR boxed a person (phase `arrived`); a failed
+     detector is never "no person": the post says "detector FAILED" and the page's error carries it. Never STRANGER
+     DANGER, never light_alarm: only the thread's verdict on a who-dis sounds the alarm.
 Every refusal and failure raises, after its FAILED row, one "couldn't dispatch: ..." post (never in dry; the walk's own
 failures are told by whoever ran it: the listener, the API's reply) and the page's `failed` phase naming why, unless
 another dispatch owns the page (the lock is held, or the open question is a dispatch's).
@@ -427,15 +428,21 @@ def _walk(page: dict, s, c: dict, trigger: str) -> dict:
         page.update(reached=len(fs.get("reached") or []), of=fs.get("n"), end_pose=s.map_pose())
         ledger.log("dispatch", "arrived", cam=c["id"], reached=page["reached"], of=page["of"], p=(page["end_pose"] or {}).get("p"))
         seen = dog_say.look_and_see("level")
-        if "person" in ((seen.get("detector") or {}).get("classes") or {}):   # the detector's box, never the model's field
+        det = seen.get("detector") or {}
+        # a failed detector (look_and_see's {"error"}, its watch.boxes row ok=false) is not "no person": said in the
+        # thread and on the page, so the local person check that did not run never reads as a clear spot
+        derr = f"detector FAILED: {det['error']}" if det.get("error") else None
+        if derr:
+            ledger.log("dispatch", "WARN the arrival's local person check did not run", cam=c["id"], err=derr[:100])
+        if "person" in (det.get("classes") or {}):   # the detector's box, never the model's field
             tools.call("intruder_alarm", file=seen["file"], trigger=f"{trigger}:who", ask=True)
         else:
-            chat_post.run(text=f"here's what i see at camera {c['id']} ({c.get('label') or 'no label'}): {seen['text']}",
-                          file=seen["file"], trigger=f"{trigger}:done")
+            chat_post.run(text=f"here's what i see at camera {c['id']} ({c.get('label') or 'no label'}): {seen['text']}"
+                               + (f" [{derr[:120]}]" if derr else ""), file=seen["file"], trigger=f"{trigger}:done")
     except Exception as e:  # noqa: BLE001  (the dog.follow / dog.look / chat.* rows have it; drawn and re-raised)
         _publish(page, phase="failed", error=f"{type(e).__name__}: {e}")
         raise
-    return _publish(page, phase="arrived")
+    return _publish(page, phase="arrived", error=derr)
 
 
 def grade(rows: list[dict]) -> tuple[str, str]:
