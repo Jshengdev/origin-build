@@ -234,9 +234,6 @@ class DogSession:
     async def with_body(self, fn: Callable[[Body], Awaitable[Any]]) -> Any:
         return await fn(await self._ensure())
 
-    def connected(self) -> bool:
-        return self.body is not None
-
     def state(self) -> dict[str, Any]:
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
