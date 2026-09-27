@@ -2,12 +2,15 @@
 get(key) returns the value or raises RuntimeError when it is missing or empty (fail loud, CLAUDE.md section 2);
 maybe(key) returns None instead. Line format: KEY=value, surrounding quotes stripped, `#` starts a comment only after
 a space (keys and values may contain #). ROOT is the repo root; ledger.jsonl, memory.db and ui/ hang off it.
+API is the local API's address, http://127.0.0.1:<WTDD_API_PORT, default 7788>, read once from the process env at import
+(as commands.py read it; .env is not consulted): python -m wtdd.api serves on its port and every caller uses it.
 """
 from __future__ import annotations
 import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+API = f"http://127.0.0.1:{os.environ.get('WTDD_API_PORT', '7788')}"
 _loaded = False
 
 

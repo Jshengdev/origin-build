@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, field, ledger   # field.MAP and field.inside read at call time, so WTDD_MAP (04) and a patch apply
+from .config import API
 from .ledger import log
 
 README = config.ROOT / "README.md"
@@ -71,7 +72,6 @@ EVALS = config.ROOT / "evals.json"   # every scenario's newest rows (the remote 
 SNAPSHOT = config.ROOT / "docs" / "evidence" / "trials-2026-09-13.json"   # the measured trials the README shows; merge()'s seed without evals.json
 START, END = "<!-- trials:start -->", "<!-- trials:end -->"
 ORDER = ["twice", "walk", "look", "person", "follow", "decide", "escalate", "refuse", "correct"]   # merge() sorts on it
-API = "http://127.0.0.1:7788"
 FIXTURES = config.ROOT / "wtdd" / "fixtures" / "evals"   # <scenario>.jsonl + refuse-map.json, built by make.py there
 DRY = ("decide", "escalate", "refuse", "correct")          # graded from a ledger: a committed fixture, or --ledger on the dog
 LOCAL = ("watch.boxes", "watch.detect", "cam.detect")   # the detector's rows: the local person-in-frame stop, no model in it

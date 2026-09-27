@@ -329,7 +329,7 @@ class Listener:
             if source == "dog":   # the real dog walks the round: the API's follower drives it, the field follows its pose
                 import requests
                 avoid = (config.maybe("WTDD_ROUND_AVOID") or "1") not in ("0", "false", "no")   # 0 = follow without the dog's avoidance, by explicit choice
-                r = requests.post("http://127.0.0.1:7788/dog/follow", json={"avoid": avoid}, timeout=20).json()
+                r = requests.post(f"{config.API}/dog/follow", json={"avoid": avoid}, timeout=20).json()
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})
