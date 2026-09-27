@@ -63,6 +63,15 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 28 · sniff */
+  .streams table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 10.5px; }
+  .streams th { text-align: left; font-weight: 500; opacity: .55; padding: 0 8px 4px 0; }
+  .streams td { padding: 4px 8px 4px 0; border-top: 1px solid rgba(38,35,35,.06); vertical-align: top; white-space: nowrap; }
+  .streams td:first-child, .streams td.bad, .streams tr.why td { white-space: normal; word-break: break-word; }
+  .streams .tag { font-size: 9.5px; padding: 0 5px; border-radius: var(--r-pill); background: rgba(38,35,35,.08); opacity: .75; white-space: nowrap; }
+  .streams .badge { padding: 1px 7px; border-radius: var(--r-pill); white-space: nowrap; }
+  .streams .badge.seen { background: var(--ok); color: #fff; } .streams .badge.unverified { background: var(--warn); color: var(--ink, #262323); }
+  .streams tr.why td { border-top: 0; padding-top: 0; opacity: .6; }
 </style>
 </head>
 <body>
@@ -191,7 +200,7 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
@@ -326,6 +335,7 @@ function App() {
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
+        ${admin && html`<${Streams}/>`}
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
           <div class="hint">closer = brighter. the strip scores along its length, so a graze at its edge is dim and a pass over its middle is bright. lights in other rooms fade by the other-room factor.</div>
@@ -357,7 +367,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +375,30 @@ function App() {
     </div>
   </div>`;
 }
+// 28 · sniff · start
+// Streams: which data-channel topics the body publishes (GET /dog/streams, wtdd/dog/session.py streams): Body's live
+// counters and the ledger's dog.sniff rows. The API decides seen, error and why; the page only formats. Polled every 2 s
+// with or without a dog (rows exist without one). A failed fetch is drawn as "Streams FAILED: <reason>", never as empty.
+function Streams() {
+  const [streams, setStreams] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    const f = () => fetch(`${API}/dog/streams`).then(async r => { const b = await r.json(); if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`); setStreams(b); setErr(null); }).catch(e => setErr(e.message || String(e)));
+    f(); const t = setInterval(f, 2000); return () => clearInterval(t);
+  }, []);
+  return html`<div class="panel streams"><h2>Streams · what the body publishes</h2>
+    ${err ? html`<div class="bad">Streams FAILED: ${err}</div>` : !streams ? html`<div class="hint">reading /dog/streams…</div>` : html`<table>
+      <thead><tr><th>topic</th><th>hz</th><th>age</th><th>keys</th><th></th></tr></thead>
+      <tbody>${streams.map(e => html`<${React.Fragment} key=${e.topic}><tr>
+        <td>${e.topic}${e.owned ? html` <span class="tag">owned</span>` : ""}${e.source === "stub" ? html` <span class="tag">stub</span>` : ""}${e.last_row_ts ? html` <span class="tag">row ${e.last_row_ts.slice(11)}</span>` : ""}</td>
+        ${e.error ? html`<td colSpan=${3} class="bad">${e.error}</td>` : html`<td>${e.hz != null ? `${e.hz.toFixed(1)} Hz` : "—"}</td><td>${e.age_ms != null ? `${e.age_ms} ms` : "—"}</td><td>${e.keys_n != null ? `${e.keys_n} keys` : "—"}</td>`}
+        <td>${e.seen ? html`<span class="badge seen">seen</span>` : html`<span class="badge unverified">UNVERIFIED</span>`}</td>
+      </tr>${e.why && html`<tr class="why"><td colSpan=${5}>${e.why}</td></tr>`}<//>`)}</tbody>
+    </table>`}
+    <div class="cmd">python -m wtdd sniff topic=rt/lf/lowstate seconds=5</div>
+  </div>`;
+}
+// 28 · sniff · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
