@@ -1,8 +1,9 @@
 """A fixed camera in the same queue, offline. Run: python -m unittest wtdd.cam.test_cam -v
 Checks, through the real API handler in a thread: a fixture frame POSTed raw (image/jpeg) to /cam/<id>/frame lands as
 a file, is detected, writes one cam.frame and one cam.detect row (both carrying shift_id), is served back to the remote
-(GET /cam, GET /cam/<id>/frame.jpg); a person box while the intruder watch is armed raises the same who-dis path a stop
-raises (intruder_alarm with file=<the frame>, pending.json, one gated post), not when disarmed, and not twice inside the
+(GET /cam, GET /cam/<id>/frame.jpg); a person box while the intruder watch is armed is handed to the dispatch tool
+(item 18: tools.call("dispatch", cam, trigger, file=<the frame>) on a thread; wtdd/test_dispatch.py tests what it does),
+not when disarmed, and not twice inside the
 cooldown; garbage bytes and a failed detector are FAILED rows and error responses, never hidden; the map names the
 camera; the client posts a file source once and reports a dead server loud; cv2 never loads in the API process.
 Stubbed, and why: the detector subprocess (yolo11n.pt is gitignored and downloads on first run; a unit test never
@@ -18,6 +19,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from http.server import ThreadingHTTPServer
@@ -182,7 +184,7 @@ class Frame(Case):
 
 
 class Person(Case):
-    """A person box at the camera while the intruder watch is armed: the same who-dis path as a stop, once per cooldown."""
+    """A person box at the camera while the intruder watch is armed: handed to dispatch on a thread, once per cooldown."""
 
     def setUp(self):
         super().setUp()
@@ -201,44 +203,42 @@ class Person(Case):
         (_TMP / "intruder.on").unlink(missing_ok=True)
         (_TMP / "pending.json").unlink(missing_ok=True)
 
-    def test_person_arms_the_who_dis_path_once_per_cooldown(self):
-        n0 = len(ledger.rows())
-        status, _, data = req("POST", "/cam/lap1/frame", FRAME)   # disarmed: a person is a row, not a question
-        self.assertEqual(status, 200, data[:300])
-        r = json.loads(data)
-        self.assertEqual(r["person"]["asked"], False)
-        self.assertIn("not armed", r["person"]["why"])
-        self.assertEqual(self.posts, [])
+    def test_person_goes_to_dispatch_once_per_cooldown(self):
+        from wtdd import tools
+        n0, calls, called = len(ledger.rows()), [], threading.Event()
+
+        def fake_call(tool, **kw):   # the dispatch tool itself is wtdd/test_dispatch.py's; here only the hand-off
+            calls.append((tool, kw))
+            called.set()
+            return {"phase": "asked"}
+        with mock.patch.object(tools, "call", fake_call):
+            status, _, data = req("POST", "/cam/lap1/frame", FRAME)   # disarmed: a person is a row, not a dispatch
+            self.assertEqual(status, 200, data[:300])
+            r = json.loads(data)
+            self.assertEqual(r["person"]["asked"], False)
+            self.assertIn("not armed", r["person"]["why"])
+            self.assertFalse(called.wait(0.3))
+
+            (_TMP / "intruder.on").write_text("2026-09-26T00:00:00\n")
+            status, _, data = req("POST", "/cam/lap1/frame", FRAME)
+            self.assertEqual(status, 200, data[:300])
+            r = json.loads(data)
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["person"]["dispatched"], True)
+            self.assertTrue(r["person"]["trigger"].startswith("cam:lap1:"), r["person"])
+            self.assertTrue(called.wait(5), "the dispatch tool was never called")
+            self.assertEqual(calls, [("dispatch", {"cam": "lap1", "trigger": r["person"]["trigger"], "file": str(CAMS / "lap1.jpg")})])
+
+            status, _, data = req("POST", "/cam/lap1/frame", FRAME)   # still in view: no second dispatch inside the cooldown
+            self.assertEqual(status, 200, data[:300])
+            r = json.loads(data)
+            self.assertEqual(r["person"]["asked"], False)
+            self.assertTrue(r["person"]["why"].startswith("cooldown"), r["person"])
+            time.sleep(0.3)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.posts, [], "the camera posts nothing itself: dispatch asks")
         self.assertFalse((_TMP / "pending.json").exists())
-
-        (_TMP / "intruder.on").write_text("2026-09-26T00:00:00\n")
-        status, _, data = req("POST", "/cam/lap1/frame", FRAME)
-        self.assertEqual(status, 200, data[:300])
-        r = json.loads(data)
-        self.assertTrue(r["ok"])
-        self.assertEqual(r["person"]["asked"], True)
-        self.assertTrue(r["person"]["trigger"].startswith("cam:lap1:"), r["person"])
-        self.assertEqual(len(self.posts), 1)
-        self.assertEqual(self.posts[0]["text"], "who dis?!")
-        self.assertTrue(self.posts[0]["file"].endswith("lap1-boxed.jpg"), self.posts[0])
-        self.assertEqual(self.posts[0]["trigger"], r["person"]["trigger"])
-        pend = json.loads((_TMP / "pending.json").read_text())
-        self.assertEqual(pend["kind"], "who_dis")
-        self.assertEqual(pend["trigger"], r["person"]["trigger"])
-        self.assertEqual(pend["classes"], {"person": 1})
-        alarms = rows_since(n0, "intruder.alarm")
-        self.assertEqual(len(alarms), 1)
-        self.assertTrue(alarms[0]["ok"])
-        self.assertTrue(str(alarms[0]["args"].get("file", "")).endswith("lap1.jpg"), alarms[0]["args"])
-        self.assertTrue(alarms[0]["args"].get("ask", False))
-
-        status, _, data = req("POST", "/cam/lap1/frame", FRAME)   # still in view: no second question inside the cooldown
-        self.assertEqual(status, 200, data[:300])
-        r = json.loads(data)
-        self.assertEqual(r["person"]["asked"], False)
-        self.assertTrue(r["person"]["why"].startswith("cooldown"), r["person"])
-        self.assertEqual(len(self.posts), 1)
-        self.assertEqual(len(rows_since(n0, "intruder.alarm")), 1)
+        self.assertEqual(len(rows_since(n0, "intruder.alarm")), 0, "never straight to intruder_alarm")
         self.assertEqual(len(rows_since(n0, "cam.detect")), 3, "every frame is still its own detection row")
 
     def test_no_person_no_question(self):

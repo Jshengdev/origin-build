@@ -2,23 +2,24 @@
 <repo>/cams/ (WTDD_CAMS redirects it; the tests set a temp dir), runs the existing detector in its own process
 (python -m wtdd.watch --source <frame> --once --out <boxed>; cv2 never loads in the API process), writes one cam.frame
 and one cam.detect row, publishes <id>.json for the remote (GET /cam, GET /cam/<id>/frame.jpg), and a person box while
-the intruder watch is armed (<repo>/intruder.on, the same gate as the dog's feed) raises the same who-dis path a stop
-raises (intruder_alarm with file=<the frame>, pending.json, one gated post), at most once per COOLDOWN_S per camera.
+the intruder watch is armed (<repo>/intruder.on, the same gate as the dog's feed) is handed to dispatch on a thread
+(wtdd/dispatch.py: a route, a typed decision, the ask in the thread with the frame), at most once per COOLDOWN_S per camera.
 The contract is wtdd/cam/test_cam.py; the laptop side is wtdd/cam/__main__.py (python -m wtdd.cam).
 
   ingest(cam_id, jpeg)     the POST: cam.frame row (the file lands), cam.detect row (the detector's boxes), <id>.json, the ask
   detect_file(frame, out)  the detector subprocess, dog_say.boxed's handshake, keeping the boxes
-  person_seen(...)         the who-dis hook: None without a person box; else asked, or why not (disarmed, cooldown)
+  person_seen(...)         the dispatch hook: None without a person box; else dispatched, or why not (disarmed, cooldown)
   read_all()               every camera's newest <id>.json plus age_ms (GET /cam)
 
 Rows. cam.frame {cam, shift_id, bytes} -> state_after {file}; FAILED on a bad id or bytes that are not a JPEG (no
 detector run, no cam.detect row). cam.detect {cam, shift_id, model, classes, boxes (at most 12)} -> state_after
 {classes, n, file (the boxed copy)}, state_before = the classes this camera saw last; latency is the subprocess wall
 time (model load + predict, about 1-2 s). One row per posted frame, no HOLD: at the client's 0.5 Hz a one-frame sighting
-is a two-second event. shift_id is WTDD_SHIFT or today's date. A person raises at most one intruder.alarm row per
-camera per COOLDOWN_S, keyed cam:<id>:<epoch> so the chat's claim refuses a second post on the same key; the cooldown
-starts before the ask (wtdd/watch.py's order), so a failed ask waits for the next window instead of re-firing every frame.
-The hook is the one call in person_seen(): when item 02's decide path lands, it is re-pointed there in one line.
+is a two-second event. shift_id is WTDD_SHIFT or today's date. A person starts at most one dispatch per camera per
+COOLDOWN_S, keyed cam:<id>:<epoch> so the chat's claim refuses a second post on the same key; the cooldown starts before
+the dispatch (wtdd/watch.py's order), so a failed one waits for the next window instead of re-firing every frame.
+The hook is the one call in person_seen(): a thread running the dispatch tool (item 18), so the camera's POST returns
+at once while dispatch plans, decides, asks the thread or refuses loud (its own rows), and walks only on a person's yes.
 
 UNVERIFIED: nothing here has met a real laptop or the real detector on a real frame (the unit test stubs the
 subprocess; test_cam's LiveDetector runs it only where yolo11n.pt sits). The detector's latency per frame on the Mac
@@ -112,7 +113,7 @@ def ingest(cam_id: str, jpeg: bytes) -> dict:
 
 
 def person_seen(cam_id: str, frame: Path, boxes: list[dict]) -> dict | None:
-    """A person box at this camera: the same who-dis path the dog's stops and its feed raise, once per cooldown."""
+    """A person box at this camera while armed: handed to the dispatch tool on a thread, once per cooldown; returns now."""
     from ..ledger import log
     from ..watch import COOLDOWN_S
     if not any(b.get("name") == "person" for b in boxes):
@@ -127,10 +128,11 @@ def person_seen(cam_id: str, frame: Path, boxes: list[dict]) -> dict | None:
     if left > 0:
         return {"asked": False, "why": f"cooldown {int(left)} s"}
     key = f"cam:{cam_id}:{int(now)}"
-    log("cam", f"INTRUDER: person at camera {cam_id} while armed, asking who dis", trigger=key)
+    log("cam", f"INTRUDER: person at camera {cam_id} while armed, dispatching", trigger=key)
     from .. import tools
-    out = tools.call("intruder_alarm", file=str(frame), trigger=key)
-    return {"asked": True, "trigger": key, "post": out["post"]["rowid"], "pending": out["pending"]}
+    threading.Thread(target=tools.call, args=("dispatch",), kwargs={"cam": cam_id, "trigger": key, "file": str(frame)}, daemon=True,
+                     name=f"dispatch-{key}").start()   # 18: a dispatch can take a walk's length; the camera's POST returns now
+    return {"dispatched": True, "trigger": key}
 
 
 def read_all() -> dict:
