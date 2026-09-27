@@ -24,9 +24,15 @@ Verdicts, in the order they are decided while the files are tailed:
                                                               --replay (a fixture row never grades a live step); exit 1
   FAIL   <step> · timeout after N s: missing <tool> where <field op value>    N s since the check started (timeout_s,
                                                               or --timeout) and the next expected row never landed; exit 1
+  FAIL   <step> · the API log <path> was silent while k rows landed: fatal_warns never read · <the tee line>
+                                                              every row matched but not one new log line in SILENT_S s
+                                                              after (the API was started without the tee): a PASS
+                                                              nobody checked; exit 1
   FAIL   <step> · unchecked: ... | no API log at <path>: ... | interrupted after N s     before or instead of tailing; exit 1
+                                                              (only a step with fatal_warns reads, and needs, the API log)
   PASS   <step> · <ts> <tool> ok                               every expected row matched in order, then settle_s more
-                                                              seconds with no fatal warn and no unsafe pattern; exit 0
+                                                              seconds with no fatal warn and no unsafe pattern, and the
+                                                              API log alive when the step has fatal_warns; exit 0
 Every verdict, and every per-second `waiting` state, is written atomically (<out>.tmp, then os.replace) to
 <repo>/livecheck.json {step, title, t0, elapsed_s, seen, expected, verdict, why, deciding_row, line, short, replay, ledger,
 log}; `short` is the remote's mono line ('live · 01.3 · 12 s · rows 2/3 · waiting', 'PASS · 01.3 · dog.grid_save ok'),
@@ -63,6 +69,8 @@ STEPS = HERE / "steps.json"
 DRAFT = HERE / "steps.draft.json"
 POLL_S = 0.2            # the tail's poll: a row is graded within this of landing
 STALE_S = 3             # GET /livecheck: a waiting state older than this is a killed livecheck (the page draws it red)
+SILENT_S = 2            # live: after the last row, how long a still-silent API log may take to show a line (ledger.step
+                        # appends the row, then logs it; the tee and the poll can read them a poll apart) before FAIL
 TEE = "start the API as python -m wtdd.api 2>&1 | tee -a logs/api.log"
 MISSING = object()      # get()'s answer for a path the row does not have (None is a real value)
 OPS = ("gte", "lte", "in", "re")
@@ -207,9 +215,15 @@ class _Check:
             self.done("FAIL", line, {"log": line}, line)
 
     def settle(self) -> None:
-        if self.v is None and self.i == self.n and self.elapsed >= self.settle_until:
-            r = self.matched
-            self.done("PASS", f"{r.get('ts')} {r.get('tool')} {_okw(r)}", r, f"{r.get('tool')} {_okw(r)}")
+        if self.v is not None or self.i != self.n or self.elapsed < self.settle_until:
+            return
+        if self.spec["fatal_warns"] and not self.loglines:   # the API was started without the tee: no regex was ever tried
+            if self.replay or self.elapsed >= self.settle_until + SILENT_S:
+                self.done("FAIL", f"the API log {self.log} was silent while {self.k} rows landed: fatal_warns never read · {TEE}", None,
+                          "API log silent: fatal_warns never read")
+            return
+        r = self.matched
+        self.done("PASS", f"{r.get('ts')} {r.get('tool')} {_okw(r)}", r, f"{r.get('tool')} {_okw(r)}")
 
     def tick(self, s: int) -> None:
         phase = "settling" if self.i == self.n else "waiting"
@@ -226,7 +240,7 @@ class _Check:
         where = render_where(want.get("where") or {})
         if self.k == 0:
             say(f"WARN {self.step} · zero ledger rows landed in {self.timeout:g} s: is the API writing to {self.ledger}?")
-        if self.loglines == 0:
+        if self.spec["fatal_warns"] and self.loglines == 0:
             say(f"WARN {self.step} · zero API log lines in {self.timeout:g} s: is the API's stderr teed to {self.log}?")
         self.done("FAIL", f"timeout after {self.timeout:g} s: missing {want['tool']}" + (f" where {where}" if where else ""), None,
                   f"timeout: missing {want['tool']}")
@@ -256,11 +270,11 @@ class _Tail:
 def _live(c: _Check, from_start: bool) -> None:
     if not c.ledger.exists():
         say(f"WARN {c.step} · no ledger at {c.ledger} yet: waiting for it (the API's first row creates it)")
-    rows, logs = _Tail(c.ledger, from_start), _Tail(c.log, from_start)
+    rows, logs = _Tail(c.ledger, from_start), _Tail(c.log, from_start) if c.spec["fatal_warns"] else None
     t0, ticked = time.monotonic(), 0
     while True:
         c.elapsed = time.monotonic() - t0
-        for l in logs.lines():
+        for l in logs.lines() if logs else []:
             c.logline(l)
             if c.v:
                 return
@@ -283,7 +297,7 @@ def _live(c: _Check, from_start: bool) -> None:
 
 def _replay(c: _Check) -> None:
     """The fixture, clocked by the rows' ts at one-second resolution; every log line is read before the first tick."""
-    for l in c.log.read_text().splitlines():
+    for l in c.log.read_text().splitlines() if c.spec["fatal_warns"] else []:
         c.logline(l)
         if c.v:
             return
@@ -331,13 +345,14 @@ def run(step: str, ledger=None, log=None, replay: bool = False, timeout_s: float
         c.done("FAIL", f"unknown step {step}: not in {STEPS} (python -m wtdd.livecheck --list)", None, "unknown step")
     elif not c.n:
         c.done("FAIL", "unchecked: no rows in steps.json, this step cannot PASS", None, "unchecked: this step cannot PASS")
-    elif not c.log.exists():
+    elif spec["fatal_warns"] and not c.log.exists():
         c.done("FAIL", f"no API log at {c.log}: {TEE}", None, f"no API log at {c.log}")
     elif replay and not c.ledger.exists():
         c.done("FAIL", f"no ledger at {c.ledger}: a replay needs a fixture ledger (--ledger)", None, "no ledger to replay")
     else:
         say(f"start {step} · {'replay' if replay else 'live'} · rows {c.n} · timeout {c.timeout:g} s · settle {spec.get('settle_s', 0)} s · "
-            f"unsafe {len(spec['unsafe'])} · fatal_warns {len(spec['fatal_warns'])} · ledger {c.ledger} · log {c.log}"
+            f"unsafe {len(spec['unsafe'])} · fatal_warns {len(spec['fatal_warns'])} · ledger {c.ledger} · "
+            + (f"log {c.log}" if spec["fatal_warns"] else "log not read (no fatal_warns)")
             + (" · from the start" if from_start else ""))
         try:
             _replay(c) if replay else _live(c, from_start)
