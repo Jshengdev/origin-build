@@ -316,12 +316,13 @@ class DogSession:
         return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- the object layer (wtdd/dog/objects.py): detector boxes placed on the grid along their bearing
-    def objects_state(self, draft: bool = False) -> dict[str, Any]:
+    def objects_state(self) -> dict[str, Any]:
         """GET /dog/objects: takes the detector's newest window from watch.json if it is new, places its boxes on the
         session grid from the dog's odometry pose, and returns {n, objects, windows, fov_deg, source, why?}. The first
-        call starts the 'objects' thread, which does the same every objects.TICK_S with draft=True: the one-line drafts
-        (a model call) run there, outside every lock, never on the session loop and never inside a GET. WTDD_CAM_FOV_DEG
-        is read here, at the point of use. No ledger row for the read; the store's events are object.seen rows."""
+        call starts the 'objects' thread, which does the same every objects.TICK_S, feeds the scout, then runs the
+        one-line drafts (objects.draft_due, a model call) outside every lock, never on the session loop and never inside a
+        GET. WTDD_CAM_FOV_DEG is read here, at the point of use. No ledger row for the read; the store's events are
+        object.seen rows."""
         fov = config.maybe("WTDD_CAM_FOV_DEG")
         fov_deg = float(fov) if fov else None
         st = self.body.state() if self.body else None
@@ -334,8 +335,6 @@ class DogSession:
                 self._objects_ticker.start()
         if why:
             body["why"] = why
-        if draft:
-            objects.draft_due(self.objects)
         return body
 
     def _objects_loop(self) -> None:
@@ -348,8 +347,11 @@ class DogSession:
             if self.loop.is_closed():
                 return
             try:
-                self.objects_state(draft=True)
-                self.scout_feed()
+                self.objects_state()
+                try:   # the scout first: its cone is taken from the pose now, milliseconds after this thread's own tick pinned
+                    self.scout_feed()
+                finally:   # 07's draft (a model call that can take seconds) after it, even when the feed raised
+                    objects.draft_due(self.objects)
                 last = None
             except Exception as e:  # noqa: BLE001  (logged; the next tick tries again, the GET shows it)
                 err = f"{type(e).__name__}: {e}"
