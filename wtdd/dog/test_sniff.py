@@ -19,6 +19,9 @@ What it checks (the goal's verifying command):
   - LF_SPORT_MOD_STATE, ULIDAR_ARRAY, ROBOTODOM: nothing sent at all (no pub_sub.subscribe), still counted through
     Body's own callback, Body's own state still moves, the tap is gone afterwards; the RTC_TOPIC key is accepted;
   - an unknown topic is refused before any send, by Body and by DogSession (no connect), with its row;
+  - a non-owned topic whose one driver slot already holds a callback the sniff did not put there (30's _on_player on
+    rt/audiohub/player/state) is refused before any send, that callback left in place, with its row; a topic the sniff
+    itself subscribed before can be sniffed again;
   - every message returns with the ledger file's size unchanged (the tap never writes the ledger);
   - GET /dog/streams: the three owned topics with seen false before any message; dog.sniff rows merged (a live row
     makes a topic seen, a stub row never does, a failed row's text is served for the red cell);
@@ -277,6 +280,27 @@ class Sniff(unittest.TestCase):
         self.assertNotIn("dog.probe", seen)
         self.assertNotIn("dog.connect", seen)
         self.assertEqual(len(sniff_rows()), 2, "the session's refusal is a row too")
+
+    def test_a_slot_someone_else_holds_is_refused_before_any_send(self):
+        b, t = stub_body(), T["AUDIO_HUB_PLAY_STATE"]
+        ps = b.conn.datachannel.pub_sub
+
+        def foreign(m):   # as 30's connect() leaves Body._on_player: in the driver's one slot for the whole session
+            pass
+        ps.subscriptions[t] = foreign
+        with self.assertRaises(RuntimeError):
+            run_sniff(b, t, 1)
+        self.assertEqual(ps.sent, [], "a subscribe here would replace the callback already in the driver's one slot")
+        self.assertIs(ps.subscriptions[t], foreign, "the sniff replaced another callback in the driver")
+        self.assertFalse(b.taps.get(t), "the refused sniff left a tap behind")
+        rows = sniff_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["ok"])
+        self.assertIn(t, str(rows[0]["response_or_error"]))
+        again = T["MULTIPLE_STATE"]   # the driver keeps the sniff's own callback after unsubscribe: a re-sniff is not refused
+        for _ in range(2):
+            self.assertEqual(run_sniff(b, again, 1, data={"a": 1}, n=3)["messages"], 3)
+        self.assertEqual(ps.sent, [("subscribe", again), ("unsubscribe", again)] * 2)
 
     def test_registry_has_sniff(self):
         m = tools.registry().get("sniff")
