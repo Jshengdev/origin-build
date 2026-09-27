@@ -63,6 +63,24 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 26 · timeline-marks · start */
+  .tl-svg { width: 100%; height: auto; display: block; touch-action: manipulation; }
+  .tl-lane { font-family: var(--mono); font-size: 26px; fill: var(--ink, #262323); opacity: .7; }
+  .tl-tick { fill: var(--ink, #262323); opacity: .55; }
+  .tl-tick.tl-on { fill: var(--live, #0b0dc4); opacity: 1; stroke: var(--live, #0b0dc4); stroke-width: 8; }   /* the stroke widens a 0 ms tick so the pinned one reads */
+  .tl-tick.tl-bad { fill: var(--bad, #b2382e); opacity: .9; }   /* after .tl-on: a pinned FAILED tick stays red */
+  .tl-tick.tl-bad.tl-on { opacity: 1; stroke: var(--bad, #b2382e); }
+  .tl-tick.tl-warn { stroke: var(--warn, #d9a400); stroke-width: 4; stroke-dasharray: 8 5; opacity: .45; }   /* its ts did not parse: dashed at the left edge, never drawn as the window's first row */
+  .tl-tick.tl-warn.tl-on { opacity: 1; }
+  .tl-hit { fill: transparent; cursor: pointer; }
+  .tl-mk { fill: var(--live, #0b0dc4); pointer-events: none; } .tl-mk.tl-bad { fill: var(--bad, #b2382e); }
+  .tl-mk.tl-warn { stroke: var(--warn, #d9a400); stroke-width: 2; stroke-dasharray: 3 2; opacity: .35; }   /* no age: a fixed low opacity, never the newest row's 1 */
+  .tl-ring { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 5; pointer-events: none; animation: tl-pulse 1.1s ease-in-out infinite alternate; }
+  .tl-ring.tl-bad { stroke: var(--bad, #b2382e); }
+  .tl-arrow { stroke: var(--live, #0b0dc4); stroke-width: 4; stroke-linecap: round; pointer-events: none; } .tl-arrow.tl-bad { stroke: var(--bad, #b2382e); }
+  .tl-path { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 4; stroke-linejoin: round; pointer-events: none; }
+  @keyframes tl-pulse { from { stroke-opacity: 1; } to { stroke-opacity: .15; } }
+  /* 26 · timeline-marks · end */
 </style>
 </head>
 <body>
@@ -110,6 +128,8 @@ function App() {
   const [chat, setChat] = useState(null);   // GET /chat: the listener's heartbeat
   useEffect(() => { const f = () => fetch("/chat").then(r => r.json()).then(setChat).catch(() => setChat(null)); f(); const t = setInterval(f, 3000); return () => clearInterval(t); }, []);
   useEffect(() => { const t = setInterval(() => fetch("/ledger?n=150").then(r => r.json()).then(setLedger), 2000); return () => clearInterval(t); }, []);   // 150: the eye panel looks back past a walk's writes; receipts show the newest 25
+  const tl = useMarks();   // 26 · timeline-marks
+  const [pin, setPin] = useState(null);   // 26 · timeline-marks: the tapped tick's ledger index (a second tap unpins)
 
   const run = async (name, args) => { setBusy(name); const out = await call(name, args); setLast(out); setBusy(null); if (name === "lights_status" && out.ok) setStatus(out.result); return out; };
   const toMap = e => { const svg = svgRef.current, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse()); return [Math.round(p.x), Math.round(p.y)]; };
@@ -191,7 +211,7 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
@@ -274,6 +294,7 @@ function App() {
                 <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°</text></g>`;
             })()}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
+            <${MarksLayer} tl=${tl} pin=${pin}/>
           </svg>`}
         </div>
         <div class="panel">
@@ -326,6 +347,7 @@ function App() {
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
+        <${Timeline} tl=${tl} pin=${pin} setPin=${setPin}/>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
           <div class="hint">closer = brighter. the strip scores along its length, so a graze at its edge is dim and a pass over its middle is bright. lights in other rooms fade by the other-room factor.</div>
@@ -357,7 +379,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +387,63 @@ function App() {
     </div>
   </div>`;
 }
+// 26 · timeline-marks · start
+// Timeline: GET /marks?n=2000 every 5 s, its own window (App's 150-row poll loses rows under a round's writes, gotcha
+// 08-2); one lane per agent, one tick per row, width from latency_ms, red for ok=false. MarksLayer: each row's place on
+// the map. Every place, metre and age is served by wtdd/marks.py; the page scales and looks up, it never subtracts.
+// A tap is pointerdown (the superintendent's tablet), never hover: it pins the ring (or the arrow with its metres) and a
+// second tap unpins. A failed read is a red "FAILED GET /marks · <error>" line, never an empty timeline.
+function useMarks() {
+  const [tl, setTl] = useState(null);
+  useEffect(() => {
+    const f = () => fetch("/marks?n=2000").then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }).then(setTl).catch(e => setTl({ error: String(e) }));
+    f(); const t = setInterval(f, 5000); return () => clearInterval(t);
+  }, []);
+  return tl;
+}
+const tlAge = r => r.age_s != null ? `${r.age_s} s` : "age unknown: its ts did not parse";
+const tlNoTs = r => r.t_s == null || r.age_s == null;   // the server could not parse this row's ts (it WARNs): drawn dashed in --warn
+function Timeline({ tl, pin, setPin }) {
+  if (!tl) return html`<div class="panel"><h2>Timeline · every row a tick</h2><div class="mono">reading /marks…</div></div>`;
+  if (tl.error) return html`<div class="panel"><h2>Timeline · every row a tick</h2><div class="mono bad">FAILED GET /marks · ${tl.error}</div></div>`;
+  if (!tl.rows.length) return html`<div class="panel"><h2>Timeline · every row a tick</h2><div class="mono" style=${{ color: "var(--warn)" }}>no rows in the ledger</div></div>`;
+  // A draw scale in viewBox units, not numbers. span_s is 0 for a one-second window (a unit span keeps x finite) and null when
+  // no ts parsed; a row whose ts did not parse is drawn dashed at the left edge and counted in the warn line under the svg.
+  const LANE = 48, X0 = 140, W = 840, s = tl.span_s || 1;
+  const p = tl.rows.find(r => r.i === pin), k = p?.mark, noTs = tl.rows.filter(tlNoTs).length;
+  // Drawn in two passes (gotcha 26-3): every row's tap pad first, then every visible tick on top, so a finger on a tick pins
+  // that tick and a pad only catches a tap that misses every tick. Same-second rows still stack: the last one drawn wins.
+  const tap = i => () => setPin(q => q === i ? null : i);
+  const at = tl.rows.map(r => ({ r, x: r.t_s == null ? X0 : X0 + r.t_s / s * W, w: Math.max(3, (r.latency_ms || 0) / 1000 / s * W), y: tl.lanes.indexOf(r.agent) * LANE + 8 }));
+  return html`<div class="panel"><h2>Timeline · every row a tick</h2>
+    <svg class="tl-svg" viewBox=${`0 0 1000 ${tl.lanes.length * LANE + 8}`}>
+      ${tl.lanes.map((a, j) => html`<text key=${"lane" + j} class="tl-lane" x="0" y=${j * LANE + 34}>${a}</text>`)}
+      ${at.map(({ r, x, w, y }) => html`<rect key=${"pad" + r.i} class="tl-hit" data-pad=${r.i} x=${x - 8} y=${y - 4} width=${Math.max(24, w + 16)} height=${LANE} onPointerDown=${tap(r.i)}/>`)}
+      ${at.map(({ r, x, w, y }) => html`<g key=${r.i} data-i=${r.i} onPointerDown=${tap(r.i)}>
+          <title>${r.tool} · ${r.ts} · ${r.latency_ms} ms · ${r.mark ? (r.mark.why || "on the map") : "no place on this row"}</title>
+          <rect class=${"tl-tick" + (r.i === pin ? " tl-on" : "") + (r.ok ? "" : " tl-bad") + (tlNoTs(r) ? " tl-warn" : "")} x=${x} y=${y} width=${w} height="32"/></g>`)}
+    </svg>
+    ${noTs > 0 && html`<div class="mono" style=${{ color: "var(--warn)" }}>${noTs} ${noTs === 1 ? "row has" : "rows have"} a ts that did not parse (dashed, at the left edge)</div>`}
+    <div class=${"mono" + (p && !p.ok ? " bad" : "")}>${p
+      ? `pinned · ${p.tool}${p.ok ? "" : " FAILED"} · ${tlAge(p)}${k?.m != null ? ` · ${k.m} m` : ""}${k?.why ? ` · ${k.why}` : ""}${k ? "" : " · no place on this row"}`
+      : `${tl.n} of ${tl.total} rows · tap a tick to see its place`}</div>
+  </div>`;
+}
+function MarksLayer({ tl, pin }) {
+  if (!tl?.rows) return null;
+  const p = tl.rows.find(r => r.i === pin), k = p?.mark, bad = p && !p.ok ? " tl-bad" : "";
+  const fade = r => r.age_s == null ? null : Math.max(.15, 1 - r.age_s / 3600);   // a draw scale (faint after an hour), not a number; no age: .tl-warn's fixed low opacity
+  return html`<g>
+    <defs>${["", "-bad"].map(b => html`<marker key=${b} id=${"tl-head" + b} viewBox="0 0 10 10" refX="7" refY="5" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0L10 5L0 10z" class=${"tl-mk" + (b ? " tl-bad" : "")}/></marker>`)}</defs>
+    ${tl.rows.filter(r => r.mark?.px).map(r => html`<circle key=${r.i} class=${"tl-mk" + (r.ok ? "" : " tl-bad") + (tlNoTs(r) ? " tl-warn" : "")} cx=${r.mark.px[0]} cy=${r.mark.px[1]} r="5" opacity=${fade(r)}/>`)}
+    ${k?.px && html`<g>
+      ${k.pts && html`<polyline class="tl-path" points=${k.pts.map(q => q.join(",")).join(" ")}/>`}
+      ${k.px2 && html`<line class=${"tl-arrow" + bad} x1=${k.px2[0]} y1=${k.px2[1]} x2=${k.px[0]} y2=${k.px[1]} markerEnd=${`url(#tl-head${bad ? "-bad" : ""})`}/>`}
+      <circle class=${"tl-ring" + bad} cx=${k.px[0]} cy=${k.px[1]} r="26"/>
+      <text class="lbl" x=${k.px[0] + 16} y=${k.px[1] - 16}>${p.tool}${p.ok ? "" : " FAILED"}${k.m != null ? ` · ${k.m} m` : ""}</text></g>`}
+  </g>`;
+}
+// 26 · timeline-marks · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
