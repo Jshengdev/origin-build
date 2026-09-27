@@ -635,9 +635,9 @@
       "item": "14", "step": "14.3", "pr": null,
       "title": "closure within 10° on the IMU versus 05a's utlidar yaw and 05b's summed dtheta (or `absent`).",
       "do": "The same press as 14.1. Eyes: the dog's nose is back where it started.",
-      "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.closed": true, "state_after.closed_deg": {"gte": 350, "lte": 370}}}],
+      "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.closed": true}}],
       "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
-      "note": "closed is |turned - 360| <= 10 on the IMU (feat/14-scout-spin RED test); a turn that did not close is ok true, closed false: a WARN here. The comparison with 05a's utlidar yaw and 05b's summed dtheta (or absent) is read off the same row by a person."
+      "note": "closed is the device's own verdict, ||turned| - 360| <= 10 on the IMU in either direction: feat/14-scout-spin's RED test closes a clockwise spin (negative z) on its magnitude, with closed_deg == turned_deg near -360, so closed_deg carries no bounds here. A turn that did not close is ok true, closed false: a WARN here. The comparison with 05a's utlidar yaw and 05b's summed dtheta (or absent) is read off the same row by a person."
     },
     {
       "item": "14", "step": "14.4", "pr": null,
