@@ -53,6 +53,9 @@ by lidar(on=True), at most once per FLOORPLAN_S and only when the grid advanced,
 is one dog.floorplan row, and GET /dog/floorplan is a read.
 Objects: every detector window (<repo>/watch.json) is placed on that grid behind GET
 /dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen.
+Blob labels: POST /dog/blobs at a stop names what the floor plan drew from a photo of it (wtdd/dog/blobs.py, one
+blob.labelled row per label); GET /dog/blobs pins the newest labels and GET /dog/floorplan greys the runs a furniture
+label moved.
 
 Re-correction (wtdd/dog/localize.py, 05b). Every window after the first is matched against the grid before it is drawn:
 its band cells through the correction held (self.corr, a rigid 2D transform in the odometry frame) against the cells
@@ -78,6 +81,7 @@ the fallback is a queue and one worker thread (not built: the first live run rea
 from __future__ import annotations
 import asyncio
 import copy
+import io
 import json
 import math
 import threading
@@ -86,8 +90,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import append, log, step
-from . import floorplan, lidar, localize, nav, objects, occupancy
-from .. import config, plan
+from . import blobs, floorplan, lidar, localize, nav, objects, occupancy
+from .. import config, decide, plan
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -174,6 +178,7 @@ class DogSession:
         self._fp_lock = threading.Lock()      # one floor plan at a time: the ticker and the button
         self._fp_thread: threading.Thread | None = None   # the ticker, started once by lidar(on=True), never by _on_frame
         self.fp_errors = 0                    # ticks that raised (each already a failed row)
+        self._labels: dict[str, Any] | None = None   # the newest blob press: {labels, source, ts, why?}; a FAILED press is labels [] and why
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -500,6 +505,7 @@ class DogSession:
                 r["state_after"] = {"cleared": True, "corr_reset": True, "recheck": self.recheck}
         with self._fp_lock:   # after a run in flight on the old grid has landed, so its result is dropped too
             self._fp = self._fp_t = self._fp_frames = None
+        self._labels = None   # the labels named that grid's runs
         return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- the object layer (wtdd/dog/objects.py): detector boxes placed on the grid along their bearing
@@ -609,13 +615,13 @@ class DogSession:
                 self._fp = ({"ok": False, "why": f"FAILED floor plan press: {type(e).__name__}: {str(e)[:120]}", "threshold": threshold,
                              "frames": g.frames if g is not None else 0, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}, source, None)
             raise
-        return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution")}
+        return {k: v for k, v in res.items() if k not in ("cls", "runs", "full", "origin", "resolution")}
 
     def floorplan_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/floorplan: the newest floor plan in map pixels (floorplan.to_px) through a file grid's saved
-        calibration, else the session's: {ok, threshold, frames, ms, ts, source, cell_px, classes, segments_px,
-        class_px, why?}. A read: it never runs one and writes no row; nothing yet, not calibrated, no wall, a FAILED
-        tick and a result at another threshold each say why."""
+        calibration, else the session's, with the labels in force erased into it (16): {ok, threshold, frames, ms, ts,
+        source, cell_px, classes, segments_px, class_px, moved, why?}. A read: it never runs one and writes no row;
+        nothing yet, not calibrated, no wall, a FAILED tick and a result at another threshold each say why."""
         empty = {"segments_px": [], "classes": {}, "class_px": {}}
         if self._fp is None:
             return {**empty, "source": None, "why": "no floor plan yet: switch the LiDAR on and walk, or press floor plan (POST /dog/floorplan)"}
@@ -625,10 +631,77 @@ class DogSession:
             return {**empty, **base, "why": res["why"]}
         if (cal := fcal or self.cal) is None:
             return {**empty, **base, "why": "not calibrated: drag the dog to where it is (POST /dog/calibrate)"}
-        out = {**base, "classes": res["classes"], **floorplan.to_px(res, cal)}
+        if (lab := self._labels_now()) and lab["labels"]:   # 16: a furniture label greys its run; the geometry stays 15's
+            e = blobs.erase(res, lab["labels"])
+            res = {**res, "cls": e["cls"], "segments": e["segments"], "classes": floorplan._counts(e["cls"]), "moved": e["moved"]}
+        out = {**base, "classes": res["classes"], **floorplan.to_px(res, cal), "moved": res.get("moved", [])}
         whys = ([res["why"]] if not res["ok"] else []) + \
             ([f"the newest floor plan is at threshold {res['threshold']}, not {threshold}: press floor plan"] if threshold != res["threshold"] else [])
         return {**out, "why": " · ".join(whys)} if whys else out
+
+    # ---- blob labels (wtdd/dog/blobs.py): a word and a p for what the floor plan drew, from a photo of it
+    def blobs_label(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
+        """POST /dog/blobs, the press at a stop: the live frame, the dog's pose (as objects_state reads it),
+        WTDD_CAM_FOV_DEG and a copy of the session grid -> blobs.label_stop; its rows are the blob.labelled rows. No dog, no
+        pose, no grid or no field of view is one failed blob.labelled row (app unitree), never a connect, and a raise; a
+        failed press becomes the newest labels, so GET /dog/blobs keeps it red. Returns {labelled, skipped, failed, labels}."""
+        fov = config.maybe("WTDD_CAM_FOV_DEG")
+        st = self.body.state() if self.body else None
+        pose = {"position": list(st["position"][:2]), "yaw": st["rpy"][2]} if st and st.get("position") and st.get("rpy") else None
+        why = ("no dog: connect it first (any dog command), then press at a stop" if self.body is None else
+               "no pose: the dog's state has no position or yaw yet" if pose is None else
+               "no grid: switch the LiDAR on and walk first (POST /dog/lidar {on: true})" if self.grid is None else
+               objects.FOV_WHY if not fov else None)
+        try:
+            if why:
+                raise RuntimeError(why)
+            from PIL import Image
+            img = Image.open(io.BytesIO(self.snapshot())).convert("RGB")
+            with self._grid_lock:
+                g = copy.deepcopy(self.grid)
+            out = blobs.label_stop(g, img, pose, float(fov), threshold)
+        except Exception as e:  # noqa: BLE001  (a press that failed before any blob: one failed row, kept red on the page, raised for the 500)
+            self._labels = {"labels": [], "source": "session", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "why": f"FAILED name blobs press: {type(e).__name__}: {str(e)[:160]}"}
+            before = {"connected": self.body is not None, "pose": pose, "fov_deg": fov, "grid_frames": self.grid.frames if self.grid else 0}
+            # args.threshold is WTDD_DECIDE_THRESHOLD on every blob.labelled row, None here as in label() before it is read
+            with step("blobs", "blob.labelled", "unitree", {"blob_id": None, "lidar_threshold": threshold, "threshold": None,
+                                                             "shift_id": decide.shift_id()}, before):
+                raise
+        self._labels = {"labels": out["labels"], "source": "session", "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        return {"labelled": len(out["labels"]), "skipped": out["skipped"], "failed": sum(1 for x in out["labels"] if x.get("error")),
+                "labels": [{k: v for k, v in x.items() if k != "cells"} for x in out["labels"]]}
+
+    def _labels_now(self) -> dict[str, Any] | None:
+        """The labels in force: a planted file under WTDD_BLOBS, else the newest press's, else None."""
+        f = config.maybe("WTDD_BLOBS")
+        if f:
+            # DEMO_CACHE: WTDD_BLOBS=<file> serves that file's {labels: [records]} (wtdd/dog/fixtures/blobs.json: the
+            # shelf's run named shelf at p 0.91, the far wall named wall, the table's label FAILED; every cell one the
+            # fixture's LiDAR saw) instead of the session's, for the page's dry check with no dog and no key; GET
+            # /dog/floorplan greys what it names, as it would a press's. Live: unset it and press name blobs at a stop.
+            path = Path(f) if Path(f).is_absolute() else config.ROOT / f
+            return {"labels": json.loads(path.read_text())["labels"], "source": f"fixture: {f}"}
+        return self._labels
+
+    def blobs_px(self) -> dict[str, Any]:
+        """GET /dog/blobs: the labels in force, each pinned at its centre through the floor plan's saved calibration, else
+        the session's: {labels: [record without cells + pos_px], source, moved, ts?, why?}. Each label's erase and `moved`
+        are the same blobs.erase GET /dog/floorplan draws (the newest plan, the threshold now), never the flag stamped when
+        the label was made; no drawn plan, nothing greyed. A read: no row, no model."""
+        lab = self._labels_now()
+        if lab is None:
+            return {"labels": [], "source": None, "moved": [], "why": "no labels yet: press name blobs at a stop (POST /dog/blobs)"}
+        res, _src, fcal = self._fp or (None, None, None)
+        cal = fcal or self.cal
+        e = (blobs.erase(res, lab["labels"]) if cal and res and "cls" in res and lab["labels"] else
+             {"moved": [], "erased": [False] * len(lab["labels"])})
+        out = {**lab, "moved": e["moved"], "labels": [{**{k: v for k, v in x.items() if k != "cells"}, "erase": hit,
+                                                       "pos_px": occupancy.to_map_px([x["xy"]], cal)[0].tolist() if cal else None}
+                                                      for x, hit in zip(lab["labels"], e["erased"])]}
+        if cal is None:
+            out["why"] = " · ".join(filter(None, [lab.get("why"), "not calibrated: drag the dog to where it is (POST /dog/calibrate)"]))
+        return out
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
