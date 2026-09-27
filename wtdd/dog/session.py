@@ -31,6 +31,8 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+The head light follows the session (wtdd/dog/led.py: cyan on lidar(True) and the follow's start, green at its end, red
+on stop()), and state() serves its last request as .led; WTDD_STATE_FIXTURE is the DEMO_CACHE state (below, in state()).
 """
 from __future__ import annotations
 import asyncio
@@ -41,8 +43,10 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .. import config
 from ..ledger import log, step
 from . import lidar, nav
+from . import led   # 25 · the head light's hooks
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -81,6 +85,7 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
             self.cal = json.loads(CAL_FILE.read_text())
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
@@ -129,10 +134,15 @@ class DogSession:
         return self.body is not None
 
     def state(self) -> dict[str, Any]:
+        # DEMO_CACHE: WTDD_STATE_FIXTURE=<json> serves that planted file as GET /dog/state with source "stub", for the dry
+        # screenshots of the body items (24, 25, 29, 30); it is never set in a live run: unset it and the live body is served.
+        if config.maybe("WTDD_STATE_FIXTURE"):
+            return {**json.loads((config.ROOT / config.maybe("WTDD_STATE_FIXTURE")).read_text()), "source": "stub"}
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
+                "led": self.body.led_state and dict(self.body.led_state) if self.body else None,   # 25 · the head light's last request (acked = code 0)
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
 
@@ -214,6 +224,7 @@ class DogSession:
         frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on() if on else b.lidar_off()))
+            if on: led.hook("scanning")   # 25 · cyan: the scan is on
         if self.body is None:
             return {"on": False, "n": 0, "errors": 0, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
         lp = self.body.lidar_points()
@@ -264,6 +275,7 @@ class DogSession:
         log("dog", "follow from waypoint", start=start, n=len(path), near_start=near_start, dist_to_start_px=round(math.dist(path[0], pose["p"])))
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
                              "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid)}
+        led.hook("scanning")   # 25 · cyan: the walk starts
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -310,6 +322,7 @@ class DogSession:
                                 await asyncio.sleep(0.2)
                             fs["stopped_at"] = None
                     fs["done"] = True
+                    led.hook("clear")   # 25 · green: the follow reached its end
                 finally:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
                     await self._halt()
@@ -354,6 +367,7 @@ class DogSession:
         out: dict[str, Any] = {"vel": [0.0, 0.0, 0.0]}
         if self.body is not None:
             out["halt"] = self.run(self._halt(), timeout=10)
+        led.hook("halted")   # 25 · red: halted (after the halt, so StopMove is never queued behind a light)
         return out
 
     async def _halt(self) -> dict[str, Any]:

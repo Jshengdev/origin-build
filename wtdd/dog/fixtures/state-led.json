@@ -1,0 +1,14 @@
+{
+ "connected": true,
+ "moving": false,
+ "vel": [0.0, 0.0, 0.0],
+ "state": {"mode": 0, "gait_type": 0, "progress": 0, "position": [0.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0], "yaw_speed": 0.0,
+           "body_height": 0.31, "range_obstacle": null, "rpy": [0.0, 0.0, 0.0], "n": 1, "hz": 20.0, "age_ms": 40},
+ "map": {"p": [448, 455], "heading_deg": 94.3},
+ "calibrated": true,
+ "follow": {},
+ "avoid": false,
+ "recheck": false,
+ "rec": null,
+ "led": {"color": "cyan", "seconds": 5, "flash_ms": null, "code": 0, "at": 1790466022.0}
+}

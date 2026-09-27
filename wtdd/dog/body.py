@@ -40,6 +40,11 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
   navigation: the driver names LiDAR mapping and navigation topics but implements no example for them; there is
               no waypoint navigation here. A route is a scripted list of moves with avoidance on
               (TrajectoryFollow 1018 exists for short trajectories if ever needed).
+  vui:        RTC_TOPIC["VUI"] = rt/api/vui/request, the head light. The wheel names only the topic and VUI_COLOR
+              (constants.py:83, :343-350); the ids are from upstream legion1581/go2_webrtc_connect
+              examples/go2/data_channel/vui/vui.py: 1007 {color, time, flash_cycle (ms, "between 499 and time*1000")},
+              1006 brightness read-back {brightness}, 1005 brightness set. No colour getter exists. UNVERIFIED on this
+              dog: the request shape, the `time` ceiling, the flash_cycle bounds, whether 1006 answers (led() below).
 
 Johnny must do. 1) Put the dog on the house Wi-Fi in STA mode via the Unitree Go app and set UNITREE_ROBOT_IP
 in .env. 2) Read the firmware version in the app; if 1.1.15 or newer, fetch the key (above) into
@@ -68,7 +73,7 @@ from unitree_webrtc_connect import (
     WebRTCConnectionMethod,
     discover_ip_sn,
 )
-from unitree_webrtc_connect.constants import DATA_CHANNEL_TYPE
+from unitree_webrtc_connect.constants import DATA_CHANNEL_TYPE, VUI_COLOR
 from unitree_webrtc_connect.unitree_auth import _probe_tcp_port
 
 from .. import config
@@ -93,6 +98,13 @@ ALLOW = frozenset({
 _missing = ALLOW - SPORT_CMD.keys()
 if _missing:
     raise ImportError(f"[wtdd:dog] allowlist names not in the installed SPORT_CMD: {sorted(_missing)}")
+
+# The head light (VUI service). The ids come from upstream legion1581/go2_webrtc_connect
+# examples/go2/data_channel/vui/vui.py; the wheel names only RTC_TOPIC["VUI"] and VUI_COLOR (constants.py:83, :343-350).
+# Every request shape here is UNVERIFIED on this dog.
+VUI_BRIGHTNESS_SET, VUI_BRIGHTNESS_GET, VUI_COLOR_SET = 1005, 1006, 1007
+VUI_ALLOW = frozenset({VUI_BRIGHTNESS_SET, VUI_BRIGHTNESS_GET, VUI_COLOR_SET})   # anything else on the VUI topic is refused before any send (README's allowlist assertion)
+VUI_COLORS = frozenset(v for k, v in vars(VUI_COLOR).items() if k.isupper())    # white red yellow blue green cyan purple
 
 MAX_SPEED = 0.8            # m/s for x and y, rad/s for z; the ceiling for any move
 MAX_MOVE_S = 20.0          # per move() call
@@ -251,6 +263,9 @@ class Body:
         self._lidar_at = 0.0
         self._lidar_on = False
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
+        self.led_state: dict | None = None   # the last head-light request {color, seconds, flash_ms, code, at, error?}: GET /dog/state .led, never mined from the ledger
+        self._led_keeper = None              # the held colour's resend task and its generation (wtdd/dog/led.py hold)
+        self._led_gen = 0
 
     # ---- connection
 
@@ -400,6 +415,60 @@ class Body:
                 raise RuntimeError(f"{name} refused by the dog: code={code}")
             r["state_after"] = await self.fresh_state(required=True)
         return code
+
+    async def vui(self, api_id: int, parameter: Any = None) -> tuple[int, dict]:
+        """One request on the VUI service (the head light). An id outside VUI_ALLOW is refused before any send. Writes no
+        row of its own: every caller writes one."""
+        if api_id not in VUI_ALLOW:
+            raise PermissionError(f"VUI api_id {api_id} is not in VUI_ALLOW {sorted(VUI_ALLOW)} (wtdd/dog/body.py)")
+        return await self._request(RTC_TOPIC["VUI"], api_id, parameter)
+
+    async def led(self, color: str, seconds: float, flash_ms: float | None = None, resend: int = 0, **row: Any) -> dict:
+        """The head light: VUI 1007 {color, time, flash_cycle?} for `seconds`, then 1006 for the brightness. One dog.led row
+        per request (a resend says args.resend = k). state_after is {brightness} when 1006 answers, else "no read-back";
+        the colour itself has no getter, so the ack is its receipt. A colour outside VUI_COLOR is refused before any send;
+        a non-zero code raises; both are FAILED rows and .led carries {code, error}. A cancel (a newer state) before the
+        ack is a FAILED row; after the ack the row stays ok, its readback says it was superseded, and the cancel is
+        re-raised once the row is written. A stub caller passes cached=True, source="stub" (the only keys taken from
+        **row). Returns led_state."""
+        if set(row) - {"cached", "source"}:
+            raise TypeError(f"led() takes cached/source only, got {sorted(row)}")
+        args = {"color": color, "seconds": seconds, "flash_ms": flash_ms, **({"resend": resend} if resend else {})}
+        before = dict(self.led_state) if self.led_state else None
+        st = self.led_state = {"color": color, "seconds": seconds, "flash_ms": flash_ms, "code": None, "at": None}   # local: a newer request replaces it
+        gone, superseded = "CancelledError: superseded by a newer state", None
+        with step("dog", "dog.led", "unitree", args, before) as r:
+            r.update(row)
+            try:
+                if color not in VUI_COLORS:
+                    raise PermissionError(f"colour {color!r} is not in VUI_COLOR {sorted(VUI_COLORS)}")
+                t = int(seconds) if float(seconds).is_integer() else float(seconds)   # the example sends time=5; 5.0 is other bytes
+                param = {"color": color, "time": t, **({"flash_cycle": int(flash_ms)} if flash_ms is not None else {})}
+                code, data = await self.vui(VUI_COLOR_SET, param)
+                st.update(code=code, at=time.time())
+                if code != 0:
+                    raise RuntimeError(f"led {color} refused by the dog: code={code}")
+                r["response_or_error"] = {"led": data}
+                try:
+                    bcode, bdata = await self.vui(VUI_BRIGHTNESS_GET)
+                    r["response_or_error"]["readback"] = bdata
+                    if bcode != 0:
+                        raise RuntimeError(f"brightness read-back (1006) refused: code={bcode}")
+                    r["state_after"] = {"brightness": json.loads(bdata["data"])["brightness"]}
+                except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001  (the colour was acked: the row stays ok and says why there is no read-back, never a default; a cancel here is re-raised after the row)
+                    superseded = e if isinstance(e, asyncio.CancelledError) else None
+                    r["state_after"] = "no read-back"
+                    r["response_or_error"]["readback"] = gone if superseded else f"{type(e).__name__}: {e}"
+                    log("dog", "WARN led acked, brightness not read back", color=color, err=r["response_or_error"]["readback"][:100])
+            except asyncio.CancelledError:   # superseded before the ack; BaseException, so step() would give no reason
+                r["response_or_error"] = st["error"] = gone
+                raise
+            except Exception as e:
+                st["error"] = f"{type(e).__name__}: {e}"
+                raise
+        if superseded is not None:
+            raise superseded
+        return dict(st)
 
     async def _tick(self, via: str, x: float, y: float, z: float) -> int | None:
         """One velocity tick. via "avoid": OBSTACLES_AVOID MOVE 1003, no reply, returns None.
