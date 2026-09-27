@@ -908,23 +908,51 @@ class DogSession:
         direct line to `target`, the open side first and the other from 15, each held up to STUCK_S; the first that brings
         the dog STUCK_M closer is kept and steering to the target resumes. One route.decided "stuck" row per heading. All
         through the same drive loop, so the Go2's avoidance stays on (S3). True when a heading moved it.
-        UNVERIFIED on the dog: the sidestep (y velocity) through the avoidance service and the held headings."""
+        B15: the scan never shows a drawn no-go zone, so each move is first checked against the map's zones (nogo.hit on
+        the straight line to where it would end: SIDESTEP_MS for SIDESTEP_S sideways, nav.VMAX for STUCK_S along a
+        heading). A sidestep into a zone goes the other way (both sides into one: none), one WARN line each; a heading
+        into one is skipped, its "stuck" row (skipped: true) naming the zone and the angle. Any skipped: Stuck names the
+        zone, and so does the gave-up or refused row. A map that cannot be read: RuntimeError naming it, before anything moves.
+        UNVERIFIED on the dog: the sidestep (y velocity) through the avoidance service and the held headings; the zone
+        check is on the dog's line, straight, without the turn onto a heading or the body's width."""
+        from .. import nogo
+        try:
+            zs = nogo.zones(json.loads(plan.MAP.read_text()))
+        except (OSError, ValueError) as e:   # never a move unchecked: the follow's row names the map
+            raise RuntimeError(f"{why}, and the no-go zones in {plan.MAP} could not be read, so I did not sidestep or sweep: {e}") from e
+
+        def into(p, h: float, m: float) -> str | None:   # the no-go zone a straight move of m metres from p along map heading h enters
+            hit = nogo.hit([p, [p[0] + m * nav.PX_PER_M * math.cos(h), p[1] + m * nav.PX_PER_M * math.sin(h)]], zs)
+            return hit and hit["zone"]
+
         live, pose = self._view()
         clear = plan.sides(pose["p"], math.radians(pose["heading_deg"]), live) if live is not None else {"left": None, "right": None}
         first = "right" if (clear["right"] or 0) > (clear["left"] or 0) else "left"
-        for _ in range(max(1, round(SIDESTEP_S * 10))):   # refreshed every 0.1 s: the drive loop drops a velocity after DRIVE_HOLD_S
-            self._set_vel(0.0, SIDESTEP_MS if first == "left" else -SIDESTEP_MS, 0.0)
+        other, sidestep = "right" if first == "left" else "left", None
+        for side in (first, other):   # the dog's left is 90 degrees counterclockwise of its heading on the map
+            if (z := into(pose["p"], math.radians(pose["heading_deg"] + (90 if side == "right" else -90)), SIDESTEP_MS * SIDESTEP_S)) is None:
+                sidestep = side
+                break
+            log("dog", f"WARN not sidestepping {side}: it would take me into no-go zone {z}", at=fs["i"])
+        for _ in range(max(1, round(SIDESTEP_S * 10)) if sidestep else 0):   # refreshed every 0.1 s: the drive loop drops a velocity after DRIVE_HOLD_S
+            self._set_vel(0.0, SIDESTEP_MS if sidestep == "left" else -SIDESTEP_MS, 0.0)
             await asyncio.sleep(0.1)
-        n = 0
-        for side in (first, "right" if first == "left" else "left"):
+        n, skipped = 0, []
+        for side in (first, other):
             for deg in SWEEP_DEG:
                 n, pose = n + 1, self._view()[1]
                 d0 = math.dist(pose["p"], target)
+                h = nav.heading_of(pose["p"], target) + math.radians(deg if side == "right" else -deg)   # map heading is clockwise: right is +
+                if (z := into(pose["p"], h, nav.VMAX * STUCK_S)) is not None:
+                    skipped.append(z)
+                    self._decided(fs["i"], "stuck", f"{why} on the way to {what}: {deg} deg {side} of the direct line skipped, it enters no-go zone {z}",
+                                  f"I'm blocked straight ahead on the way to dot {fs['i'] + 1}. Not trying {deg}° {side}: it would take me into no-go zone {z}.",
+                                  angle=deg, side=side, zone=z, skipped=True, clear_m=clear, attempt=n, dist_m=round(d0 / nav.PX_PER_M, 2))
+                    continue
                 scan = f"where my scan shows {clear[side]} m clear" if clear[side] is not None else "with no live view to go by"
                 self._decided(fs["i"], "stuck", f"{why} on the way to {what}: holding {deg} deg {side} of the direct line",
                               f"I'm blocked straight ahead on the way to dot {fs['i'] + 1}. Trying {deg}° {side}, {scan}.",
                               angle=deg, side=side, clear_m=clear, attempt=n, dist_m=round(d0 / nav.PX_PER_M, 2))
-                h = nav.heading_of(pose["p"], target) + math.radians(deg if side == "right" else -deg)   # map heading is clockwise: right is +
                 t0 = time.monotonic()
                 while time.monotonic() - t0 < STUCK_S:
                     if (pose := self.map_pose()) is None:
@@ -937,6 +965,9 @@ class DogSession:
                     ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), aim, 0.0)
                     self._set_vel(ctl["x"], 0.0, ctl["z"])
                     await asyncio.sleep(0.1)
+        if skipped:   # B15: the Stuck names the zone, so the gave-up or refused row does
+            rest = f", and none of the other {n - len(skipped)} brought me {STUCK_M} m closer" if n > len(skipped) else ""
+            raise Stuck(f"{why}, and {len(skipped)} of {n} headings would take me into no-go zone {', '.join(dict.fromkeys(skipped))}{rest}")
         return False
 
     def _gave_up(self, i: int, path: list, stops: list[int], fs: dict[str, Any], why: str) -> bool:
