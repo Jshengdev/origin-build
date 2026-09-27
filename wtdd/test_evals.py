@@ -614,7 +614,9 @@ class Unknown(unittest.TestCase):
 
     def test_a_follow_that_ended_without_done_or_error_says_why(self):
         state = {"follow": {"active": False, "i": 0, "n": 5, "reached": [0, 1], "stops": [], "error": None}, "map": {"p": [300, 1400]}}
-        post, get = mock.Mock(return_value=mock.Mock(json=lambda: {"ok": True})), mock.Mock(return_value=mock.Mock(json=lambda: state))
+        scale = {"px_per_m": 108.5, "source": "default"}   # B13's GET /dog/scale, read once before the trial
+        post = mock.Mock(return_value=mock.Mock(json=lambda: {"ok": True}))
+        get = mock.Mock(side_effect=lambda url, **k: mock.Mock(json=lambda: scale if url.endswith("/dog/scale") else state))
         root = _TMP / "follow-root"
         (root / "ui").mkdir(parents=True, exist_ok=True)
         (root / "ui" / "map.json").write_text(json.dumps({"path": [[300, 1400], [650, 1400]]}))   # the route it replays
