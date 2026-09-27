@@ -377,13 +377,14 @@ function App() {
 // 29 · live-stream · start
 // The dog's camera as one MJPEG stream, GET /dog/stream.mjpg: one connection at the rate the dog delivers, and the
 // request that switches the camera on. Everything drawn is served. dog.video comes from App's 1 s /dog/state poll
-// (fps, age_ms, bytes, w, h, sha, stale, source). watch comes from App's 500 ms /watch poll (boxes, frame_sha,
+// (fps, age_ms, bytes, w, h, sha, stale, gaps, source). watch comes from App's 500 ms /watch poll (boxes, frame_sha,
 // frames_behind). The boxes take the detector's class colours only when watch.frame_sha equals video.sha, the cached
 // frame at the last 1 s poll (the image may already show a newer part: JS cannot read a part's X-Frame-Sha); otherwise
 // they are dimmed, with the server's frames_behind. A stall (video.stale) unmounts the image, which closes the stream,
 // and shows a red tile naming it. A refused stream reads /dog/frame.jpg once and names its error in a red tile. Every
-// mount of the image is a new ?e=, so a remount never re-shows an ended stream. 'ms' is the age of the newest decoded
-// frame, not glass-to-page latency (the driver has no wall-clock stamp).
+// mount of the image is a new ?e=, so a remount never re-shows an ended stream. The URL also carries video.gaps, the
+// server's count of stalls that ended streams, so a stall that no poll saw still reopens the stream (gotcha 29-4).
+// 'ms' is the age of the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp).
 const CLS = ["#042AFF", "#0BDBEB", "#F3F3F3", "#00DFB7", "#111F68", "#FF6FDD", "#FF444F", "#CCED00", "#00F344", "#BD00FF",
              "#00B4FF", "#DD00BA", "#00FFFF", "#26C000", "#01FFB3", "#7D24FF", "#7B0068", "#FF1B6C", "#FC6D2F", "#A2FF0B"];   // ultralytics 8.4.163 Colors (utils/plotting.py:117-138): watch.jpg strokes class cls % 20 in these
 function LiveView({ dog, watch }) {
@@ -402,7 +403,7 @@ function LiveView({ dog, watch }) {
   const joined = fresh && watch.frame_sha && watch.frame_sha === v.sha;
   return html`<div>
     <div class="lv-wrap">
-      <img class="lv" src=${`${API}/dog/stream.mjpg?e=${epoch}`} onError=${onError}/>
+      <img class="lv" src=${`${API}/dog/stream.mjpg?e=${epoch}.${v?.gaps ?? 0}`} onError=${onError}/>
       ${fresh && html`<svg class=${joined ? "lv" : "lv dim"} viewBox=${`0 0 ${v.w} ${v.h}`} preserveAspectRatio="none">
         ${(watch.boxes || []).map((b, i) => { const [x0, y0, x1, y1] = b.xyxy, c = b.cls != null ? CLS[b.cls % 20] : "var(--live, #0b0dc4)";
           return html`<g key=${i}><rect x=${x0} y=${y0} width=${x1 - x0} height=${y1 - y0} stroke=${c}/><text x=${x0} y=${Math.max(y0 - 8, v.h / 24)} fill=${c} font-size=${v.h / 24}>${b.name} ${b.conf}</text></g>`; })}
