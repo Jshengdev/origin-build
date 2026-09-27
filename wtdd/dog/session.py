@@ -39,7 +39,8 @@ holding (0, 0, z) for the same drive loop until the IMU yaw has integrated past 
 drive loop may add its own release halt: one or two StopMoves per press), and writes one
 dog.scout row; with nothing tied yet it first ties the pose to the canvas centre facing up (a dog.calibrate row with
 args.source "dropoff"; the page's drag and "dog is here..." are "tap"). state().scout is its live status; stop()
-cancels it. It refuses while following or recording, and follow() refuses while it spins: one task owns the velocity.
+cancels it, and before its task runs (the press connecting or tying the pose) flags it, so the press ends as stopped
+with nothing moved. It refuses while following or recording, and follow() refuses while it spins: one task owns the velocity.
 """
 from __future__ import annotations
 import asyncio
@@ -107,6 +108,7 @@ class DogSession:
         self.scout_state: dict[str, Any] = {"active": False, "target_deg": None, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
                                             "seconds": 0.0, "ranges": None, "error": None}   # the scout's live status (GET /dog/state .scout)
         self._scouter: Any = None                    # the running scout (a future on the session loop); stop() cancels it
+        self._scout_stop = False                     # a stop while a press is active; read before the spin, when no task can be cancelled yet
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -427,7 +429,9 @@ class DogSession:
         one end guard, and inf never passes it): one FAILED dog.scout row, raised, nothing moved so nothing halted; a
         connect failure is the same FAILED row. Else it ties the pose to the canvas centre facing up when nothing is tied
         yet (dog.calibrate, source "dropoff"; done here, not in the task: calibrate runs on the loop through run()) and
-        starts the spin. Returns state().scout."""
+        starts the spin. A POST /dog/stop that lands before the spin has a task to cancel (the press connecting, tying,
+        or just handing over) is read here and again by the task before the LiDAR switch: the same FAILED row naming
+        the stop, nothing held. Returns state().scout."""
         num = lambda v: v if math.isfinite(v) else str(v)  # noqa: E731  (a bare Infinity/NaN in the ledger breaks the page's JSON.parse of GET /ledger)
         args = {"z_rad_s": num(z), "target_deg": num(target_deg), "timeout_s": num(timeout_s), "shift_id": maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"),
                 "source": self.cal.get("source", "tap") if self.cal else None}   # None only on a press refused before any tie
@@ -444,11 +448,13 @@ class DogSession:
             if not (math.isfinite(target_deg) and target_deg > 0 and math.isfinite(timeout_s) and timeout_s > 0):
                 raise ValueError(f"scout refused: target_deg {target_deg:g} and timeout_s {timeout_s:g} must be finite and over 0 "
                                  "(the timeout is the spin's one end guard)")
-            self.scout_state, mine = {"active": True, "target_deg": target_deg, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
-                                      "seconds": 0.0, "ranges": None, "error": None}, True   # claimed before the connect: a double click is refused above
+            self.scout_state, mine, self._scout_stop = {"active": True, "target_deg": target_deg, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
+                                                        "seconds": 0.0, "ranges": None, "error": None}, True, False   # claimed before the connect: a double click is refused above
             self.run(self._ensure())
-            if self.cal is None:   # nose at drop-off is up: a stated convention, not a measurement (no map to orient against yet)
+            if self.cal is None and not self._scout_stop:   # nose at drop-off is up: a stated convention, not a measurement (no map to orient against yet)
                 self.calibrate(scout.CANVAS_CENTRE, math.radians(scout.DROPOFF_HEADING_DEG), source="dropoff")
+            if self._scout_stop:   # the page reads "stop" from the claim on; there was no task to cancel, so the press reads it
+                raise RuntimeError("stopped (POST /dog/stop) before the spin started")
         except Exception as e:
             if mine:
                 self.scout_state.update(active=False, error=f"{type(e).__name__}: {e}")
@@ -483,6 +489,8 @@ class DogSession:
                     before.update(map=self.map_pose(st), heading0_deg=round(math.degrees(prev), 1), grid_frames=g.frames if (g := self.grid) is not None else 0,
                                   cells=c0, lidar_n=n0, range_obstacle=st.get("range_obstacle"),
                                   localize="absent", utlidar="absent")   # 05b and 05a are not on 01: when they merge, read self.loc / 05a's utpose through getattr
+                    if self._scout_stop:   # a stop after the press's last look and before this task could be cancelled
+                        raise RuntimeError("stopped (POST /dog/stop) before the spin started")
                     await b.lidar_on(self._on_frame)   # a refused disable_traffic_saving raises here (wtdd/dog/lidar.py subscribe)
                     t0 = tick = time.monotonic()
                     while True:
@@ -576,6 +584,8 @@ class DogSession:
         StopMove alone), then StopMove, then the state read back."""
         if self._follower and not self._follower.done():
             self._follower.cancel()
+        if self.scout_state["active"]:   # 14: set before the cancel below; a press with no task yet reads it and ends stopped
+            self._scout_stop = True
         if self._scouter and not self._scouter.done():   # 14: the scout halts itself and its row says stopped
             self._scouter.cancel()
         self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
