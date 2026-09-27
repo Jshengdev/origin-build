@@ -485,6 +485,10 @@ class Serve(Base):
         rows = fp_rows()
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["ok"])
+        out = s.floorplan_px(3)   # the page's next poll: the press's FAILED state, never back to 'no floor plan yet'
+        self.assertEqual((out["ok"], out["segments_px"], out["class_px"]), (False, [], {}), out.get("why"))
+        self.assertIn("FAILED", out["why"])
+        self.assertIn("no grid", out["why"])
 
     def test_the_api_serves_get_and_post_dog_floorplan(self):
         from http.server import ThreadingHTTPServer
@@ -508,6 +512,9 @@ class Serve(Base):
             urllib.request.urlopen(bad, timeout=60)
         self.assertEqual(e.exception.code, 500)
         self.assertEqual([(r["ok"], r["args"]["threshold"]) for r in fp_rows()][1:], [(False, 0)])
+        after = get()   # the next poll draws the failed press in red with its reason, not the old walls, not an absence
+        self.assertEqual((after["ok"], after["segments_px"], after["threshold"]), (False, [], 0), after.get("why"))
+        self.assertIn("FAILED", after["why"])
 
     def test_clearing_the_grid_drops_its_floor_plan(self):
         s = self.session(accumulated())
@@ -524,6 +531,10 @@ class Serve(Base):
             s.floorplan(3)
         r = fp_rows()[-1]
         self.assertEqual((r["ok"], r["cached"], r["source"], r["args"]["grid_source"]), (False, True, "stub", "ui/grid.json"))
+        out = s.floorplan_px(3)
+        self.assertEqual((out["ok"], out["source"], out["segments_px"]), (False, "ui/grid.json", []), out.get("why"))
+        self.assertIn("FAILED", out["why"])
+        self.assertIn("unreadable", out["why"])
 
 
 class Replay(Base):
