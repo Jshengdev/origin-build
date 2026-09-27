@@ -86,6 +86,7 @@ POLY = ZONE["poly"]
 CLEAR_PX = (plan.half_width() - 1) * plan.CELL   # the dog is HALF_WIDTH cells wide: its body, not just the route's line, stays out
 ROUTE = [[300 + 50 * k, 1400] for k in range(8)]   # a taught route along the living room's bottom, x 300..650 at y 1400
 BLOB_AT = (500, 1400)                              # a blob on waypoint 4; its inflation covers waypoints 3..5 (measured in Replan)
+LINE = [[300, 1400], [650, 1400]]                  # S6b: two dots, the straight line Johnny draws through an obstacle
 
 
 def setUpModule():
@@ -314,8 +315,21 @@ class _Harness(unittest.TestCase):
         from wtdd.dog import session
         self.believed = list(ROUTE[0])
         self.targets: list[tuple[int, int]] = []
+        self.blocked, self.free_after, self.free_ticks, self.aims = None, math.inf, math.inf, []   # S6b: a point the dog cannot get closer to (Stuck)
 
         def steer(px, py, heading, target, reach_px):
+            if math.dist((px, py), target) > 500:   # S6b: the stuck sweep holding a heading (its aim point is 1000 px out)
+                a = round(math.degrees(math.atan2(target[1] - py, target[0] - px)))
+                self.aims += [] if self.aims and self.aims[-1] == a else [a]
+                if self.blocked and len(self.aims) >= self.free_after:   # this heading gets it past: 10 px closer, and free
+                    (bx, by), self.blocked = self.blocked, None
+                    k = 10 / math.dist((px, py), (bx, by))
+                    self.believed[:] = [px + (bx - px) * k, py + (by - py) * k]
+                return {"x": 0.3, "z": 0.0, "dist_px": 999, "err_deg": 0.0, "reached": False}
+            if self.blocked == (int(target[0]), int(target[1])):   # held still: no progress toward it, for free_ticks drive ticks
+                self.free_ticks -= 1
+                if self.free_ticks >= 0:
+                    return {"x": 0.3, "z": 0.0, "dist_px": round(math.dist((px, py), target)), "err_deg": 0.0, "reached": False}
             self.targets.append((int(target[0]), int(target[1])))
             self.believed[:] = [target[0], target[1]]
             return {"x": 0.0, "z": 0.0, "dist_px": 0, "err_deg": 0.0, "reached": True}
@@ -328,6 +342,8 @@ class _Harness(unittest.TestCase):
         s._ensure = mock.AsyncMock(return_value=s.body)
         s._halt = mock.AsyncMock(return_value={})
         s.map_pose = lambda st=None: {"p": [round(self.believed[0]), round(self.believed[1])], "heading_deg": 0.0}
+        self.enterContext(mock.patch.dict(os.environ, {"JEV_API_KEY": ""}))   # S6b: decide._stub names things unless a test sets a key
+        s._look_at = mock.AsyncMock(return_value={"text": "a cardboard box on the floor", "person": False})   # S6b: face, look, sentence
         self.n0 = len(ledger.rows())
 
     def tearDown(self):
@@ -349,11 +365,11 @@ class _Harness(unittest.TestCase):
         if row["args"].get("at") is not None:
             self.assertIn(f"dot {row['args']['at'] + 1}", say.lower(), row["args"])
 
-    def run_follow(self, stops: list[int], grid) -> tuple[dict, list[int]]:
+    def run_follow(self, stops: list[int], grid, path=ROUTE) -> tuple[dict, list[int]]:
         s = self.s
         s.grid = grid
         resumed: list[int] = []
-        s.follow(ROUTE, stops, reach_px=30.0)
+        s.follow(path, stops, reach_px=30.0)
 
         def auto_resume():   # a housemate pressing resume at every stop the follower pauses at
             while not s._follower.done():
@@ -404,14 +420,9 @@ class Follower(_Harness):
 
 class FollowerLive(_Harness):
     """S6: the live view decides, memory labels, the drawn path is followed in order from point 1, and every decision is
-    one route.decided row with its reason: snapped (within 0.5 m), detoured (to the next waypoint free in the live view),
-    refused. Nothing is skipped silently."""
-
-    def accounted(self, fs) -> set[int]:
-        out = set(fs["reached"])
-        for r in self.decided():
-            out |= set(r["args"].get("passed", []))
-        return out
+    one route.decided row with its reason: snapped (within 0.5 m), refused (S6b: no route to the dot; S6's detour to the
+    next free waypoint is gone, a dot with no free floor is looked at and passed, class OnBlue). Nothing is skipped
+    silently."""
 
     def test_memory_grey_with_a_clear_live_view_is_driven_in_order(self):
         self.live([])                                            # the blob is remembered but gone from the live view
@@ -454,39 +465,21 @@ class FollowerLive(_Harness):
             self.assertEqual(r["args"]["blocker"]["kind"], "permanent", r["args"])
             self.assertIn("permanent", r["args"]["reason"])
 
-    def test_no_free_floor_within_half_a_metre_is_a_detour_to_the_next_free_waypoint(self):
-        blob = fx.blob_px(BLOB_AT)                              # on waypoint 4: nothing free within 0.5 m of it
-        self.live(blob)
-        fs, resumed = self.run_follow([4], fx.grid())
-        self.assertIsNone(fs.get("error"), fs)
-        self.assertTrue(fs.get("done"), fs)
-        det = [r for r in self.decided() if r["args"]["action"] == "detoured"]
-        self.assertEqual(len(det), 1, self.decided())
-        a = det[0]["args"]
-        self.assertEqual(a["at"], 4)
-        self.assertGreater(a["rejoin"], 4)
-        self.assertEqual(a["passed"], list(range(4, a["rejoin"])), "the waypoints the detour passes, named")
-        self.assertEqual(a["skipped_stops"], [4])
-        self.assertIn("no free floor within 0.5 m", a["reason"])
-        self.assertSays(det[0])
-        self.assertEqual(rows_since(self.n0, "plan.replanned")[0]["args"].get("say"), a["say"], "06's detour row carries the same sentence")
-        self.assertEqual(len(rows_since(self.n0, "plan.replanned")), 1, "06's detour row is kept")
-        self.assertEqual(self.accounted(fs), set(range(len(ROUTE))), "every drawn waypoint is reached, snapped or named as passed")
-        self.assertEqual(self.targets[-1], tuple(ROUTE[-1]))
-        d, at = nearest(self.targets, blob)
-        self.assertGreaterEqual(d, CLEAR_PX, f"the follower drove to {at}, {d:.0f} px from the obstacle: {self.targets}")
-
-    def test_a_blocked_end_with_nothing_after_it_is_refused_loud(self):
-        self.live(fx.blob_px(tuple(ROUTE[-1])))
-        fs, _ = self.run_follow([], fx.grid())
+    def test_a_dot_walled_in_by_the_live_view_is_refused_loud(self):
+        """S6b: the dot itself is free but the live view rings it: no leg reaches it, the follow is refused (a FAILED row
+        with the reason and its sentence) and the dot is never driven to."""
+        ring = [(650 + 70 * math.cos(math.radians(a)), 1400 + 70 * math.sin(math.radians(a))) for a in range(0, 360, 3)]
+        self.live(ring)
+        self.assertIsNone(plan.blocker(LINE[-1], ring), "the ring leaves the dot itself free")
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
         self.assertIn("refused", (fs.get("error") or ""), fs)
         ref = [r for r in self.decided() if r["args"]["action"] == "refused"]
         self.assertEqual(len(ref), 1, self.decided())
         self.assertIs(ref[0]["ok"], False)
-        self.assertEqual(ref[0]["args"]["at"], len(ROUTE) - 1)
-        self.assertIn("no later waypoint", ref[0]["args"]["reason"])
+        self.assertEqual(ref[0]["args"]["at"], 1)
+        self.assertIn("no route", ref[0]["args"]["reason"])
         self.assertSays(ref[0])
-        self.assertNotIn(tuple(ROUTE[-1]), self.targets, "never driven into the blocker")
+        self.assertNotIn(tuple(LINE[-1]), self.targets, "never driven into the ring")
 
     def test_a_drawn_path_starts_at_point_one(self):
         self.believed[:] = list(ROUTE[5])                        # the dog stands on waypoint 5
@@ -494,6 +487,287 @@ class FollowerLive(_Harness):
         fs, _ = self.run_follow([], fx.grid())
         self.assertEqual(self.targets[0], tuple(ROUTE[0]), "point 1 first, not the nearest point")
         self.assertEqual(fs["reached"], list(range(len(ROUTE))))
+
+
+class Legs(_Harness):
+    """S6b, Johnny 2026-09-27: "draw a line straight through the obstacle and just have it pathfind around it and show its
+    actual route compared to the planned one". Every leg, the dog's pose to the next dot, is planned over the live view
+    (padded) and the no-go zones; memory never bends it; the dog's own body in the band is dropped; a leg the newest view
+    blocks mid-way is re-planned from where the dog stands. follow_state carries the planned legs and the actual trace."""
+
+    def own_legs(self, at, r_m=0.2) -> list:
+        """The dog's own legs in its band: a ring of points r_m around map point `at`."""
+        from wtdd.dog import nav
+        r = r_m * nav.PX_PER_M
+        return [(at[0] + r * math.cos(math.radians(a)), at[1] + r * math.sin(math.radians(a))) for a in range(0, 360, 20)]
+
+    def test_a_straight_line_through_a_live_blob_is_planned_around_it_to_the_next_dot(self):
+        blob = fx.blob_px((475, 1400))                          # on the drawn line, halfway between the two dots
+        self.live(blob + self.own_legs(LINE[0]))
+        self.assertIsNotNone(plan.blocker(LINE[0], self.own_legs(LINE[0])), "without the drop, its own legs would cover dot 1")
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertTrue(fs.get("done"), fs)
+        self.assertEqual(fs["reached"], [0, 1])
+        self.assertEqual(self.targets[-1], tuple(LINE[-1]), "the next dot is reached, exactly")
+        self.assertGreaterEqual(len(self.targets), 4, f"the leg bends around the blob: {self.targets}")
+        d, at = nearest(samples([LINE[0]] + self.targets), blob)
+        self.assertGreaterEqual(d, CLEAR_PX, f"the dog drove past {at}, {d:.0f} px from the blob: {self.targets}")
+        self.assertEqual(self.decided(), [], "the dog's own legs in the band never cover dot 1, and nothing else was decided")
+        legs = rows_since(self.n0, "plan.route")
+        self.assertEqual(len(legs), 2, "one plan.route row per leg")
+        a = legs[-1]["args"]
+        self.assertTrue(a.get("live"), a)
+        self.assertEqual(a.get("dots"), [1, 2], "the leg's dot numbers, as the page draws them")
+        self.assertEqual(a.get("cost_map"), "live", a)
+        self.assertRegex(a.get("say") or "", r"\bI\b|I'm", a)
+        self.assertIn("dot 2", (a.get("say") or "").lower(), a)
+
+    def test_memory_walls_alone_do_not_bend_a_leg(self):
+        self.live([])
+        fs, _ = self.run_follow([], fx.grid(blob_px=(475, 1400)), path=LINE)   # the blob is grey only
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertEqual(self.targets, [tuple(p) for p in LINE], "straight to the dot: memory only labels")
+        legs = rows_since(self.n0, "plan.route")
+        self.assertEqual(len(legs), 2)
+        self.assertEqual([(r["args"].get("cost_map"), r["args"].get("walls"), r["args"].get("memory")) for r in legs],
+                         [("live", 0, "labels only")] * 2, "the row says memory was not read")
+
+    def test_a_leg_blocked_mid_way_is_replanned_from_where_the_dog_stands(self):
+        blob, later = fx.blob_px((475, 1400)), []
+
+        def view():   # a second blob appears 60 px ahead of the dog once it has stepped off the line to pass the first
+            if not later and abs(self.believed[1] - 1400) > 20:
+                later.extend(fx.blob_px((self.believed[0] + 60, self.believed[1])))
+            return [[int(p[0]), int(p[1])] for p in blob + later]
+
+        self.s._live_px = view
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertTrue(later, "the dog stepped off the line and the second blob appeared")
+        rp = rows_since(self.n0, "plan.replanned")
+        self.assertEqual(len(rp), 1, "one re-plan")
+        a = rp[0]["args"]
+        self.assertTrue(rp[0]["ok"], rp[0])
+        self.assertTrue(a.get("live"), a)
+        self.assertIn(tuple(a["from"]), self.targets, "re-planned from a point the dog had driven to")
+        self.assertGreater(abs(a["from"][1] - 1400), 20, "where it stood when the blob appeared, off the line")
+        self.assertRegex(a.get("say") or "", r"\bI\b|I'm", a)
+        self.assertIn("dot 2", (a.get("say") or "").lower(), a)
+        after = self.targets[self.targets.index(tuple(a["from"])):]
+        d, at = nearest(samples(after), later + blob)
+        self.assertGreaterEqual(d, CLEAR_PX, f"after the re-plan the dog drove past {at}, {d:.0f} px from a blob: {after}")
+        self.assertEqual(self.targets[-1], tuple(LINE[-1]))
+        self.assertEqual(len(fs["replans"]), 1, fs["replans"])
+
+    def test_the_state_carries_the_planned_legs_and_the_actual_trace(self):
+        self.live(fx.blob_px((475, 1400)))
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.s.body.state = lambda: None
+        served = json.loads(json.dumps(self.s.state()))["follow"]   # what GET /dog/state serves the page
+        self.assertEqual(len(served["planned"]), 2, "one polyline per leg")
+        leg = served["planned"][-1]
+        self.assertEqual((leg[0], leg[-1]), (LINE[0], LINE[-1]), "a leg starts where the dog stands and ends on its dot")
+        self.assertGreaterEqual(len(leg), 3, f"bent around the blob: {leg}")
+        tr = served["trace"]
+        self.assertEqual(tr[0], LINE[0], "the actual route starts where the dog stood")
+        self.assertEqual(tr[-1], LINE[-1], "and ends at the last dot")
+        self.assertTrue(all(math.dist(p, q) >= 10 for p, q in zip(tr, tr[1:])), f"a point every 10 px moved: {tr}")
+        self.assertTrue({tuple(p) for p in tr} <= {tuple(LINE[0])} | set(self.targets), "only where the dog believed it was")
+
+
+class OnBlue(_Harness):
+    """S6b, Johnny 2026-09-27: "attempt to reach each dot unless its impossible because the dot sits on a blue lidar scan
+    and in that moment it does the jev classification and moves on and continues to the next dot". An obstacle about
+    0.55 m square on dot 5 (index 4) leaves no free floor within 0.5 m (S6's snap fails): the dog faces the dot, looks,
+    Jev names what is there from a closed list (decide._jev, never decide.decide: no `decided` row), one route.decided row
+    "classified", the dot is passed and the follow moves on. A person pauses it until resume(); a failed look is a
+    FAILED row and it moves on."""
+    JEV = ("chair", 0.84, "typesafe/jev-test", '{"answers": {"stop": {"type": "choice", "choice": "chair"}}}')
+
+    def follow_blob(self, stops=()) -> tuple[dict, list[int]]:
+        self.blob = [q for dx in (-25, 25) for dy in (-25, 25) for q in fx.blob_px((BLOB_AT[0] + dx, BLOB_AT[1] + dy))]
+        self.assertIsNotNone(plan.blocker(ROUTE[4], self.blob))
+        self.assertIsNone(plan.snap(ROUTE[4], self.blob), "no free floor within 0.5 m of dot 5")
+        self.live(self.blob)
+        return self.run_follow(list(stops), fx.grid())
+
+    def classified(self) -> list[dict]:
+        return [r for r in self.decided() if r["args"]["action"] == "classified"]
+
+    def assertMovedOn(self, fs) -> None:
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertTrue(fs.get("done"), fs)
+        self.assertEqual(fs["reached"], [0, 1, 2, 3, 5, 6, 7], "every dot but the one on blue, in order")
+        self.assertEqual(fs["passed"], [4], "the dot on blue is named as passed, never silently dropped")
+        self.assertEqual(self.targets[-1], tuple(ROUTE[-1]))
+        d, at = nearest(self.targets, self.blob)
+        self.assertGreaterEqual(d, CLEAR_PX, f"the follower drove to {at}, {d:.0f} px from the obstacle: {self.targets}")
+
+    def test_a_dot_on_live_blue_is_looked_at_named_once_and_passed(self):
+        from wtdd import decide
+        from wtdd.dog import session
+        self.s._look_at = mock.AsyncMock(return_value={"text": "a black office chair in the way", "person": False})
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "test-key"}), mock.patch.object(decide, "_jev", return_value=self.JEV) as jev:
+            fs, resumed = self.follow_blob(stops=[4])
+        self.assertMovedOn(fs)
+        self.assertEqual(resumed, [], "the stop on the obstacle is passed, never waited on")
+        self.assertEqual(fs["skipped_stops"], [4])
+        self.s._look_at.assert_awaited_once_with(ROUTE[4])
+        jev.assert_called_once()
+        state, choices = jev.call_args[0]
+        self.assertEqual(choices, session.OBSTACLES, "one label from the closed list")
+        self.assertIn("office chair", state, "Jev reads the sentence the look gave")
+        c = self.classified()
+        self.assertEqual(len(c), 1, self.decided())
+        a = c[0]["args"]
+        self.assertTrue(c[0]["ok"], c[0])
+        self.assertEqual((a["at"], a["label"], a["p"], a["passed"]), (4, "chair", 0.84, [4]))
+        self.assertIn("office chair", a["scene"])
+        self.assertEqual(a["say"], "Dot 5 is on a chair (0.84), a new obstacle. I'm moving on to dot 6.")
+        self.assertFalse(c[0]["cached"], c[0])
+        self.assertEqual(rows_since(self.n0, "decided"), [], "decide.decide is not called: no `decided` row, no escalation")
+
+    def test_with_no_jev_key_the_stub_names_it_and_the_row_says_so(self):
+        self.s._look_at = mock.AsyncMock(return_value={"text": "a black office chair in the way", "person": False})
+        fs, _ = self.follow_blob()
+        self.assertMovedOn(fs)
+        c = self.classified()
+        self.assertEqual(len(c), 1, self.decided())
+        self.assertEqual(c[0]["args"]["label"], "chair", c[0])
+        self.assertEqual((c[0]["cached"], c[0]["source"], c[0]["args"]["model"]), (True, "stub", "stub"))
+
+    def test_a_person_on_a_dot_pauses_the_follow_until_resume(self):
+        from wtdd import decide
+        self.s._look_at = mock.AsyncMock(return_value={"text": "someone standing right there", "person": True})
+        person = ("person", 0.93, "typesafe/jev-test", '{"answers": {"stop": {"choice": "person"}}}')
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": "test-key"}), mock.patch.object(decide, "_jev", return_value=person):
+            fs, resumed = self.follow_blob()
+        self.assertEqual(resumed, [4], "paused at that spot like a stop, until resume")
+        self.assertMovedOn(fs)
+        c = self.classified()
+        self.assertEqual(len(c), 1, self.decided())
+        self.assertEqual(c[0]["args"]["label"], "person")
+        self.assertEqual(c[0]["args"]["say"], "There's a person on dot 5. I'm waiting here until you press resume.")
+
+    def test_a_failed_look_is_a_failed_row_and_the_follow_moves_on(self):
+        self.s._look_at = mock.AsyncMock(side_effect=RuntimeError("no camera frame in 5 s"))
+        fs, _ = self.follow_blob()
+        self.assertMovedOn(fs)
+        c = self.classified()
+        self.assertEqual(len(c), 1, self.decided())
+        self.assertIs(c[0]["ok"], False)
+        self.assertIn("no camera frame", c[0]["response_or_error"])
+        self.assertSays(c[0])
+        self.assertIn("moving on to dot 6", c[0]["args"]["say"])
+
+
+class Stuck(_Harness):
+    """S6b, live 03:41 and 03:42: "TimeoutError: waypoint 2 not reached in 30.0s (dist 131 px, err -0.8 deg)", twice: it
+    aimed within 1 degree and the Go2's own avoidance held it at the gap. Johnny, 03:48: "if it decided to trust its lidar
+    and actually just guide itself and reposition then it might allow it to go through it should test the different
+    degrees and angles to guide itself through". Under STUCK_M of progress in STUCK_S (0.2 s here): the clear metres
+    left and right in the live band ahead, a sidestep toward the open side, then headings 15, 30, 45 degrees off the
+    direct line, the open side first, the first that makes progress kept; one "stuck" row per heading. A failed sweep
+    re-plans the leg once; failing again, the dot is given up and passed (the last dot: refused)."""
+
+    def setUp(self):
+        super().setUp()
+        from wtdd.dog import session
+        self.enterContext(mock.patch.object(session, "STUCK_S", 0.2))
+        self.enterContext(mock.patch.object(session, "SIDESTEP_S", 0.1))
+        self.vels: list[tuple] = []
+        set_vel = self.s._set_vel
+        self.s._set_vel = lambda x, y, z: (self.vels.append((x, y, z)), set_vel(x, y, z))
+
+    def stuck(self) -> list[dict]:
+        return [r for r in self.decided() if r["args"]["action"] == "stuck"]
+
+    def test_the_open_side_is_read_from_the_scan_and_the_first_heading_that_moves_is_kept(self):
+        from wtdd.dog import nav
+        self.live([(380, y) for y in range(1320, 1341, 4)])   # 80 px ahead, 60..80 px to the dog's left (up the page); the right is open
+        self.blocked, self.free_after = tuple(LINE[-1]), 2    # no progress to dot 2 until the second heading tried
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertEqual(fs["reached"], [0, 1])
+        self.assertEqual(self.aims, [15, 30], "the open side first, 15 then 30 degrees off the direct line (right is clockwise)")
+        st = self.stuck()
+        self.assertEqual([(r["args"]["side"], r["args"]["angle"], r["args"]["attempt"]) for r in st], [("right", 15, 1), ("right", 30, 2)],
+                         "one row per heading tried; the first that moved is kept, so no 45")
+        c = st[0]["args"]["clear_m"]
+        self.assertEqual(c["right"], 2.0, "nothing on the right within 2 m")
+        self.assertAlmostEqual(c["left"], 60 / nav.PX_PER_M, delta=plan.CELL / nav.PX_PER_M, msg="the wall 60 px to the left")
+        for r in st:
+            self.assertSays(r)
+            self.assertIn("blocked straight ahead", r["args"]["say"])
+            self.assertIn(f"{r['args']['angle']}° right, where my scan shows 2.0 m clear", r["args"]["say"])
+            self.assertGreater(r["args"]["dist_m"], 0)
+        self.assertIn((0.0, -0.15, 0.0), self.vels, "a sidestep toward the open side first (the dog's right is -y)")
+        self.assertEqual([r for r in self.decided() if r["args"]["action"] == "gave up"], [])
+
+    def test_a_failed_sweep_replans_once_then_gives_up_and_moves_on(self):
+        self.live([])
+        self.blocked = tuple(LINE[-1])                        # dot 2 never gets closer
+        fs, _ = self.run_follow([1], fx.grid(), path=LINE + [[650, 1200]])
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertTrue(fs.get("done"), fs)
+        self.assertEqual((fs["reached"], fs["passed"], fs["skipped_stops"]), ([0, 2], [1], [1]), "dot 2 passed and named, dot 3 reached")
+        sweep = [("left", 15), ("left", 30), ("left", 45), ("right", 15), ("right", 30), ("right", 45)]
+        self.assertEqual([(r["args"]["side"], r["args"]["angle"]) for r in self.stuck()], sweep * 2,
+                         "a clear scan ties, left first; the other side from 15; the whole sweep again after the re-plan")
+        rp = rows_since(self.n0, "plan.replanned")
+        self.assertEqual(len(rp), 1, "one re-plan from where the dog stands")
+        self.assertIn("dot 2", rp[0]["args"]["say"].lower())
+        g = [r for r in self.decided() if r["args"]["action"] == "gave up"]
+        self.assertEqual(len(g), 1, self.decided())
+        self.assertIs(g[0]["ok"], False, "a dot not reached is a red row")
+        self.assertEqual((g[0]["args"]["at"], g[0]["args"]["passed"]), (1, [1]))
+        self.assertSays(g[0])
+        self.assertIn("moving on to dot 3", g[0]["args"]["say"])
+
+    def test_an_obstacle_half_a_metre_ahead_is_stuck_at_once_and_swept_toward_the_open_side(self):
+        """Live, 2026-09-27: the Go2's avoidance stops its nose about 0.15 m short, 0.50 m ahead of its middle. Something
+        that steps into the body's corridor within FRONT_M after the leg was planned is stuck at once, not after STUCK_S."""
+        from wtdd.dog import nav, session
+        ppm, wall = nav.PX_PER_M, [(380, y) for y in range(1320, 1341, 4)]   # the left narrowed by a wall 60..80 px up the page
+        step_in = fx.blob_px((300 + 0.4 * ppm, 1400)) + wall
+
+        def view():   # the blob steps in 0.4 m ahead once the leg to dot 2 is planned
+            return step_in if len(rows_since(self.n0, "plan.route")) >= 2 else []
+
+        self.s._live_px = view
+        self.blocked, self.free_after = tuple(LINE[-1]), 1
+        self.enterContext(mock.patch.object(session, "STUCK_S", 3.0))
+        t0 = time.monotonic()
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertLess(time.monotonic() - t0, session.STUCK_S, "at once: no STUCK_S wait for no progress")
+        self.assertIsNone(fs.get("error"), fs)
+        st = self.stuck()
+        self.assertEqual([(r["args"]["side"], r["args"]["angle"]) for r in st], [("right", 15)], "toward the open side, and kept")
+        self.assertRegex(st[0]["args"]["reason"], r"an obstacle 0\.\d+ m ahead")
+        self.assertEqual(set(st[0]["args"]["clear_m"]), {"left", "right"})
+        self.assertGreater(st[0]["args"]["clear_m"]["right"], st[0]["args"]["clear_m"]["left"])
+
+    def test_an_obstacle_beside_the_corridor_is_not_stuck(self):
+        from wtdd.dog import nav, session
+        self.live(fx.blob_px((300 + 0.4 * nav.PX_PER_M, 1400 - 0.55 * nav.PX_PER_M)))   # 0.4 m ahead, 0.55 m to the left
+        self.blocked, self.free_ticks = tuple(LINE[-1]), 5                                # five drive ticks before it gets there
+        self.enterContext(mock.patch.object(session, "STUCK_S", 3.0))
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertEqual(self.targets, [tuple(p) for p in LINE], "a straight leg, driven")
+        self.assertEqual(self.stuck(), [], "beside the corridor is not in the way")
+
+    def test_stuck_on_the_last_dot_is_refused(self):
+        self.live([])
+        self.blocked = tuple(LINE[-1])
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertIn("refused", fs.get("error") or "", fs)
+        ref = [r for r in self.decided() if r["args"]["action"] == "refused"]
+        self.assertEqual(len(ref), 1, self.decided())
+        self.assertEqual(ref[0]["args"]["at"], 1)
+        self.assertSays(ref[0])
+        self.assertEqual(fs["passed"], [], "refused, not passed")
 
 
 class Padding(unittest.TestCase):
@@ -544,6 +818,21 @@ class Receipts(unittest.TestCase):
 
     def test_a_red_row_shows_its_error(self):
         self.assertIn("r.response_or_error", self.receipt_line())
+
+
+class RouteLines(unittest.TestCase):
+    """S6b: the map draws what GET /dog/state serves, the planned legs dashed and the actual route solid, each named in a
+    legend, on the one map both the demo view and #admin show, from a follow's start until the next one."""
+    PAGE = Receipts.PAGE
+
+    def test_the_map_draws_the_planned_legs_and_the_actual_trace(self):
+        self.assertIn("dog?.follow?.planned", self.PAGE)
+        self.assertIn("dog?.follow?.trace", self.PAGE)
+        self.assertRegex(self.PAGE, r"\.planned \{[^}]*stroke-dasharray", "planned is dashed")
+        self.assertRegex(self.PAGE, r"\.actual \{[^}]*stroke:", "actual is a line of its own")
+        self.assertNotRegex(self.PAGE, r"\.actual \{[^}]*stroke-dasharray", "actual is solid")
+        self.assertIn(">planned</text>", self.PAGE)
+        self.assertIn(">actual</text>", self.PAGE)
 
 
 class Tool(unittest.TestCase):
