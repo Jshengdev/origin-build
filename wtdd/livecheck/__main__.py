@@ -4,6 +4,7 @@
   python -m wtdd.livecheck --step 01.3 --replay --ledger <fixture.jsonl> --log <fixture.log>              dry: the same verdicts
   python -m wtdd.livecheck --list                                    the table, one line per step; a WARN per item with no checked step
   python -m wtdd.livecheck --from-prs [--draft-out F]                open PRs' Needs-the-dog lines -> steps.draft.json (rows empty)
+A usage error prints `FAIL usage · <message>` and exits 1: argparse's own exit 2 is UNSAFE's code. It writes no livecheck.json.
 UNVERIFIED on the real dog: as the package says; this file only parses arguments and prints.
 """
 from __future__ import annotations
@@ -48,8 +49,14 @@ def _from_prs(out: Path) -> int:
     return 0
 
 
+def _usage(msg: str):
+    print(f"FAIL usage · {msg} · python -m wtdd.livecheck --step <item>.<k> | --list | --from-prs (-h for every flag)", flush=True)
+    raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m wtdd.livecheck", description="Grade one hardware step from the ledger and the API log.")
+    ap.error = _usage   # argparse exits 2 on a usage error, UNSAFE's code: a typo is a FAIL (1)
     ap.add_argument("--step", help="<item>.<k>, a key of wtdd/livecheck/steps.json")
     ap.add_argument("--ledger", help="the ledger to tail (default: wtdd.ledger.LEDGER, WTDD_LEDGER honoured)")
     ap.add_argument("--log", help="the API's stderr log to tail (default: <repo>/logs/api.log)")
