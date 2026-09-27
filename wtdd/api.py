@@ -25,6 +25,9 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
+  POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
+                                  a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -113,6 +116,15 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "image/jpeg", DogSession.get().snapshot())
             except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+        # 01 · occupancy
+        if u.path == "/dog/grid":   # a read: never connects, no ledger row; `source` says which grid is drawn
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = int((parse_qs(u.query).get("threshold") or [occupancy.THRESHOLD])[0])
+                return self._json(200, DogSession.get().grid_px(t))
+            except Exception as e:  # noqa: BLE001  (a bad threshold or an unreadable ui/grid.json is reported, the page shows it)
+                return self._json(500, {"n": 0, "cells_px": [], "error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -207,6 +219,15 @@ class H(BaseHTTPRequestHandler):
                     out = {"follow": s.resume()}
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a connect failure or a refused follow is reported, never hidden)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 01 · occupancy
+        if u.path == "/dog/grid":   # {save: true} (default) or {clear: true, why?}; each is one ledger row, ok or not
+            from .dog.session import DogSession
+            body, s = self._body(), DogSession.get()
+            try:
+                out = s.grid_clear(str(body.get("why") or "cleared from the page")) if body.get("clear") else s.grid_save()
+                return self._json(200, {"ok": True, **out})
+            except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
