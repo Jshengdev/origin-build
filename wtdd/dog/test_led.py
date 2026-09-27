@@ -15,7 +15,9 @@ and are absent from the wheel, so these checks pin what we send and how we recor
   Hook     the colour table is the head's; a fake ask that calls the hook returns at once and completes while the dog
            refuses (code 7, the FAILED row lands later); no connected dog in the API is a WARN and no row; another
            process goes through the API, and a short-lived one (intruder_alarm by hand) exits only once its post has
-           landed, or after a bounded wait with a WARN, never silently.
+           landed, or after a bounded wait with a WARN, never silently; a short-lived one that holds the dog itself
+           (walk_path with no API up) exits only once its dog.led row is written, or after the same wait with a WARN
+           naming the row.
   Hold     a state is resent every WTDD_LED_TIME_S while it holds, on the first send's clock (a slow 1006 read-back never
            stretches the period); a new state cancels the held one, and a resend it cancels during its read-back keeps
            its ack; a refusal is not resent; until the ceiling is known one request holds 5 s.
@@ -35,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import json
 import os
 import re
 import subprocess
@@ -347,6 +350,55 @@ class Hook(unittest.TestCase):
             else:
                 self.assertIn("WARN led asking (red)", out.stderr)   # never silent
                 self.assertLess(took, post_s, "the exit's wait is bounded, never the post's whole wait")
+
+    def test_a_short_lived_process_holding_the_dog_writes_its_row_before_exit_or_says_it_did_not(self):
+        """`python -m wtdd walk_path` with no API up holds the dog itself: the follow's end hooks green, then the process
+        exits. hook() hands hold() to the session's daemon loop and returns, so a slow 1006 read-back outlived the process
+        and the acked 1007 had no dog.led row and no word. In a subprocess with no WTDD_API_PROCESS, a dead WTDD_API_PORT
+        and _post_api replaced by a raise, a DogSession holds a StubConn body whose 1006 answers late: the row must be in
+        the scratch ledger at exit, or the exit waits out its bound and names the row it did not write."""
+        code = "\n".join([
+            "import sys, time",
+            "from wtdd.dog import led, session",
+            "from wtdd.dog.body import Body",
+            "from wtdd.dog.fixtures.vui_stub import StubConn",
+            "def boom(color, seconds):",
+            "    raise AssertionError('this process holds the dog: nothing goes to the API')",
+            "led._post_api = boom",
+            "led.POST_WAIT_S = float(sys.argv[2])",
+            "session.CAL_FILE = session.CAL_FILE.with_name('no-such-dog_cal.json')   # never the repo's calibration",
+            "s = session.DogSession()",
+            "s.body = Body()",
+            "s.body.conn = StubConn({1007: (0, None), 1006: (0, {'brightness': 7})}, delay={1006: float(sys.argv[1])})",
+            "session.DogSession._inst = s",
+            "t0 = time.perf_counter()",
+            "led.hook('clear')",
+            "print(round(time.perf_counter() - t0, 3), time.time())",
+        ])
+        env = {**os.environ, "WTDD_API_PORT": "9"}
+        for k in ("WTDD_API_PROCESS", "WTDD_LED_TIME_S", "WTDD_STATE_FIXTURE"):
+            env.pop(k, None)
+        for readback_s, wait_s, lands in ((1.0, 5.0, True), (2.5, 0.2, False)):
+            scratch = _TMP / f"ledger-held-{readback_s}.jsonl"
+            env["WTDD_LEDGER"] = str(scratch)
+            out = subprocess.run([sys.executable, "-c", code, str(readback_s), str(wait_s)], cwd=ROOT, env=env,
+                                 capture_output=True, text=True, timeout=60)
+            exited = time.time()
+            self.assertEqual(out.returncode, 0, out.stderr[-500:])
+            hook_s, hooked_at = map(float, out.stdout.split())
+            self.assertLess(hook_s, 0.2, "the hook returns at once: the follow's end never waits on the light")
+            rows =[json.loads(line) for line in scratch.read_text().splitlines()] if scratch.exists() else []
+            rows = [r for r in rows if r["tool"] == "dog.led"]
+            if lands:
+                self.assertEqual(len(rows), 1, f"the acked 1007's row at exit: {out.stderr[-400:]}")
+                self.assertIs(rows[0]["ok"], True)
+                self.assertEqual(rows[0]["args"]["color"], "green")
+                self.assertEqual(rows[0]["state_after"], {"brightness": 7})
+            else:
+                self.assertEqual(rows, [])
+                self.assertIn("api_id=1007 code=0", out.stderr)   # acked by the dog, and still no row: the case to name
+                self.assertRegex(out.stderr, r"WARN led clear \(green\) unconfirmed[^\n]*dog\.led row")   # never silent: names the row it did not write
+                self.assertLess(exited - hooked_at, readback_s, "the exit's wait is bounded, never the read-back's whole wait")
 
 
 class Hold(unittest.TestCase):
