@@ -34,7 +34,7 @@ from unittest import mock
 _TMP = Path(tempfile.mkdtemp(prefix="wtdd-place-test-"))
 os.environ["WTDD_LEDGER"] = str(_TMP / "ledger.jsonl")
 os.environ["WTDD_MEMORY"] = str(_TMP / "memory.db")
-os.environ["WTDD_CAMS"] = str(_TMP / "cams")
+os.environ.setdefault("WTDD_CAMS", str(_TMP / "cams"))   # posts no frame; never overwrite test_cam's dir when both load in one process
 os.environ["WTDD_SHIFT"] = "2026-09-26-test"
 
 from wtdd import api, cam, config, field, ledger  # noqa: E402
