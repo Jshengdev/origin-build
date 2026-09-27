@@ -44,8 +44,8 @@ FRESH_S = 3.0            # watch.json older than this, by its own t, is no perso
 HZ = 4.0                 # the person watch's rate (watch.py publishes at about 4 Hz)
 HALT_MS = 1000           # UNVERIFIED (00.2): the eval's ceiling on stop.person still_ms (watch.json t -> read back still)
 STILL_MPS = 0.1          # UNVERIFIED (00.3): a read-back velocity component above this (m/s) is a body still moving; the
-                         # take's rows (docs/evidence/ledger-take-2026-09-13.jsonl) read at most 0.03 standing, and 0.24
-                         # and 0.54 in the read-back of a StopMove sent while moving (rows 71 and 51)
+                         # take's rows (docs/evidence/ledger-take-2026-09-13.jsonl) read at most 0.04 (row 130: 0.037)
+                         # standing, and 0.24 and 0.54 in the read-back of a StopMove sent while moving (rows 71 and 51)
 STILL_RADPS = 0.2        # UNVERIFIED (00.3): a read-back |yaw_speed| above this (rad/s) is a body still turning; the take's
                          # standing rows read at most 0.094 (row 132, a nod), the follower turns in place at up to nav.WMAX 0.5
 SETTLE_S = 0.5           # UNVERIFIED (00.3): how long a body above STILL_MPS or STILL_RADPS at the first read-back gets
