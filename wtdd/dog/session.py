@@ -109,6 +109,7 @@ class DogSession:
                                             "seconds": 0.0, "ranges": None, "error": None}   # the scout's live status (GET /dog/state .scout)
         self._scouter: Any = None                    # the running scout (a future on the session loop); stop() cancels it
         self._scout_stop = False                     # a stop while a press is active; read before the spin, when no task can be cancelled yet
+        self._scout_running = False                  # the task has run its first line: from then on stop() may cancel it
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -448,8 +449,8 @@ class DogSession:
             if not (math.isfinite(target_deg) and target_deg > 0 and math.isfinite(timeout_s) and timeout_s > 0):
                 raise ValueError(f"scout refused: target_deg {target_deg:g} and timeout_s {timeout_s:g} must be finite and over 0 "
                                  "(the timeout is the spin's one end guard)")
-            self.scout_state, mine, self._scout_stop = {"active": True, "target_deg": target_deg, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
-                                                        "seconds": 0.0, "ranges": None, "error": None}, True, False   # claimed before the connect: a double click is refused above
+            self.scout_state, mine, self._scout_stop, self._scout_running = {"active": True, "target_deg": target_deg, "turned_deg": 0.0, "frames": 0,
+                "cells_added": 0, "seconds": 0.0, "ranges": None, "error": None}, True, False, False   # claimed before the connect: a double click is refused above
             self.run(self._ensure())
             if self.cal is None and not self._scout_stop:   # nose at drop-off is up: a stated convention, not a measurement (no map to orient against yet)
                 self.calibrate(scout.CANVAS_CENTRE, math.radians(scout.DROPOFF_HEADING_DEG), source="dropoff")
@@ -472,6 +473,7 @@ class DogSession:
         state_after is complete on a FAILED row too. FAILED: a refused LiDAR switch, no turn after NO_TURN_S, timeout,
         a stop, 0 frames, cb_errors rising, 0 band cells. Not closed is ok with closed false and a WARN; z 0 is the
         standing control."""
+        self._scout_running = True   # first line, before any await: a stop before this only flags (a cancel now would run nothing, no row)
         b, ss = self.body, self.scout_state
 
         def cells() -> int:
@@ -586,7 +588,7 @@ class DogSession:
             self._follower.cancel()
         if self.scout_state["active"]:   # 14: set before the cancel below; a press with no task yet reads it and ends stopped
             self._scout_stop = True
-        if self._scouter and not self._scouter.done():   # 14: the scout halts itself and its row says stopped
+        if self._scouter and not self._scouter.done() and self._scout_running:   # 14: the scout halts itself and its row says stopped
             self._scouter.cancel()
         self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
         out: dict[str, Any] = {"vel": [0.0, 0.0, 0.0]}
