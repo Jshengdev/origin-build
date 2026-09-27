@@ -63,6 +63,10 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 22 · livecheck · start */
+  .lc-line { font-family: var(--mono); font-size: 11px; letter-spacing: .02em; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .lc-line.bad { font-weight: 600; } .lc-line.idle { opacity: .55; }
+  /* 22 · livecheck · end */
 </style>
 </head>
 <body>
@@ -326,6 +330,7 @@ function App() {
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
+        <${LiveCheck}/>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
           <div class="hint">closer = brighter. the strip scores along its length, so a graze at its edge is dim and a pass over its middle is bright. lights in other rooms fade by the other-room factor.</div>
@@ -365,6 +370,16 @@ function App() {
     </div>
   </div>`;
 }
+// 22 · livecheck · start
+function LiveCheck() {   // GET /livecheck every second (python -m wtdd.livecheck): its `short` line drawn verbatim; the page computes nothing
+  const [d, setD] = useState(null);
+  useEffect(() => { const f = () => fetch("/livecheck").then(r => r.json()).then(setD).catch(e => setD({ verdict: "FAIL", short: `GET /livecheck FAILED · ${e}` })); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
+  if (!d) return null;
+  const text = d.verdict == null ? `livecheck · no step running · ${d.why}` : d.stale ? `livecheck stopped · ${d.step} · ${d.age_s} s` : d.short;
+  const cls = d.verdict == null ? "idle" : d.stale || d.verdict === "FAIL" || d.verdict === "UNSAFE" ? "bad" : d.verdict === "PASS" ? "ok" : "";
+  return html`<div class="panel"><h2>Live check · livecheck.json</h2><div class=${"lc-line " + cls} title=${d.line || d.why || ""}>${text}</div></div>`;
+}
+// 22 · livecheck · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
