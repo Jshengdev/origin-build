@@ -374,18 +374,24 @@ def exit_code(v: dict) -> int:
 START = re.compile(r"^\s*(\*\*Needs the dog|#{1,3} Needs the dog)", re.I)
 END = re.compile(r"^\s*(\*\*[^*]+\*\*\s*$|#{1,3} )")
 ITEM = re.compile(r"^(?:- )?\(?(\d+|[a-z])[.)] (.*)$")
+BOLD = re.compile(r"^(?:- )?\*\*(?:\d+[a-z]?\.)?(\d+|[a-z])\b(?: ·)?\s*([^*]*?)\s*\*\*\s*(.*)$")   # **1 · text** / - **26.1** text
 
 
 def needs_the_dog_lines(body: str) -> list[tuple[str, str]]:
-    """[(k, the line's text verbatim)] for the numbered (1. / a) / - (a)) lines of the body's Needs-the-dog section only."""
+    """[(k, the line's text verbatim)] for the numbered lines of the body's Needs-the-dog section only: `1.` / `a)` / `- (a)`,
+    and a step numbered inside bold, `**1 · text** more` / `- **24.1 · text**` / `- **26.1** text` (k is the number after
+    any `<item>.`; the text is the line with that bold's two `**` dropped). A bold line that starts with a step number is a
+    step; any other bold-only line or heading ends the section."""
     out, on = [], False
     for l in body.splitlines():
         if not on:
             on = bool(START.match(l))
-        elif END.match(l):
-            break
         elif m := ITEM.match(l):
             out.append((m.group(1), m.group(2)))
+        elif m := BOLD.match(l):
+            out.append((m.group(1), " ".join(t for t in m.group(2, 3) if t)))
+        elif END.match(l):
+            break
     return out
 
 
