@@ -73,6 +73,13 @@ Review round 2 (the classes after RoundHold, RED before their fixes):
                                      the eval grades fail; a body that settles within it is an ok stop
   the word from the dog's own account  (is_from_me: sender '' in chat.db) is still POSTed and refused with its row,
                                      and the chat and the WARN line name the missing handle, not "a person's name"
+
+Review round 3 (the classes after OwnAccount, RED before their fixes):
+  state_after.still_ms               the wall clock of the read-back that confirmed the body still minus watch.json's
+                                     t: the settle read when one ran, else latency_ms. halt.grade applies HALT_MS to it
+                                     when the row has it (latency_ms stays the first read-back's, as the contract says)
+  a read-back with no velocity       has not said the body is still: state_after.velocity is what the device sent
+                                     (None), the settle read is taken, and none again is stop.person ok false naming it
 """
 from __future__ import annotations
 import asyncio
@@ -1172,6 +1179,99 @@ class OwnAccount(unittest.TestCase):
         self.assertNotIn("person's name", said[0])
         warns = [l for l in buf.getvalue().splitlines() if "WARN" in l and "no sender handle" in l]
         self.assertTrue(warns, buf.getvalue()[-600:])
+
+
+# ------------------------------------------------------------------------------------------------ review round 3
+class Blind(FakeBody):
+    """A body whose read-back after a StopMove carries no velocity key for `reads` fresh reads (forever by default):
+    the device has not said it is still, so nothing may say it for the device."""
+
+    def __init__(self, reads: int = 10 ** 9) -> None:
+        super().__init__()
+        self.left = reads
+
+    async def fresh_state(self, required: bool = False) -> dict:
+        st = await super().fresh_state(required)
+        if self.left > 0 and "StopMove" in [n for n, _ in self.cmds]:
+            self.left -= 1
+            st.pop("velocity")
+        return st
+
+
+class StillMs(Dry):
+    """The eval's ceiling is on the read-back that confirmed the body still, and only a read-back that carries a
+    velocity can confirm it."""
+
+    def halt_on(self, body: FakeBody, age: float = 0.0) -> dict:
+        self.fake = self.s.body = body
+        self.plant([person(near_h() + 10)], t=time.time() - age)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.s.drive(0.3, 0.0, 0.0)
+            self.s.person_tick()
+        rows = of("stop.person")
+        self.assertEqual(len(rows), 1, rows)
+        return rows[0]
+
+    def test_a_body_still_at_the_first_read_back_is_timed_there(self):
+        r = self.halt_on(FakeBody(), age=0.2)
+        sa = r["state_after"]
+        self.assertIs(r["ok"], True, r["response_or_error"])
+        self.assertNotIn("velocity_settled", sa)
+        self.assertEqual(sa["still_ms"], sa["latency_ms"])
+        self.assertEqual(self.s.state()["halted"]["still_ms"], sa["still_ms"])   # the page's line
+
+    def test_a_stop_the_settle_read_confirmed_is_graded_on_the_settle_read(self):
+        r = self.halt_on(Coasting(reads=1), age=0.7)   # moving at the first read-back, still SETTLE_S later
+        sa = r["state_after"]
+        self.assertIs(r["ok"], True, r["response_or_error"])
+        self.assertEqual(sa["velocity"], Coasting.V)
+        self.assertEqual(sa["velocity_settled"], [0.0, 0.0, 0.0])
+        self.assertLessEqual(sa["latency_ms"], halt.HALT_MS)   # the first read-back, as the contract defines it
+        self.assertGreaterEqual(sa["still_ms"] - sa["latency_ms"], halt.SETTLE_S * 1000)
+        self.assertGreater(sa["still_ms"], halt.HALT_MS)
+        self.assertEqual(self.s.state()["halted"]["still_ms"], sa["still_ms"])
+        g, why, _ = halt.grade([DET()] + ledger.rows() + [RESUMED()])
+        self.assertEqual(g, "fail", why)
+        self.assertIn("still_ms", why)
+
+    def test_the_grade_applies_the_ceiling_to_still_ms_when_the_row_has_it(self):
+        def stop(ms, still):
+            r = STOP(ms=ms)
+            r["state_after"]["still_ms"] = still
+            return r
+        self.assertEqual(halt.grade([DET(), stop(400, halt.HALT_MS), RESUMED()])[0], "pass")
+        g, why, detail = halt.grade([DET(), stop(400, halt.HALT_MS + 1), RESUMED()])
+        self.assertEqual(g, "fail", why)
+        self.assertIn("still_ms", why)
+        self.assertIn("still_ms", detail)
+        self.assertEqual(halt.grade([DET(), stop(400, None), RESUMED()])[0], "fail")
+        self.assertEqual(halt.grade([DET(), STOP(ms=400), RESUMED()])[0], "pass")   # a row from before still_ms: latency_ms
+
+    def test_a_read_back_with_no_velocity_is_not_a_stop_and_the_halt_stands(self):
+        r = self.halt_on(Blind())
+        sa = r["state_after"]
+        self.assertIs(r["ok"], False, r)
+        self.assertIn("no velocity in the read-back", r["response_or_error"])
+        self.assertIsNone(sa["velocity"])   # what the device sent, not a default
+        self.assertIn("velocity_settled", sa)   # the settle read was taken
+        self.assertIsNone(sa["velocity_settled"])
+        self.assertNotIn("still_ms", sa)
+        h = self.s.state()["halted"]
+        self.assertIs(h["ok"], False)
+        self.assertIn("no velocity in the read-back", h["error"])
+        with self.assertRaises(RuntimeError):
+            self.s.drive(0.3, 0.0, 0.0)
+        g, why, _ = halt.grade([DET()] + ledger.rows() + [RESUMED()])
+        self.assertEqual(g, "fail", why)
+        self.assertIn("no velocity in the read-back", why)
+
+    def test_no_velocity_then_still_on_the_settle_read_is_an_ok_stop_timed_there(self):
+        r = self.halt_on(Blind(reads=1))
+        sa = r["state_after"]
+        self.assertIs(r["ok"], True, r["response_or_error"])
+        self.assertIsNone(sa["velocity"])
+        self.assertEqual(sa["velocity_settled"], [0.0, 0.0, 0.0])
+        self.assertGreaterEqual(sa["still_ms"] - sa["latency_ms"], halt.SETTLE_S * 1000)
 
 
 if __name__ == "__main__":
