@@ -666,6 +666,18 @@ class Feed(Base):
         st = p.state()
         self.assertEqual((st["n"], st["failed"]), (1, []))
 
+    def test_a_waiting_thing_07_no_longer_sees_stops_waiting(self):
+        moved = {"position": [0.10, 0.0], "yaw": 0.0}
+        p = self.props()
+        p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
+        self.assertIn("waiting", p.state()["why"])
+        for t in range(objects.STALE_WINDOWS):   # the detector stops boxing them: 07 marks both stale, their old pins kept
+            self.store.observe({**frame(), "boxes": [], "t": 10.0 + t}, moved, self.g, CAL, FOV, threshold=THR)
+        self.assertTrue(all(o["stale"] and o["hit_m"] for o in self.store.to_list()))
+        p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
+        self.assertNotIn("waiting", p.state()["why"], "a thing no longer seen does not wait forever")
+        self.assertFalse(self.rows)
+
 
 class Confirm(Base):
     def setUp(self):
