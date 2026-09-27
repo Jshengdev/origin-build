@@ -36,8 +36,9 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
   sniff:      the driver keeps ONE callback per topic (msgs/pub_sub.py:16) and subscribe() overwrites it (:128-129);
               unsubscribe() only sends (:133-140) and its closed-channel guard only prints (:123-125). So sniff() never
               subscribes the three topics Body owns (SNIFF_OWNED): it taps _on_state/_on_lidar/_on_utpose through
-              Body.taps. Any other RTC_TOPIC is subscribed for the window and unsubscribed after; streams() counts every
-              arrival. UNVERIFIED on the dog: every topic but rt/lf/sportmodestate (the sniff exists to end that).
+              Body.taps. Any other RTC_TOPIC is subscribed for the window and unsubscribed after, unless its slot holds a
+              callback the sniff did not put there (refused: add that topic to SNIFF_OWNED and tap it); streams() counts
+              every arrival. UNVERIFIED on the dog: every topic but rt/lf/sportmodestate (the sniff exists to end that).
   auth:      firmware 1.1.15+ needs aes_128_key, fetched once with
               `unitree-fetch-aes-key --email <unitree account> --password '...' --device-type Go2`.
   discovery:  discover_ip_sn() is multicast 231.1.1.1:10131; a dog in STA mode on another subnet does not answer.
@@ -294,6 +295,7 @@ class Body:
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
         self.taps: dict[str, list] = {}       # topic -> the running sniffs' taps, fed by _tap
         self._streams: dict[str, dict] = {}   # topic -> {n, t0, at, keys_n}: every arrival counted this connection
+        self._sniffed: dict[str, Any] = {}    # topic -> the callback sniff() put in the driver's slot (a re-sniff finds it)
 
     # ---- connection
 
@@ -625,8 +627,8 @@ class Body:
         """Watches one topic for `seconds`; one dog.sniff row: {messages, hz, keys (key_tree of the first message's
         data), first_payload (cut to PAYLOAD_MAX bytes), last_at}, or ok=false with "0 messages in N s" (args.why on a
         utlidar topic). An owned topic is tapped from Body's own callback, never subscribed; any other RTC_TOPIC is
-        subscribed for the window and unsubscribed after; any other name is refused before any send. Never switches the
-        LiDAR on."""
+        subscribed for the window and unsubscribed after; any other name, and any topic whose driver slot holds a
+        callback the sniff did not put there, is refused before any send. Never switches the LiDAR on."""
         with step("dog", "dog.sniff", "unitree", {"topic": topic, "seconds": seconds}, self.state()) as r:
             src = getattr(self.conn, "source", "live")
             if src != "live":   # night-1 contracts E: a stub connection (only wtdd/dog/test_sniff.py builds one) says so on its row
@@ -637,6 +639,9 @@ class Body:
             ps, owned = self.conn.datachannel.pub_sub, name in SNIFF_OWNED
             if not owned and ps.channel.readyState != "open":   # the driver only prints here (pub_sub.py:123-125)
                 raise ConnectionError("data channel is not open")
+            if not owned and ps.subscriptions.get(name) not in (None, self._sniffed.get(name)):   # pub_sub.py:16, :128-129
+                raise RuntimeError(f"{name} already has a callback in the driver (Body subscribes it): add it to "
+                                   "SNIFF_OWNED and tap it; a subscribe here would silently replace that callback")
             if not owned and self.taps.get(name):   # a second subscribe overwrites, and the first one's unsubscribe ends both
                 raise RuntimeError(f"a sniff of {name} is already running")
             c: dict[str, Any] = {"n": 0}
@@ -650,7 +655,7 @@ class Body:
             self.taps.setdefault(name, []).append(tap)   # in place before the first await: no arrival is missed
             try:
                 if not owned:
-                    ps.subscribe(name, lambda m: self._tap(name, m))
+                    ps.subscribe(name, self._sniffed.setdefault(name, lambda m: self._tap(name, m)))
                 for i in range(math.ceil(float(seconds))):
                     await asyncio.sleep(min(1.0, float(seconds) - i))
                     log("dog", f"{'' if c['n'] else 'WARN '}sniff {name} second {i + 1}", messages=c["n"])
