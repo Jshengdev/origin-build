@@ -442,6 +442,30 @@ class Correct(unittest.TestCase):
         self.assertIn("jev 500", why)
 
 
+class Follow(unittest.TestCase):
+    """B13: the follow trial's residual in metres is at the scale in force (nav.PX_PER_M, 87 px/m live), never 108.5.
+    The API is mocked: /dog/follow starts, /dog/state says the follower ended done 87 px past the path's last point;
+    config.ROOT points at a scratch map with that path, so unsafe() (which reads the repo's zones) is stubbed: no rows."""
+
+    def test_the_residual_in_metres_is_at_the_scale_in_force(self):
+        from wtdd.dog import nav
+        root = Path(tempfile.mkdtemp(prefix="wtdd-evals-follow-"))
+        (root / "ui").mkdir()
+        (root / "ui" / "map.json").write_text(json.dumps({"path": [[100, 100], [200, 100]]}))
+
+        def api(url, **_):
+            body = ({"ok": True} if url.endswith("/dog/follow") else
+                    {"follow": {"active": False, "done": True, "reached": [0, 1], "n": 2, "i": 0, "stops": 0}, "map": {"p": [287, 100]}})
+            return mock.Mock(json=mock.Mock(return_value=body))
+        with mock.patch.object(nav, "PX_PER_M", 87.0), mock.patch.object(evals.config, "ROOT", root), \
+                mock.patch.object(evals, "unsafe", return_value=[]), \
+                mock.patch("requests.post", side_effect=api), mock.patch("requests.get", side_effect=api), \
+                contextlib.redirect_stderr(io.StringIO()):
+            (r,) = evals.run_follow(1)
+        self.assertEqual(r["grade"], "pass", r)
+        self.assertIn("end 87 px from the path's last point (1.0 m", r["detail"])   # 87 / 87; at 108.5 it read 0.8 m
+
+
 class Dry(unittest.TestCase):
     """The verifying command: python -m wtdd.evals --scenario <s> runs dry on the fixture and says so."""
 
