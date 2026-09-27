@@ -439,7 +439,8 @@ function Cams({ cameras }) {
 // camera's spot and a dot at the arrival. The block under the map: the phase, the three probabilities the decision came
 // back with, the demotion, then the words it was made on, verbatim. The page computes nothing but "stale", in red: a
 // phase that is not an end, older than its own window. `following` is rewritten every second (3 s); `asked` waits
-// QUESTION_S for a yes (120 s, wtdd/dispatch.py; the listener then drops the question: "the question expired");
+// QUESTION_S for a yes (120 s, wtdd/dispatch.py): past it, "stale · no yes within 2 min", because the page cannot know
+// whether the question expired or was answered no (a no writes no phase);
 // `planned` and a real `decided` get 60 s, for one Jev call (20 s at most) and one post. A dry `decided`, `arrived`,
 // `ignored` and `failed` are ends, never stale. A failed or ignored dispatch shows that one phase, not the happy
 // path it never walked; a failure is FAILED in red with its reason (and the ring turns red); an error on an arrived
@@ -458,7 +459,7 @@ function Dispatch({ part }) {
   return html`<div class="dblock">
     ${err ? html`<div class="mono bad">dispatch · GET /dispatch FAILED · ${err}</div>` : !d ? html`<div class="mono">dispatch · …</div>`
       : !d.phase ? html`<div class="hint">dispatch · none yet · python -m wtdd dispatch cam=lap1 dry=true</div>` : html`
-      <div class="mono">dispatch · camera ${d.cam}${d.label ? ` (${d.label})` : ""}${d.dry ? " · dry: nothing posts, nothing moves" : ""}${stale && html` · <span class="bad">stale${d.phase === "asked" ? " · the question expired: no yes within 2 min" : ""}</span>`}</div>
+      <div class="mono">dispatch · camera ${d.cam}${d.label ? ` (${d.label})` : ""}${d.dry ? " · dry: nothing posts, nothing moves" : ""}${stale && html` · <span class="bad">stale${d.phase === "asked" ? " · no yes within 2 min" : ""}</span>`}</div>
       <div class="dphase">${PHASES.includes(d.phase) ? PHASES.map((p, i) => html`<span key=${p}>${i ? " → " : ""}${p === d.phase ? html`<b>${p}</b>` : p}</span>`) : html`<b class=${failed ? "bad" : ""}>${d.phase}</b>`}</div>
       ${pr && html`<div class="dprob">${["dispatch", "ask", "ignore"].map(k => `${k} ${pr[k]}`).join(" · ")}${d.demoted === "auto off" ? ` · auto off${d.ask_to ? `: asking ${d.ask_to}` : ""}` : d.demoted ? ` · ${d.demoted}` : ""}</div>`}
       ${d.choice && html`<div class="mono">choice ${d.choice}${d.p != null ? ` · p ${d.p}` : " · a person said yes"}${d.reached != null ? ` · reached ${d.reached} of ${d.of}` : ""}</div>`}
