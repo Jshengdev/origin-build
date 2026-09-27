@@ -417,6 +417,7 @@ function RouteMap({ onSaved }) {
   useEffect(() => { g.current?.ownerSVGElement?.classList.toggle("routing", active); });   // every render: App's own class update would drop it
   const tap = e => {
     e.stopPropagation();
+    if (e.detail > 1) return;   // the second click of a double-click is the same tap, not a stop (a same-cell leg fails the route)
     const svg = e.currentTarget.ownerSVGElement, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
     const p = pt.matrixTransform(svg.getScreenCTM().inverse());
     setTaps(t => [...t, [Math.round(p.x), Math.round(p.y)]]); setRes(null); setFailed(null); setMsg(null);
