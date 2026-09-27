@@ -31,7 +31,7 @@ shutil.copy(FIXTURE, TMP_MAP)
 os.environ["WTDD_MAP"] = str(TMP_MAP)                      # the map every module reads (wtdd/field.py MAP), like WTDD_LEDGER
 os.environ["WTDD_LEDGER"] = str(_TMP / "ledger.jsonl")
 
-from wtdd import field, ledger, plan  # noqa: E402
+from wtdd import field, ledger, nogo, plan  # noqa: E402
 from wtdd.field import inside  # noqa: E402
 
 ZONE = next(z for z in json.loads(FIXTURE.read_text())["zones"] if z.get("nogo"))
@@ -159,14 +159,27 @@ class Refusal(unittest.TestCase):
         self.assertEqual([r["tool"] for r in rows if r["tool"] == "field.walk"], [], "refused before the walk began: no field.walk row")
         self.assertEqual(field.FIELD.stat().st_mtime if field.FIELD.exists() else None, self.field_before, "nothing was published to the remote")
 
-    def test_walk_refuses_a_segment_crossing_the_zone(self):
-        _set_path(PATH_ACROSS)
+    def test_a_line_crossing_the_zone_is_routed_not_refused_and_a_dot_inside_is(self):
+        """S12 (Johnny, 2026-09-27: route around, refuse only a dot inside): the dog's walk and follow check the DOTS
+        against the zones; a line between two free dots that crosses a zone is S6b's to route around (its cost map
+        blocks the zone), so it writes no route.refused row. A dot inside a zone is refused by name, as before."""
+        n0 = len(self.new_rows())
+        nogo.refuse(PATH_ACROSS, "field", dots_only=True)             # the segment 430->540 crosses; no dot is inside
+        self.assertEqual([r for r in self.new_rows()[n0:] if r["tool"] == "route.refused"], [])
         with self.assertRaises(ValueError) as cm:
-            field.walk(dry=True)
+            nogo.refuse(PATH_THROUGH, "field", dots_only=True)        # point 2 sits inside
+        self.assertIn("point 2", str(cm.exception))
         self.assertIn(ZONE["name"], str(cm.exception))
-        refused = [r for r in self.new_rows() if r["tool"] == "route.refused"]
+        refused = [r for r in self.new_rows()[n0:] if r["tool"] == "route.refused"]
         self.assertEqual(len(refused), 1)
-        self.assert_refused_row(refused[0], "field", 1)   # the segment 430->540 starts at path index 1
+        self.assert_refused_row(refused[0], "field", 1)
+        self.assertIs(nogo.hit(PATH_ACROSS, nogo.zones(json.loads(nogo.MAP.read_text())))["crosses"], True, "the plain check still sees the crossing (the planner's own tools use it)")
+
+    def test_the_walk_and_the_follow_check_dots_only(self):
+        import inspect
+        from wtdd.dog import session
+        self.assertIn('refuse(pts, "field", m, dots_only=True)', inspect.getsource(field.walk))
+        self.assertIn('refuse(path, "dog", dots_only=True)', inspect.getsource(session.DogSession.follow))
 
     def test_follow_refuses_before_connecting(self):
         """dog.follow with a route through the zone: refused first, before calibration is checked, before any probe or

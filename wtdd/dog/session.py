@@ -572,7 +572,7 @@ class DogSession:
     # ---- following the drawn path
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = False, avoid: bool = True) -> dict[str, Any]:
         from ..nogo import refuse                  # 04: a route through a drawn no-go zone is refused before anything else is looked at
-        refuse(path, "dog")                        # reads the map's zones; one route.refused row, then ValueError; no probe, no connect, no dog.follow row
+        refuse(path, "dog", dots_only=True)        # S12: a dot inside a zone is refused; a line crossing one is S6b's legs to route around; reads the map's zones; one route.refused row, then ValueError; no probe, no connect, no dog.follow row
         if self.cal is None:
             raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
         if self._follower and not self._follower.done():
