@@ -25,13 +25,13 @@ or the first tap), points[1:] the stops, in order. One plan() per leg (its plan.
 args.legs), the legs' waypoints joined with the shared end kept once, every segment longer than field.MAX_STEP_PX cut
 into equal steps so the joined path passes check_path's jump rule, stops = the index of each leg's end, actions = the
 default a stop gets (DEFAULT_ACTION, what POST /dog/mark writes). zones given = the confirmed no-go set instead of
-the map's, checked up front: a malformed one fails the route's row by name, never as a leg. A leg with no route: a
-ValueError naming "leg k of n" and carrying .failed_leg {leg, of, from, to, error} for the page's red dashed line, the
-plan.multistop row ok false with args.failed_leg, and no partial route returned; a leg whose two ends share one lattice
-cell (a double tap) fails the same way, since its stop would repeat the last one (its plan.route row is ok: A* found
-the one cell). One plan.multistop row per call,
-after the legs' rows: args {points, legs, cell_px, shift_id, cost_map, why?, grid_source?, failed_leg?}, state_after
-{legs, stops, length_m, waypoints}, cached with that source when the grid is not the session's (plan()'s rule).
+the map's; either set is checked up front: a malformed zone fails the route's row by name, never as a leg. A leg with
+no route: a ValueError naming "leg k of n" and carrying .failed_leg {leg, of, from, to, error} for the page's red
+dashed line, the plan.multistop row ok false with args.failed_leg, and no partial route returned; a leg whose two ends
+share one lattice cell (a double tap) fails the same way, since its stop would repeat the last one (its plan.route row
+is ok: A* found the one cell). One plan.multistop row per call, after the legs' rows: args {points, legs, cell_px,
+shift_id, cost_map, why?, grid_source?, failed_leg?}, state_after {legs, stops, length_m, waypoints}, cached with that
+source when the grid is not the session's (plan()'s rule).
 route() writes no map; wtdd/tools/plan_route.py save=true does, through POST /map's rules.
 
     python -m wtdd plan_path from=448,455 to=436,586           the waypoints, nothing written
@@ -288,8 +288,9 @@ def route(points, grid=None, cal: dict | None = None, zones: list[dict[str, Any]
                 r["cached"], r["source"] = True, grid_source   # plan()'s rule: a planted grid never claims live
         if n < 1:
             raise ValueError(f"a route needs a start and at least one stop (got {len(pts)} point(s))")
-        if zones is not None:
-            nogo.zones({"zones": zones})   # the confirmed set, checked before any leg: a malformed zone fails this row by name
+        # the zones every leg will use (the confirmed set given, else the map's), checked before any leg: a malformed
+        # zone fails this row by name and is never recorded as a leg with no route
+        nogo.zones({"zones": zones} if zones is not None else json.loads(MAP.read_text()))
         for k in range(1, n + 1):
             a, b = pts[k - 1], pts[k]
             try:
