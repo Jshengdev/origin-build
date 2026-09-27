@@ -9,6 +9,8 @@ Checks, through the real Body._drain, the real DogSession loop and the real API 
     none for a repeat, each part with the same two headers; two viewers and frame.jpg share one encode per frame;
   - the stall rule: no new frame for FRAME_STALE_S ends the response (never a stale image), /dog/frame.jpg is 503 with
     the error, a new stream request is 503, /dog/state says video.stale; the next frame brings the stream back;
+  - a stall that ended a stream is counted (video.gaps) when the frames resume, and the page keys the stream URL on it,
+    so a stall that no 1 s poll saw still reopens the stream; a channel with no first frame says so, not a bogus age;
   - GET /dog/state gains video {fps (from _fr_n deltas over the last second), age_ms, bytes, w, h, frames, sha, stale};
   - GET /watch gains frames_behind (the cache's newest n minus the n the detector boxed), None when unknown, never 0;
   - wtdd/watch.py records frame_sha and frame_n from the headers it pulled; a --source file writes neither;
@@ -222,6 +224,16 @@ class Cache(Rig):
         self.assertEqual(len(ENCODES), 2)
         self.no_rows()
 
+    def test_no_first_frame_is_named_not_aged(self):
+        # _video_on timed out: the channel is on and no frame ever came. The page's FAILED tile shows this error.
+        with self.assertRaisesRegex(RuntimeError, r"no video frame yet \(frames=0\)"):
+            self.s.run(self.b.jpeg_cached())
+        st, _, data = get("/dog/frame.jpg")
+        self.assertEqual(st, 503)
+        self.assertIn("no video frame yet", json.loads(data)["error"], "a missing first frame was reported as an age")
+        self.assertEqual(len(ENCODES), 0)
+        self.no_rows()
+
 
 class FrameJpeg(Rig):
     def test_headers_and_eight_readers_one_encode(self):
@@ -304,6 +316,26 @@ class Stream(Rig):
             self.assertEqual(back.ns(), ["2"])
         finally:
             back.close()
+        self.no_rows()
+
+
+class Gaps(Rig):
+    def test_a_stall_that_ended_a_stream_is_counted_when_the_frames_resume(self):
+        self.push()
+        a = Reader()
+        try:
+            self.assertEqual(a.status, 200, getattr(a, "body", b"")[:200])
+            self.push(3, fps=14)   # frames at the dog's rate: no gap
+            self.assertEqual(json.loads(get("/dog/state")[2])["video"]["gaps"], 0, "frames at 14 fps were counted as a gap")
+            wait_for(lambda: a.ended is not None, B.FRAME_STALE_S + 2, "the handler to end a stalled stream")
+        finally:
+            a.close()
+        # No /dog/state landed during the stall, so a page never saw video.stale: the count is what reopens its stream.
+        self.push()
+        v = json.loads(get("/dog/state")[2])["video"]
+        self.assertEqual((v["gaps"], v["stale"]), (1, False), "a stall that ended a stream was not counted")
+        self.push(3, fps=14)
+        self.assertEqual(json.loads(get("/dog/state")[2])["video"]["gaps"], 1, "frames after the stall were counted again")
         self.no_rows()
 
 
@@ -397,6 +429,13 @@ class Page(unittest.TestCase):
                      "fps ·", "frame_sha"):
             self.assertTrue(said in page, f"ui/index.html does not say {said!r}")
         self.assertFalse("onError=${() => next(2000)}" in page, "the silent retry is still there (ui/index.html)")
+
+    def test_a_counted_stall_reopens_the_stream(self):
+        page = (config.ROOT / "ui" / "index.html").read_text()
+        srcs = [line for line in page.splitlines() if "/dog/stream.mjpg?e=" in line]
+        self.assertTrue(srcs, "ui/index.html has no /dog/stream.mjpg?e= src")
+        for line in srcs:
+            self.assertIn("gaps", line, "the stream URL is not keyed on video.gaps: a stall no poll saw leaves the frozen frame up")
 
 
 if __name__ == "__main__":
