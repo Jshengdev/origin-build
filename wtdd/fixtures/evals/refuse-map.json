@@ -1,0 +1,42 @@
+{
+ "note": "The map wtdd/fixtures/evals/refuse.jsonl's refusal is sourced to (item 11): 04's fixture zone nogo-1 and the taught route through it, in house.svg pixel space (0 0 1060 1540). zones[].nogo: true is a no-go zone; lighting zones carry no nogo key. Built by wtdd/fixtures/evals/make.py.",
+ "zones": [
+  {
+   "name": "nogo-1",
+   "label": "no-go 1",
+   "poly": [
+    [
+     450,
+     1040
+    ],
+    [
+     510,
+     1040
+    ],
+    [
+     510,
+     1250
+    ],
+    [
+     450,
+     1250
+    ]
+   ],
+   "nogo": true
+  }
+ ],
+ "path": [
+  [
+   300,
+   1100
+  ],
+  [
+   480,
+   1100
+  ],
+  [
+   650,
+   1100
+  ]
+ ]
+}
