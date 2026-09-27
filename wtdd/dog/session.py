@@ -10,6 +10,10 @@ connects once more, logged; there is no reconnect loop.
 drive() is hold-to-move: the remote refreshes a velocity every 200 ms while a key is down; the loop republishes it at
 MOVE_HZ and sends StopMove 0.6 s after the last refresh or on stop(). Speeds are capped at DRIVE_MAX.
 
+state() also serves faults (the dog's pushed faults, each with age_s) and streams (state, video, lidar: n, age_ms,
+stale); WTDD_STATE_FIXTURE serves a typed state instead, a DEMO_CACHE for the dry screenshot that names itself in its
+`fixture` key.
+
 Where it thinks it is: calibrate(p, heading) ties the odometry pose now to a map point (wtdd/dog/nav.py); state() then
 carries "map": {p, heading_deg}. follow(path, stops) switches the dog's obstacle avoidance on (read back, refused
 otherwise) and is a task that feeds nav.steer velocities into the same drive loop, waypoint by waypoint, pausing at the
@@ -18,9 +22,7 @@ OBSTACLES_AVOID service (MOVE 1003, no ack) instead of SPORT Move; the state rea
 records the believed pose while Johnny drives, mark(look, say) adds a stop at the current spot with the action to
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
-row; a failed or cancelled follow says so in state().follow.error. state() also serves faults (the dog's pushed faults,
-each with age_s) and streams (state, video, lidar: n, age_ms, stale); WTDD_STATE_FIXTURE serves a typed state instead,
-a DEMO_CACHE for the dry screenshot that names itself in its `fixture` key.
+row; a failed or cancelled follow says so in state().follow.error.
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -136,11 +138,12 @@ class DogSession:
         if fx := config.maybe("WTDD_STATE_FIXTURE"):   # DEMO_CACHE: a typed GET /dog/state (wtdd/dog/fixtures/state-vitals.json) for the dry screenshot; unset WTDD_STATE_FIXTURE and the live Body's state is served; a missing file raises
             return self._fixture(fx)
         st = self.body.state() if self.body else None
-        return {"connected": self.body is not None, "faults": self._faults(), "streams": self.body.streams() if self.body else None, "moving": self.moving, "vel": list(self.vel), "state": st,
+        return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
-                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
+                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None,
+                "faults": self._faults(), "streams": self.body.streams() if self.body else None}
 
     def _faults(self) -> list[dict[str, Any]] | None:
         """The faults the dog pushed and has not cleared (Body.faults), each with age_s since we received it; None without a body."""
