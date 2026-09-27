@@ -636,7 +636,7 @@ class Body:
         if self._fr is None:
             return None
         now = time.monotonic()
-        win = [(t, n) for t, n in self._fr_times if now - t <= 1.0]
+        win = [(t, n) for t, n in tuple(self._fr_times) if now - t <= 1.0]   # tuple(): one C-level copy under the GIL; _drain appends on the dog loop's thread
         fps = round((win[-1][1] - win[0][1]) / (win[-1][0] - win[0][0]), 1) if len(win) >= 2 and win[-1][0] > win[0][0] else None
         c, age = self._jpg, now - self._fr_at
         return {"fps": fps, "age_ms": round(age * 1000), "bytes": len(c["bytes"]) if c else None,
