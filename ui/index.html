@@ -358,7 +358,7 @@ function App() {
           })()}
         </div>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
-          ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
+          ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? r.args.say : r.args ? JSON.stringify(r.args).slice(0, 60) : ""}${r.ok ? "" : ` · ${String(r.response_or_error ?? "").slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>

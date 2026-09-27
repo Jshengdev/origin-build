@@ -303,8 +303,9 @@ class Replan(unittest.TestCase):
         self.assertEqual(rows[0]["args"]["blocked"], {"index": 6, "waypoint": [600, 1400]})
 
 
-class Follower(unittest.TestCase):
-    """DogSession.follow with a teleporting body (module doc): the follower's own loop, no dog, no clock."""
+class _Harness(unittest.TestCase):
+    """DogSession.follow with a teleporting body (module doc): the follower's own loop, no dog, no clock. No live view
+    unless a test sets one (S6): self.live(points) is the newest LiDAR window's band in map pixels."""
 
     def setUp(self):
         from wtdd.dog import session
@@ -329,6 +330,22 @@ class Follower(unittest.TestCase):
     def tearDown(self):
         stop(self.s)
 
+    def live(self, pts) -> None:
+        """S6: the follower sees this band as the newest LiDAR window (map pixels); [] is a clear view."""
+        band = [[int(p[0]), int(p[1])] for p in pts]
+        self.s._live_px = lambda: band
+
+    def decided(self) -> list[dict]:
+        return rows_since(self.n0, "route.decided")
+
+    def assertSays(self, row: dict) -> None:
+        """Johnny, 03:15: "add the decision log to the receipts … as if im talking to the agent". Every decision row
+        carries one first-person sentence, dots numbered as the page draws them (index + 1)."""
+        say = row["args"].get("say") or ""
+        self.assertRegex(say, r"\bI\b|I'm", row["args"])
+        if row["args"].get("at") is not None:
+            self.assertIn(f"dot {row['args']['at'] + 1}", say.lower(), row["args"])
+
     def run_follow(self, stops: list[int], grid) -> tuple[dict, list[int]]:
         s = self.s
         s.grid = grid
@@ -347,38 +364,26 @@ class Follower(unittest.TestCase):
         s._follower.result(timeout=30)
         return dict(s.follow_state), resumed
 
-    def test_a_blob_on_the_next_waypoint_makes_the_follower_replan_and_reach_the_end(self):
-        blob = fx.blob_px(BLOB_AT)
-        fs, resumed = self.run_follow([4], fx.grid(blob_px=BLOB_AT))
+class Follower(_Harness):
+    """S6 (Johnny, 2026-09-27): "take the grey as guidance but fully rely on the blue". What blocks a waypoint is the
+    newest LiDAR window, padded by HALF_WIDTH; the accumulated grid is memory only. A blob only in memory never blocks:
+    before S6 it made the follower skip waypoints 3 to 5, which is what Johnny saw live as "not following the path"."""
+
+    def test_a_blob_only_in_memory_never_blocks_the_drawn_path(self):
+        fs, resumed = self.run_follow([4], fx.grid(blob_px=BLOB_AT))   # no live view in this test
         self.assertIsNone(fs.get("error"), fs)
         self.assertTrue(fs.get("done"), fs)
-        self.assertEqual(self.targets[-1], (650, 1400), "the route's end is reached")
-        for k in (3, 4, 5):
-            self.assertNotIn(tuple(ROUTE[k]), self.targets, f"waypoint {k} is occupied and is never driven to")
-        taught = {tuple(p) for p in ROUTE}
-        self.assertEqual([t for t in self.targets if t in taught], [tuple(p) for p in ROUTE[:3] + ROUTE[6:]], "the taught route resumes at the rejoin")
-        i400, i600 = self.targets.index((400, 1400)), self.targets.index((600, 1400))
-        self.assertGreaterEqual(i600 - i400 - 1, 1, f"the detour has waypoints of its own: {self.targets}")
-        d, at = nearest(self.targets, blob)
-        self.assertGreaterEqual(d, CLEAR_PX, f"the follower drove to {at}, {d:.0f} px from the blob: {self.targets}")
-        self.assertEqual(resumed, [], "stop 4 sits on the blob: skipped, never waited on")
-        self.assertEqual(fs["reached"], [0, 1, 2, 6, 7])
-        self.assertEqual(len(fs["replans"]), 1, fs)
-        rp = fs["replans"][0]
-        self.assertEqual((rp["at"], rp["rejoin"], rp["skipped_stops"]), (3, 6, [4]))
-        self.assertEqual(rp["waypoints"], i600 - i400 - 1, "the detour's own points, every one driven, the taught rejoin not among them")
-        rows = rows_since(self.n0, "plan.replanned")
-        self.assertEqual(len(rows), 1, "one plan.replanned row")
-        self.assertTrue(rows[0]["ok"])
-        self.assertEqual(rows[0]["state_after"]["waypoints"], rp["waypoints"])
-        self.assertEqual((rows[0]["args"]["blocked"]["index"], rows[0]["args"]["rejoin"]["index"]), (3, 6))
-        f = rows_since(self.n0, "dog.follow")
-        self.assertEqual(len(f), 1, "one dog.follow row")
-        self.assertTrue(f[0]["ok"], f[0])
-        self.assertEqual((f[0]["state_after"]["replans"], f[0]["state_after"]["skipped_stops"]), (1, [4]))
-        self.assertEqual(f[0]["state_after"]["reached"], [0, 1, 2, 6, 7])
+        self.assertEqual(self.targets, [tuple(p) for p in ROUTE], "every drawn waypoint, in order, nothing else")
+        self.assertEqual(resumed, [4], "the stop on the remembered blob is honoured")
+        self.assertEqual(fs["reached"], list(range(len(ROUTE))))
+        self.assertEqual(rows_since(self.n0, "plan.replanned"), [])
+        d = self.decided()
+        self.assertEqual([r["args"]["action"] for r in d], ["unchecked"], "one receipt: no live view, the path is followed as drawn")
+        self.assertIn("no live view", d[0]["args"]["reason"])
+        self.assertSays(d[0])
 
     def test_without_a_blob_the_follower_is_unchanged(self):
+        self.live([])
         fs, resumed = self.run_follow([2], fx.grid())
         self.assertIsNone(fs.get("error"), fs)
         self.assertTrue(fs.get("done"), fs)
@@ -387,10 +392,118 @@ class Follower(unittest.TestCase):
         self.assertEqual(fs["reached"], list(range(len(ROUTE))))
         self.assertEqual(fs["replans"], [])
         self.assertEqual(rows_since(self.n0, "plan.replanned"), [])
+        self.assertEqual(self.decided(), [], "nothing was decided, so nothing is written")
         f = rows_since(self.n0, "dog.follow")
         self.assertEqual(len(f), 1)
         self.assertTrue(f[0]["ok"], f[0])
         self.assertEqual((f[0]["state_after"]["replans"], f[0]["state_after"]["skipped_stops"]), (0, []))
+
+
+class FollowerLive(_Harness):
+    """S6: the live view decides, memory labels, the drawn path is followed in order from point 1, and every decision is
+    one route.decided row with its reason: snapped (within 0.5 m), detoured (to the next waypoint free in the live view),
+    refused. Nothing is skipped silently."""
+
+    def accounted(self, fs) -> set[int]:
+        out = set(fs["reached"])
+        for r in self.decided():
+            out |= set(r["args"].get("passed", []))
+        return out
+
+    def test_memory_grey_with_a_clear_live_view_is_driven_in_order(self):
+        self.live([])                                            # the blob is remembered but gone from the live view
+        fs, resumed = self.run_follow([4], fx.grid(blob_px=BLOB_AT))
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertEqual(self.targets, [tuple(p) for p in ROUTE])
+        self.assertEqual(resumed, [4])
+        self.assertEqual(self.decided(), [])
+        self.assertEqual(rows_since(self.n0, "plan.replanned"), [])
+
+    def test_a_new_obstacle_beside_a_waypoint_is_snapped_around_and_named(self):
+        blob = fx.blob_px((500, 1435))                          # 35 px below waypoint 4: its padding covers 3, 4 and 5
+        self.live(blob)
+        fs, resumed = self.run_follow([4], fx.grid())            # memory does not have it
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertTrue(fs.get("done"), fs)
+        snaps = [r for r in self.decided() if r["args"]["action"] == "snapped"]
+        self.assertEqual([r["args"]["at"] for r in snaps], [3, 4, 5], "each covered waypoint, in order")
+        for r in snaps:
+            a = r["args"]
+            self.assertEqual(a["blocker"]["kind"], "new obstacle", a)
+            self.assertEqual(a["blocker"]["in_memory"], 0, a)
+            self.assertGreater(a["blocker"]["cells"], 0, a)
+            self.assertLessEqual(a["m"], 0.5, a)
+            self.assertIn("new obstacle", a["reason"])
+            self.assertSays(r)
+        self.assertEqual(fs["reached"], list(range(len(ROUTE))), "every waypoint reached, three of them at their snapped spot")
+        self.assertEqual(resumed, [4], "the stop is honoured at its snapped spot")
+        d, at = nearest(self.targets, blob)
+        self.assertGreaterEqual(d, CLEAR_PX, f"the follower drove to {at}, {d:.0f} px from the obstacle: {self.targets}")
+
+    def test_the_same_blocker_already_in_memory_is_named_permanent(self):
+        self.live(fx.blob_px((500, 1435)))
+        self.run_follow([], fx.grid(blob_px=(500, 1435)))
+        snaps = [r for r in self.decided() if r["args"]["action"] == "snapped"]
+        self.assertTrue(snaps, self.decided())
+        for r in snaps:
+            self.assertEqual(r["args"]["blocker"]["kind"], "permanent", r["args"])
+            self.assertIn("permanent", r["args"]["reason"])
+
+    def test_no_free_floor_within_half_a_metre_is_a_detour_to_the_next_free_waypoint(self):
+        blob = fx.blob_px(BLOB_AT)                              # on waypoint 4: nothing free within 0.5 m of it
+        self.live(blob)
+        fs, resumed = self.run_follow([4], fx.grid())
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertTrue(fs.get("done"), fs)
+        det = [r for r in self.decided() if r["args"]["action"] == "detoured"]
+        self.assertEqual(len(det), 1, self.decided())
+        a = det[0]["args"]
+        self.assertEqual(a["at"], 4)
+        self.assertGreater(a["rejoin"], 4)
+        self.assertEqual(a["passed"], list(range(4, a["rejoin"])), "the waypoints the detour passes, named")
+        self.assertEqual(a["skipped_stops"], [4])
+        self.assertIn("no free floor within 0.5 m", a["reason"])
+        self.assertSays(det[0])
+        self.assertEqual(rows_since(self.n0, "plan.replanned")[0]["args"].get("say"), a["say"], "06's detour row carries the same sentence")
+        self.assertEqual(len(rows_since(self.n0, "plan.replanned")), 1, "06's detour row is kept")
+        self.assertEqual(self.accounted(fs), set(range(len(ROUTE))), "every drawn waypoint is reached, snapped or named as passed")
+        self.assertEqual(self.targets[-1], tuple(ROUTE[-1]))
+        d, at = nearest(self.targets, blob)
+        self.assertGreaterEqual(d, CLEAR_PX, f"the follower drove to {at}, {d:.0f} px from the obstacle: {self.targets}")
+
+    def test_a_blocked_end_with_nothing_after_it_is_refused_loud(self):
+        self.live(fx.blob_px(tuple(ROUTE[-1])))
+        fs, _ = self.run_follow([], fx.grid())
+        self.assertIn("refused", (fs.get("error") or ""), fs)
+        ref = [r for r in self.decided() if r["args"]["action"] == "refused"]
+        self.assertEqual(len(ref), 1, self.decided())
+        self.assertIs(ref[0]["ok"], False)
+        self.assertEqual(ref[0]["args"]["at"], len(ROUTE) - 1)
+        self.assertIn("no later waypoint", ref[0]["args"]["reason"])
+        self.assertSays(ref[0])
+        self.assertNotIn(tuple(ROUTE[-1]), self.targets, "never driven into the blocker")
+
+    def test_a_drawn_path_starts_at_point_one(self):
+        self.believed[:] = list(ROUTE[5])                        # the dog stands on waypoint 5
+        self.live([])
+        fs, _ = self.run_follow([], fx.grid())
+        self.assertEqual(self.targets[0], tuple(ROUTE[0]), "point 1 first, not the nearest point")
+        self.assertEqual(fs["reached"], list(range(len(ROUTE))))
+
+
+class Receipts(unittest.TestCase):
+    """S6, Johnny 03:15: the receipts panel reads like the agent talking. A row's first-person sentence (args.say) is its
+    main line, and a red row shows its error (response_or_error), which the panel never showed before S6."""
+    PAGE = (Path(__file__).resolve().parent.parent / "ui" / "index.html").read_text()
+
+    def receipt_line(self) -> str:
+        return next(l for l in self.PAGE.splitlines() if "[...ledger].reverse().slice(0, 25)" in l)
+
+    def test_the_sentence_is_the_main_line(self):
+        self.assertIn("r.args?.say", self.receipt_line())
+
+    def test_a_red_row_shows_its_error(self):
+        self.assertIn("r.response_or_error", self.receipt_line())
 
 
 class Tool(unittest.TestCase):

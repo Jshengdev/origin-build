@@ -85,6 +85,7 @@ PROBE_BACKOFF_S = 15.0                        # after a failed connect, callers 
 WP_TIMEOUT_S = 30.0                           # a waypoint not reached in this long fails the follow (no retry)
 MAX_REPLANS = 5                               # detours per follow; past it the follow fails loud rather than circling
 REC_HZ, REC_MIN_PX, REC_STEP_PX = 5.0, 10, 45   # route recording: sample rate, min move per sample, waypoint spacing (about 0.4 m)
+LIVE_MAX_AGE_MS = 1000                        # S6: an older LiDAR window is no live view; the follower says so once
 START_PX = 90                                 # a dog this close to the path's first point replays from the start (a loop's end is also its start)
 STOP_TIMEOUT_S = 180.0                        # a stop without resume for this long fails the follow
 
@@ -463,7 +464,7 @@ class DogSession:
         return r["state_after"]
 
     # ---- following the drawn path
-    def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
+    def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = False, avoid: bool = True) -> dict[str, Any]:
         from ..nogo import refuse                  # 04: a route through a drawn no-go zone is refused before anything else is looked at
         refuse(path, "dog")                        # reads the map's zones; one route.refused row, then ValueError; no probe, no connect, no dog.follow row
         if self.cal is None:
@@ -491,6 +492,33 @@ class DogSession:
         self.follow_state["resume"] = True
         return dict(self.follow_state)
 
+    def _live_px(self) -> list | None:
+        """S6: the newest LiDAR window's floor-to-head band in map pixels, every point, through the correction and the
+        tie (what the page draws as blue dots); None when there is no live view: no body or stream, a window older than
+        LIVE_MAX_AGE_MS, no pose, or not calibrated."""
+        b = self.body
+        if b is None or not hasattr(b, "lidar_points") or self.cal is None:
+            return None
+        lp, st = b.lidar_points(), b.state()
+        if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
+            return None
+        if not st or not st.get("position") or not st.get("rpy"):
+            return None
+        xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
+        x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
+        return lidar.to_map_points(xy, self.cal, (x, y), yaw, max_points=max(1, len(xy)))
+
+    def _decided(self, i: int | None, action: str, reason: str, say: str, **extra: Any) -> None:
+        """S6: one route.decided row per decision the follower makes: the action (unchecked, snapped, detoured, refused),
+        the reason, and one first-person sentence (args.say, the receipts' main line). A refusal is a FAILED row and
+        raises, so the follow fails loud with it."""
+        args = {"at": i, "action": action, "reason": reason, "say": say, **extra}
+        log("dog", f"decided {action}: {say}")
+        with step("dog", "route.decided", "map", args, self.map_pose()) as r:
+            if action == "refused":
+                raise RuntimeError(f"refused: {reason}")
+            r["state_after"] = {"action": action}
+
     def _set_vel(self, x: float, y: float, z: float) -> None:
         self.vel, self.vel_t = (x, y, z), time.monotonic()   # the drive loop publishes it and stops 0.6 s after the last refresh
 
@@ -513,8 +541,11 @@ class DogSession:
 
     async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
         """Waypoint by waypoint from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume().
-        Before each waypoint, plan.occupied on the session grid: occupied, plan.replan's detour is driven (no stop on
-        it) and the route continues at the rejoin index; at most MAX_REPLANS per follow. One dog.follow row at the end
+        S6: before each waypoint the LIVE view decides (the newest LiDAR window's band, plan.blocker), and the grid is memory
+        that only labels a blocker permanent or new. A covered waypoint moves to free floor within plan.LIVE_SNAP_M
+        (snapped), else plan.replan's detour runs to the next waypoint free in the live view (detoured; no stop on it),
+        else the follow is refused; each decision is one route.decided row with a first-person sentence (args.say). No
+        live view: one "unchecked" row and the dots are followed as drawn. At most MAX_REPLANS detours per follow. One dog.follow row at the end
         with the waypoints reached, the replans, the stops skipped and the error, if any. Never retries a waypoint."""
         fs = self.follow_state
         args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
@@ -523,27 +554,59 @@ class DogSession:
                 try:
                     if self.grid is None:
                         log("dog", "WARN following without an occupancy grid: a blob on the route cannot make a replan (POST /dog/lidar {on: true})")
-                    i, replans = start, 0
+                    i, replans, warned = start, 0, False
                     while i < len(path):
                         fs["i"] = i
-                        if plan.occupied(path[i], self.grid, self.cal, lock=self._grid_lock):
-                            if replans >= MAX_REPLANS:
-                                raise RuntimeError(f"waypoint {i} occupied after {replans} replans this follow (MAX_REPLANS): not circling")
-                            pose = self.map_pose()
-                            if pose is None:
-                                raise RuntimeError("no pose (state stream stopped)")
-                            det = plan.replan(pose["p"], path, i, self.grid, self.cal, lock=self._grid_lock)
-                            j = det["rejoin"]["index"]
-                            skipped = [k for k in stops if i <= k < j]
-                            fs["replans"].append({"at": i, "rejoin": j, "waypoints": len(det["path"]), "skipped_stops": skipped})
-                            fs["skipped_stops"] += skipped
-                            replans += 1
-                            log("dog", "WARN waypoint occupied: replanned", at=i, rejoin=j, detour=len(det["path"]), skipped_stops=skipped, length_m=det["length_m"])
-                            for k, q in enumerate(det["path"]):   # every point, the first is where it stands; no stop on a detour
-                                pose = await self._goto(q, reach_px, fs, f"detour point {k} around waypoint {i}")
-                            i = j
-                            continue
-                        pose = await self._goto(path[i], reach_px, fs, f"waypoint {i}")
+                        target, live = path[i], self._live_px()
+                        if live is None:
+                            if not warned:   # S6: said once, in words; the drawn dots are followed with the dog's own avoidance
+                                warned = True
+                                self._decided(None, "unchecked", "no live view (the LiDAR is off, its newest window is older than "
+                                              f"{LIVE_MAX_AGE_MS} ms, or the dog is not calibrated): the waypoints are followed as drawn, avoidance on",
+                                              "I can't see live right now, so I'm following your dots as drawn with my own obstacle avoidance on.")
+                        elif (b := plan.blocker(path[i], live, self.grid, self.cal, lock=self._grid_lock)) is not None:
+                            what = f"{b['kind']}, {b['cells']} cells, {b['in_memory']} in memory"
+                            seen = (f"something new ({b['cells']} cells, not in my memory: a new obstacle)" if b["kind"] == "new obstacle"
+                                    else f"something I've seen here before ({b['cells']} cells, {b['in_memory']} in my memory: permanent)")
+                            sn = plan.snap(path[i], live)
+                            if sn is not None:
+                                q, m = sn
+                                self._decided(i, "snapped", f"dot {i + 1} blocked by {what}: moved {m} m to free floor",
+                                              f"Dot {i + 1} is covered by {seen}. I'm going to the free spot {m} m away and carrying on in order.",
+                                              blocker=b, m=m, **{"from": [int(path[i][0]), int(path[i][1])], "to": q})
+                                target = q
+                            else:
+                                j = next((k for k in range(i + 1, len(path)) if plan.blocker(path[k], live) is None), None)
+                                if j is None:
+                                    self._decided(i, "refused", f"dot {i + 1} blocked by {what}: no free floor within {plan.LIVE_SNAP_M} m "
+                                                  "and no later waypoint free in the live view",
+                                                  f"Dot {i + 1} is covered by {seen}, there's no free floor within {plan.LIVE_SNAP_M} m of it and "
+                                                  "no dot after it I can reach, so I'm stopping here.", blocker=b)
+                                if replans >= MAX_REPLANS:
+                                    raise RuntimeError(f"waypoint {i} blocked after {replans} detours this follow (MAX_REPLANS): not circling")
+                                pose = self.map_pose()
+                                if pose is None:
+                                    raise RuntimeError("no pose (state stream stopped)")
+                                skipped = [k for k in stops if i <= k < j]
+                                passed = ", ".join(f"dot {k + 1}" for k in range(i, j))
+                                say = (f"Dot {i + 1} is covered by {seen} and there's no free floor within {plan.LIVE_SNAP_M} m of it. "
+                                       f"I'm going around to dot {j + 1}, passing {passed}" + (f", so stop {', '.join(str(k + 1) for k in skipped)} is missed" if skipped else "") + ".")
+                                reason = f"dot {i + 1} blocked by {what}: no free floor within {plan.LIVE_SNAP_M} m; detour to dot {j + 1}"
+                                try:
+                                    det = plan.replan(pose["p"], path, i, self.grid, self.cal, lock=self._grid_lock, live_px=live, rejoin=j, say=say)
+                                except ValueError as e:
+                                    self._decided(i, "refused", f"{reason}: no detour ({e})",
+                                                  f"Dot {i + 1} is covered by {seen} and I can't find a way around it to dot {j + 1} ({e}), so I'm stopping here.",
+                                                  blocker=b, rejoin=j)
+                                self._decided(i, "detoured", reason, say, blocker=b, rejoin=j, passed=list(range(i, j)), skipped_stops=skipped)
+                                fs["replans"].append({"at": i, "rejoin": j, "waypoints": len(det["path"]), "skipped_stops": skipped})
+                                fs["skipped_stops"] += skipped
+                                replans += 1
+                                for k, q in enumerate(det["path"]):   # every point, the first is where it stands; no stop on a detour
+                                    pose = await self._goto(q, reach_px, fs, f"detour point {k} around waypoint {i}")
+                                i = j
+                                continue
+                        pose = await self._goto(target, reach_px, fs, f"waypoint {i}")
                         fs["reached"].append(i)
                         log("dog", f"waypoint {i}/{len(path) - 1} reached", p=pose["p"])
                         if i in stops:
