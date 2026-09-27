@@ -63,6 +63,31 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 27 · legend-gauges · start */
+  [data-layer].off { display: none; }   /* a hidden layer is still mounted, so its poll and its legend row keep running */
+  .lg-bg { fill: var(--raised, #fbfaf7); fill-opacity: .92; stroke: var(--ink, #262323); stroke-opacity: .18; }
+  .lg-t { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 15px; fill: var(--ink, #262323); pointer-events: none; user-select: none; }
+  .lg-empty { fill: var(--warn, #d9a400); font-weight: 600; }
+  .lg-stub { fill: var(--warn, #d9a400); font-weight: 600; }
+  .lg-house { fill: none; stroke: var(--ink, #262323); stroke-width: 1.5; }
+  .lg-hit { fill: var(--ink, #262323); fill-opacity: 0; cursor: pointer; }
+  .lg-row:hover .lg-hit { fill-opacity: .06; }
+  .gg-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: var(--gap-in, 6px); margin-bottom: var(--gap-group, 14px); }
+  .gg-tile { background: var(--card-bg, #fbfaf7); border-radius: var(--r-card, 2px); box-shadow: 0 0 0 1px var(--card-edge, rgba(38,35,35,.08)); padding: 7px 9px; font-family: var(--mono, monospace); font-size: 10.5px; }
+  .gg-k { opacity: .7; }
+  .gg-v { font-size: 17px; font-weight: 600; margin: 2px 0; }
+  .gg-why { font-size: 10px; }
+  .gg-stale { box-shadow: 0 0 0 1.5px var(--bad, #b2382e); color: var(--bad, #b2382e); }
+  .gg-empty { box-shadow: 0 0 0 1px var(--warn, #d9a400); }
+  .gg-empty .gg-why { color: var(--warn, #d9a400); font-weight: 600; }
+  .gg-spark { display: block; width: 100%; height: 16px; margin-top: 4px; }
+  .gg-spark path { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 1.5; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  .gg-stale .gg-spark path { stroke: var(--bad, #b2382e); }
+  .stub { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: var(--r-pill, 999px); background: var(--warn, #d9a400); color: var(--ink, #262323); font-family: var(--mono, monospace); font-size: 10px; font-weight: 600; }
+  .slot { border: 1px dashed var(--ink, #262323); border-radius: var(--r-card, 2px); padding: 3px 8px; opacity: .5; font-family: var(--mono, monospace); font-size: 10.5px; }
+  div.slot { margin-bottom: var(--gap-group, 14px); }
+  g.slot rect { fill: none; stroke: var(--ink, #262323); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  /* 27 · legend-gauges · end */
 </style>
 </head>
 <body>
@@ -79,6 +104,7 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
 function App() {
@@ -105,6 +131,9 @@ function App() {
   const playing = useRef(false);
   const drag = useRef(null); const moved = useRef(false);
   const svgRef = useRef(null);
+  const [hidden, setHidden] = useState(() => new Set());   // 27 · the legend's hidden layers: a class on an always-mounted wrapper, never a gate
+  const layerOff = name => hidden.has(name) ? "off" : "";
+  const toggleLayer = name => setHidden(h => { const n = new Set(h); n.has(name) ? n.delete(name) : n.add(name); return n; });
 
   useEffect(() => { fetch("/map").then(r => r.json()).then(setMap); const f = () => call("lights_status").then(o => setStatus(o.ok ? o.result : { error: o.error })); f(); const t = setInterval(f, 60000); return () => clearInterval(t); }, []);   // the lights read back every minute
   const [chat, setChat] = useState(null);   // GET /chat: the listener's heartbeat
@@ -191,11 +220,11 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
-    <div class="top"><h1>what the dog doin <span class="mono">· ${admin ? "admin" : "demo"}</span></h1><a href=${admin ? "#" : "#admin"} class="mono" style=${{ color: "inherit" }}>${admin ? "demo view" : "admin view"}</a></div>
+    <div class="top"><h1>what the dog doin <span class="mono">· ${admin ? "admin" : "demo"}</span></h1><span class="slot" data-slot="mode">mode chip · 20 · not on this branch</span><a href=${admin ? "#" : "#admin"} class="mono" style=${{ color: "inherit" }}>${admin ? "demo view" : "admin view"}</a></div>
     <div class="status-row">
       ${(() => {
         const age = dog?.state?.age_ms;
@@ -203,12 +232,13 @@ function App() {
         const hueOk = status && !status.error && Array.isArray(status.hue), stripOk = status && status.strip && !status.strip.error;
         const chatOn = chat?.alive, watchOn = watch && watch.age_ms != null && watch.age_ms < 3000;
         return html`
-          <div class=${"stat " + (dogOn ? (dog.recheck ? "warn" : "on") : dogStale ? "warn" : "")}><span class="sq"></span><b>dog</b><span>${dogOn ? `on · ${dog.recheck ? "confirm its location (drag it)" : dog.calibrated ? "located" : "not located"}${dog.avoid ? " · avoid on" : ""}` : dogStale ? `stale · ${Math.round(age / 1000)} s` : "off"}</span></div>
+          <div class=${"stat " + (dogOn ? (dog.recheck ? "warn" : "on") : dogStale ? "warn" : "")}><span class="sq"></span><b>dog</b><span>${dogOn ? `on · ${dog.recheck ? "confirm its location (drag it)" : dog.calibrated ? "located" : "not located"}${dog.avoid ? " · avoid on" : ""}` : dogStale ? `stale · ${Math.round(age / 1000)} s` : "off"}</span>${dog?.source === "stub" ? html`<span class="stub">stub</span>` : ""}</div>
           <div class=${"stat " + (hueOk && stripOk ? "on" : hueOk || stripOk ? "warn" : "")}><span class="sq"></span><b>lights</b><span>${status ? (hueOk && stripOk ? "online" : hueOk ? "strip offline" : stripOk ? "hue offline" : "offline") : "reading…"}</span></div>
           <div class=${"stat " + (chatOn ? "on" : "")}><span class="sq"></span><b>group chat</b><span>${chat ? (chatOn ? `${chat.group} · ${chat.pending ? "waiting for who dis" : chat.armed ? "armed" : "listening"}` : "listener down") : "…"}</span></div>
           <div class=${"stat " + (watchOn ? "on" : "")}><span class="sq"></span><b>detector</b><span>${watchOn ? `live · ${watch.ms} ms` : "off"}${watch?.intruder ? " · intruder watch armed" : ""}</span></div>`;
       })()}
     </div>
+    <${Gauges} dog=${dog} lidar=${lidar} watch=${watch} chat=${chat}/>
     <div class="grid">
       <div>
         <div class="panel">
@@ -239,14 +269,14 @@ function App() {
           </div>`}
           <div class="hint">${mode === "dot" ? `click where “${placing.label}” sits` : mode === "line" ? (pending ? "click the other end of the strip" : `click one end of “${placing.label}”`) : mode === "path" ? "click the floor to add a point at the end (the faint blue line is the saved route, trace it) · click an existing point to DELETE it · leave draw mode to drag points or double-click them into stops" : mode === "here" ? "click the floor where the dog actually is (its heading is kept)" : "drag the orange dog to where it really is, drag its cone tip to where it points (released = calibrated) · drag a lamp, a strip end, or a path point · double-click a path point to toggle a stop · click a light to blink it · save"}</div>
           ${map && html`<svg ref=${svgRef} class=${"map" + (mode ? " placing" : "")} viewBox="0 0 1060 1540" onClick=${onMapClick} onPointerMove=${onMove} onPointerUp=${onUp} onPointerLeave=${onUp}>
-            <image href="house.svg" x="0" y="0" width="1060" height="1540"/>
-            ${(map.rooms || []).map(r => html`<polygon key=${r.name} class=${"room" + (here === r.name ? " here" : "")} points=${r.poly.map(p => p.join(",")).join(" ")}/>`)}
-            ${mode === "path" && guide?.path && html`<polyline class="guide" points=${guide.path.map(p => p.join(",")).join(" ")}/>`}
-            <polyline class="path" points=${map.path.map(p => p.join(",")).join(" ")}/>
-            ${map.path.map((p, i) => { const st = (map.stops || []).includes(i); return html`<g key=${"p" + i}>
+            <g data-layer="house" class=${layerOff("house")}><image href="house.svg" x="0" y="0" width="1060" height="1540"/>
+            ${(map.rooms || []).map(r => html`<polygon key=${r.name} class=${"room" + (here === r.name ? " here" : "")} points=${r.poly.map(p => p.join(",")).join(" ")}/>`)}</g>
+            <g data-layer="guide" class=${layerOff("guide")}>${mode === "path" && guide?.path && html`<polyline class="guide" points=${guide.path.map(p => p.join(",")).join(" ")}/>`}</g>
+            <g data-layer="path" class=${layerOff("path")}><polyline class="path" points=${map.path.map(p => p.join(",")).join(" ")}/></g>
+            <g data-layer="stops" class=${layerOff("stops")}>${map.path.map((p, i) => { const st = (map.stops || []).includes(i); return html`<g key=${"p" + i}>
               <circle class=${"pt" + (st ? " stop" : "")} cx=${p[0]} cy=${p[1]} r=${st ? 12 : 7} onPointerDown=${mode === "path" ? (e => e.stopPropagation()) : onDown("path", i, 0)} onClick=${e => { e.stopPropagation(); if (mode === "path") deletePoint(i); }} onDoubleClick=${e => { e.stopPropagation(); if (mode !== "path") toggleStop(i); }}/>
-              ${st && html`<text class="lbl" x=${p[0] + 16} y=${p[1] + 6}>stop ${(map.stops || []).indexOf(i) + 1}${(map.actions || {})[i] ? ` · ${({ tilt: "nod", level: "level", sit: "look up" })[(map.actions || {})[i].look] || (map.actions || {})[i].look}${(map.actions || {})[i].say ? " + report" : " photo"}${(map.actions || {})[i].ask ? " + who dis" : ""}` : ""}</text>`}</g>`; })}
-            ${(map.lights || []).map((L, li) => {
+              ${st && html`<text class="lbl" x=${p[0] + 16} y=${p[1] + 6}>stop ${(map.stops || []).indexOf(i) + 1}${(map.actions || {})[i] ? ` · ${({ tilt: "nod", level: "level", sit: "look up" })[(map.actions || {})[i].look] || (map.actions || {})[i].look}${(map.actions || {})[i].say ? " + report" : " photo"}${(map.actions || {})[i].ask ? " + who dis" : ""}` : ""}</text>`}</g>`; })}</g>
+            <g data-layer="lights" class=${layerOff("lights")}>${(map.lights || []).map((L, li) => {
               const lv = levels[L.id] || 0;
               if (L.kind === "line") return html`<g key=${L.id}>
                 ${lv > 0 && html`<line class="strip-glow" x1=${L.pts[0][0]} y1=${L.pts[0][1]} x2=${L.pts[1][0]} y2=${L.pts[1][1]} opacity=${lv / 100}/>`}
@@ -260,25 +290,27 @@ function App() {
                 <circle class="lamp" cx=${x} cy=${y} r="14" fill=${lv ? "#ffe08a" : "#fff"} onPointerDown=${onDown("light", li, 0)} onClick=${e => { e.stopPropagation(); identify(L); }} onDoubleClick=${() => relabel(L)}/>
                 <text class="lbl" x=${x} y=${y - 22} text-anchor="middle">${L.label}${lv ? ` · ${lv}%` : ""}</text></g>`;
             })}
-            ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
-            ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
-            ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
+            ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}</g>
+            <g data-layer="trace" class=${layerOff("trace")}>${dog?.rec && html`<polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>`}</g>
+            <g data-layer="mark" class=${layerOff("mark")}>${dog?.rec && dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>
+            <g data-layer="lidar" class=${layerOff("lidar")}>${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}</g>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
               const a = [x + L * Math.cos(h - half), y + L * Math.sin(h - half)], b = [x + L * Math.cos(h + half), y + L * Math.sin(h + half)], tip = [x + L * Math.cos(h), y + L * Math.sin(h)];
               return html`<g>
-                <path class="cone" d=${`M ${x} ${y} L ${a[0]} ${a[1]} A ${L} ${L} 0 0 1 ${b[0]} ${b[1]} Z`}/>
+                <g data-layer="cone" class=${layerOff("cone")}><path class="cone" d=${`M ${x} ${y} L ${a[0]} ${a[1]} A ${L} ${L} 0 0 1 ${b[0]} ${b[1]} Z`}/>
                 <line class="dognose" x1=${x} y1=${y} x2=${tip[0]} y2=${tip[1]}/>
-                <circle class="conetip" cx=${tip[0]} cy=${tip[1]} r="11" onPointerDown=${onDown("cone", 0, 0)} onClick=${e => e.stopPropagation()}/>
-                <circle class="dogdot" cx=${x} cy=${y} r="14" onPointerDown=${onDown("dog", 0, 0)} onClick=${e => e.stopPropagation()}/>
-                <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°</text></g>`;
+                <circle class="conetip" cx=${tip[0]} cy=${tip[1]} r="11" onPointerDown=${onDown("cone", 0, 0)} onClick=${e => e.stopPropagation()}/></g>
+                <g data-layer="dog" class=${layerOff("dog")}><circle class="dogdot" cx=${x} cy=${y} r="14" onPointerDown=${onDown("dog", 0, 0)} onClick=${e => e.stopPropagation()}/>
+                <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°${dog?.source === "stub" ? " · stub" : ""}</text></g></g>`;
             })()}
-            ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
+            <g data-layer="field" class=${layerOff("field")}>${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}</g>
+            <${Legend} s=${{ map, guide, mode, dog, lidar, dot }} hidden=${hidden} toggle=${toggleLayer}/>
           </svg>`}
         </div>
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
-          <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${dog ? (dog.connected ? `connected · mode ${dog.state?.mode ?? "?"} · pos ${(dog.state?.position || []).slice(0, 2).map(v => (+v).toFixed(2)).join(", ")} · ${dog.moving ? "moving " + dog.vel.map(v => (+v).toFixed(1)).join("/") : "still"}` : "not connected · the first command connects (about 1 s)") : "…"}</div>
+          <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${dog ? (dog.connected ? `connected · mode ${dog.state?.mode ?? "?"} · pos ${(dog.state?.position || []).slice(0, 2).map(v => (+v).toFixed(2)).join(", ")} · ${dog.moving ? "moving " + dog.vel.map(v => (+v).toFixed(1)).join("/") : "still"}` : "not connected · the first command connects (about 1 s)") : "…"}${dog?.source === "stub" ? html`<span class="stub">stub</span>` : ""}</div>
           ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<span class="mono">hold a key or a button · 0.3 m/s · 0.5 rad/s</span></div>
           <div class="row tight">${key("a", "A ◀")}${key("s", "S ▼")}${key("d", "D ▶")}<button class="small" onClick=${() => post("/dog/stop")}>stop</button></div>`}
           <div class="row tight">
@@ -290,7 +322,7 @@ function App() {
             <button class=${"small" + (lidar?.on ? " on" : "")} disabled=${!dog?.connected} title="the dog's own LiDAR (rt/utlidar/voxel_map_compressed) drawn on the map through the calibration" onClick=${() => post("/dog/lidar", { on: !lidar?.on }).then(r => r.json()).then(setLast)}>${lidar?.on ? "lidar on" : "lidar off"}</button>
             <button class=${"small" + (dog?.follow?.active ? " on" : "")} disabled=${!dog?.calibrated || dog?.follow?.active} onClick=${() => post("/dog/follow", {}).then(r => r.json()).then(setLast)}>follow the path</button>
             <button class="small" disabled=${dog?.follow?.stopped_at == null} onClick=${() => post("/dog/resume", {}).then(r => r.json()).then(setLast)}>resume</button>
-            <span class="mono">${dog?.recheck ? html`<span class="bad">reconnected: drag the dog to where it really is · </span>` : ""}${dog?.map ? `thinks: ${dog.map.p[0]}, ${dog.map.p[1]} · ${dog.map.heading_deg}°` : "not calibrated"}${dog?.follow?.active ? ` · wp ${dog.follow.i}/${dog.follow.n - 1} · ${dog.follow.dist_px ?? "?"} px · ${dog.follow.err_deg ?? "?"}°${dog.follow.stopped_at != null ? ` · stopped at ${dog.follow.stopped_at}` : ""}` : dog?.follow?.error ? ` · follow: ${dog.follow.error}` : dog?.follow?.done ? ` · followed ${dog.follow.reached.length} waypoints` : ""}${lidar?.on ? ` · lidar ${lidar.frame?.id ?? "?"} · ${lidar.n} frames · ${(lidar.points_px || []).length} pts${lidar.why ? ` · ${lidar.why}` : ""}` : ""}</span>
+            <span class="mono">${dog?.recheck ? html`<span class="bad">reconnected: drag the dog to where it really is · </span>` : ""}${dog?.map ? `thinks: ${dog.map.p[0]}, ${dog.map.p[1]} · ${dog.map.heading_deg}°` : "not calibrated"}${dog?.follow?.active ? ` · wp ${dog.follow.i}/${dog.follow.n - 1} · ${dog.follow.dist_px ?? "?"} px · ${dog.follow.err_deg ?? "?"}°${dog.follow.stopped_at != null ? ` · stopped at ${dog.follow.stopped_at}` : ""}` : dog?.follow?.error ? ` · follow: ${dog.follow.error}` : dog?.follow?.done ? ` · followed ${dog.follow.reached.length} waypoints` : ""}${lidar?.on ? ` · lidar ${lidar.frame?.id ?? "?"} · ${lidar.n} frames · ${(lidar.points_px || []).length} pts${lidar.why ? ` · ${lidar.why}` : ""}` : ""}${dog?.source === "stub" ? html`<span class="stub">stub</span>` : ""}</span>
           </div>
           <div class="row"><button class="key" disabled=${busy !== null} onClick=${() => lookShot("tilt")}>${busy === "dog_look" ? "…" : "nod + photo"}</button><button disabled=${busy !== null} onClick=${() => lookShot("level")}>level photo</button><button disabled=${busy !== null} onClick=${() => lookShot("sit")}>sit photo</button>
             ${cmd("sit", "dog_cmd", { name: "Sit" })}${cmd("stand", "dog_cmd", { name: "RiseSit" })}${cmd("hello", "dog_cmd", { name: "Hello" })}
@@ -326,6 +358,7 @@ function App() {
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
+        <div class="slot" data-slot="livecheck">livecheck line · 22 · not on this branch</div>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
           <div class="hint">closer = brighter. the strip scores along its length, so a graze at its edge is dim and a pass over its middle is bright. lights in other rooms fade by the other-room factor.</div>
@@ -357,7 +390,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +398,100 @@ function App() {
     </div>
   </div>`;
 }
+// 27 · legend-gauges · start
+// The legend and the gauges (item 27): the map explains its own marks, and the numbers the page already holds become
+// tiles. Neither component polls. Both draw what App already holds: GET /dog/state (1 s), GET /dog/lidar (500 ms, only
+// while connected), GET /watch (500 ms), GET /chat (3 s), and GET /map, /route-saved.json and GET /field for the counts.
+// Legend: one row per data-layer wrapper in the map svg, at a fixed y slot. A tap toggles the wrapper's class "off": CSS
+// hides it, it stays mounted, so its poll runs on and its row keeps its count and its why. A click anywhere on the legend
+// stops there: no path point, lamp or calibration lands under it. An empty layer's row reads
+// `0 · <why>` in amber. Gauges: one tile per served number, with a sparkline of its last SPARK_N served values kept in a
+// useRef (one sample per poll result). A tile shows the served number only: red with its age when stale or off, amber
+// with the reason when there is nothing to show, never blank. A poll that has not answered (its value is null) reads
+// `no answer from GET <route>`, never a cause the API did not serve. A poll that answered once and then fails keeps App's
+// last answer (main's polls end in .catch(() => {})), so an answer older than three poll periods turns its tiles red with
+// `no answer from GET <route> · N s`, the last served number still shown. A one-second re-render tick (it fetches nothing)
+// keeps that age moving when no poll renders. A state served from WTDD_STATE_FIXTURE wears `stub`.
+const NO_DOG = "no answer from GET /dog/state";   // dog is null until /dog/state first answers; a later failed poll keeps the last answer, which Gauges ages (PERIOD)
+const PERIOD = { "/dog/state": 1000, "/dog/lidar": 500, "/watch": 500, "/chat": 3000 };   // main's poll periods (App's setIntervals); three missed answers read as no answer
+const poseWhy = d => !d ? NO_DOG : !d.connected ? "not connected" : !d.calibrated ? "not located" : "no pose";
+const LAYERS = [   // bottom to top, as the svg draws them; n = what the layer draws now, text when n > 0, why when it is 0
+  { layer: "house", swatch: html`<rect class="lg-house" x="-8" y="-6" width="16" height="12"/>`, n: s => (s.map.rooms || []).length, text: (s, n) => `${n} rooms`, why: () => "no rooms in ui/map.json" },
+  { layer: "guide", swatch: html`<path class="guide" d="M-8 0h16"/>`, n: s => s.mode === "path" && s.guide?.path ? s.guide.path.length : 0, text: (s, n) => `${n} pts · the saved route`, why: s => s.guide?.path ? "shown while drawing a path" : "no saved route" },
+  { layer: "path", swatch: html`<path class="path" d="M-10 0h20"/>`, n: s => s.map.path.length, text: (s, n) => `${n} pts`, why: () => "no path drawn" },
+  { layer: "stops", swatch: html`<circle class="pt stop" r="6"/>`, n: s => s.map.path.length, text: (s, n) => `${(s.map.stops || []).length} stops · ${n} pts`, why: () => "no path drawn" },
+  { layer: "lights", swatch: html`<circle class="lamp lamp-glow" r="6"/>`, n: s => (s.map.lights || []).length, text: (s, n) => `${n} lights`, why: () => "none placed" },
+  { layer: "trace", swatch: html`<path class="trace" d="M-10 0h20"/>`, n: s => s.dog?.rec?.points.length || 0, text: (s, n) => `${n} pts`, why: s => !s.dog ? NO_DOG : s.dog.rec ? "recording, no points yet" : "not recording" },
+  { layer: "mark", swatch: html`<circle class="mark" r="6"/>`, n: s => s.dog?.rec?.marks.length || 0, text: (s, n) => `${n} marks`, why: s => !s.dog ? NO_DOG : s.dog.rec ? "recording, none marked" : "not recording" },
+  { layer: "lidar", swatch: html`<path class="lidar" d="M-6 0h0M6 0h0"/>`, n: s => s.lidar?.points_px?.length || 0, text: (s, n) => `${n} pts · ${s.lidar.age_ms} ms`, why: s => !s.lidar ? "off" : s.lidar.why || "no points in the band" },
+  { layer: "cone", swatch: html`<path class="cone" d="M-9 0L8 -7L8 7Z"/>`, n: s => s.dog?.map ? 1 : 0, text: s => `${s.dog.map.heading_deg}°`, why: s => poseWhy(s.dog) },
+  { layer: "dog", swatch: html`<circle class="dogdot" r="6"/>`, n: s => s.dog?.map ? 1 : 0, text: s => `at ${s.dog.map.p.join(", ")}`, why: s => poseWhy(s.dog) },
+  { layer: "field", swatch: html`<circle class="field" r="7"/>`, n: s => s.dot ? 1 : 0, text: () => "walking", why: () => "no walk running" },
+];
+const DOG_FED = new Set(["trace", "mark", "cone", "dog"]);   // rows drawn from GET /dog/state: they wear `stub` when it is the fixture
+function Legend({ s, hidden, toggle }) {
+  const stub = s.dog?.source === "stub", W = 470;
+  return html`<g class="lg" transform="translate(10 10)" onClick=${e => e.stopPropagation()}>
+    <rect class="lg-bg" x="0" y="0" width=${W} height=${22 * (LAYERS.length + 1) + 12} rx="6"/>
+    ${LAYERS.map((L, i) => { const n = L.n(s), off = hidden.has(L.layer); return html`<g key=${L.layer} class="lg-row" transform=${`translate(0 ${22 + 22 * i})`}>
+      <text class="lg-t" x="10" y="0">${off ? "□" : "■"}</text>
+      <g transform="translate(40 -5)">${L.swatch}</g>
+      <text class=${"lg-t" + (n ? "" : " lg-empty")} x="58" y="0">${L.layer}${off ? " · hidden" : ""} · ${n ? L.text(s, n) : `0 · ${L.why(s)}`}${stub && DOG_FED.has(L.layer) ? html`<tspan class="lg-stub"> · stub</tspan>` : ""}</text>
+      <rect class="lg-hit" x="0" y="-16" width=${W} height="22" onClick=${e => { e.stopPropagation(); toggle(L.layer); }}/>
+    </g>`; })}
+    <g class="slot" data-slot="camera" transform=${`translate(0 ${22 + 22 * LAYERS.length})`}><rect x="32" y="-15" width="16" height="16"/><text class="lg-t" x="58" y="0">cams · 23 · camera glyph not on this branch</text></g>
+  </g>`;
+}
+const SPARK_N = 30;   // a sparkline holds the last thirty served values, one per poll result
+function Spark({ v }) {
+  const nums = v.filter(x => x != null), lo = Math.min(...nums), hi = Math.max(...nums);
+  let d = "", pen = false;
+  v.forEach((x, i) => {
+    if (x == null) { pen = false; return; }   // a poll that served no number is a gap in the line, never a zero
+    const X = ((SPARK_N - v.length + i) * 60 / (SPARK_N - 1)).toFixed(1), Y = (hi > lo ? 15 - (x - lo) * 14 / (hi - lo) : 8).toFixed(1);
+    d += pen ? `L${X} ${Y}` : `M${X} ${Y}h0`; pen = true;
+  });
+  return html`<svg class="gg-spark" viewBox="0 0 60 16" preserveAspectRatio="none">${d && html`<path d=${d}/>`}</svg>`;
+}
+function Gauges({ dog, lidar, watch, chat }) {
+  const hist = useRef({}), seen = useRef({}), heard = useRef({}), now = Date.now();
+  const [, tick] = useState(0);   // a re-render once a second when nothing else renders; not a poll: it fetches nothing
+  useEffect(() => { const t = setTimeout(() => tick(n => n + 1), 1000); return () => clearTimeout(t); });
+  const quiet = (route, src) => {   // the age of a poll's last answer: a new object is a new answer; a failed poll leaves the old one
+    if (heard.current[route]?.src !== src) heard.current[route] = { src, at: now };
+    const ms = now - heard.current[route].at;
+    return src && ms > 3 * PERIOD[route] ? `no answer from GET ${route} · ${Math.round(ms / 1000)} s` : null;
+  };
+  const st = dog?.state, f = dog?.follow, stub = dog?.source === "stub";
+  const dogBad = quiet("/dog/state", dog) || (!dog ? NO_DOG : !dog.connected ? "off · not connected" : st?.age_ms == null ? "no state served" : st.age_ms >= 2000 ? `stale · ${st.age_ms} ms` : null);   // the dog card's rule
+  const idle = f?.active ? null : "not following";
+  const lidarBad = quiet("/dog/lidar", lidar) || (!lidar ? "off" : lidar.age_ms >= 2000 ? `stale · ${lidar.age_ms} ms` : null);
+  const lidarIdle = lidar && lidar.age_ms == null ? lidar.why || "no frame served" : null;
+  const watchBad = quiet("/watch", watch) || (!watch ? "no answer from GET /watch" : watch.age_ms == null ? "off · python -m wtdd.watch" : watch.age_ms >= 3000 ? `stale · ${watch.age_ms} ms` : null);   // the detector card's rule
+  const chatBad = quiet("/chat", chat) || (!chat ? "no answer from GET /chat" : chat.alive ? null : `listener down${chat?.age_s != null ? ` · ${chat.age_s} s` : ""}`);
+  const tiles = [   // label, the poll result it rides, the served number, unit, red why, amber why, wears stub
+    ["dog hz", dog, st?.hz, "", dogBad, null, stub],
+    ["dog age", dog, st?.age_ms, " ms", dogBad, null, stub],
+    ["follow dist", dog, f?.dist_px, " px", dogBad, idle, stub],
+    ["follow err", dog, f?.err_deg, "°", dogBad, idle, stub],
+    ["lidar frames", lidar, lidar?.n, "", lidarBad, lidarIdle],
+    ["lidar age", lidar, lidar?.age_ms, " ms", lidarBad, lidarIdle],
+    ["detector", watch, watch?.ms, " ms", watchBad],
+    ["detector age", watch, watch?.age_ms, " ms", watchBad],
+    ["chat age", chat, chat?.age_s, " s", chatBad],
+  ];
+  return html`<div class="gg-strip">${tiles.map(([k, src, v, unit, bad, empty, isStub]) => {
+    const num = typeof v === "number", why = bad || empty || (num ? null : "not served");
+    if (seen.current[k] !== src) { seen.current[k] = src; hist.current[k] = [...(hist.current[k] || []), num ? v : null].slice(-SPARK_N); }   // once per poll result, during render, so the line is never a poll behind
+    return html`<div key=${k} class=${"gg-tile" + (bad ? " gg-stale" : why ? " gg-empty" : "")}>
+      <div class="gg-k">${k}${isStub ? html`<span class="stub">stub</span>` : ""}</div>
+      <div class="gg-v">${num ? `${k === "dog hz" ? v.toFixed(1) : v}${unit}` : "—"}</div>
+      ${why && html`<div class="gg-why">${why}</div>`}
+      <${Spark} v=${hist.current[k]}/>
+    </div>`;
+  })}</div>`;
+}
+// 27 · legend-gauges · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>

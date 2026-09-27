@@ -1,0 +1,16 @@
+{
+  "note": "DEMO_CACHE: item 27's dry page fixture, typed by hand in the shape of DogSession.state() (wtdd/dog/session.py) so the gauges can draw a connected dog in a headless screenshot. Not a recording of the dog: every value here is invented. Served only while WTDD_STATE_FIXTURE names this file, and then with source 'stub'; live: unset WTDD_STATE_FIXTURE and connect the dog.",
+  "connected": true,
+  "moving": true,
+  "vel": [0.3, 0.0, 0.0],
+  "state": {"mode": 0, "gait_type": 0, "progress": 0, "position": [1.21, 0.43, 0.0], "velocity": [0.29, 0.01, 0.0],
+            "yaw_speed": 0.02, "body_height": 0.32, "range_obstacle": [0, 0, 0, 0], "rpy": [0.0, 0.01, 1.05],
+            "n": 1843, "hz": 20.0, "age_ms": 43},
+  "map": {"p": [537, 693], "heading_deg": 60.0},
+  "calibrated": true,
+  "follow": {"active": true, "i": 4, "n": 48, "stops": [10, 22, 23], "stopped_at": null, "resume": false, "reached": [0, 1, 2, 3],
+             "error": null, "avoid": true, "dist_px": 38, "err_deg": -4.1, "p": [537, 693], "heading_deg": 60.0},
+  "avoid": true,
+  "recheck": false,
+  "rec": null
+}

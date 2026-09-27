@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import log, step
+from .. import config
 from . import lidar, nav
 from .body import MOVE_HZ, Body
 
@@ -81,6 +82,7 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
             self.cal = json.loads(CAL_FILE.read_text())
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
@@ -129,6 +131,11 @@ class DogSession:
         return self.body is not None
 
     def state(self) -> dict[str, Any]:
+        fx = config.maybe("WTDD_STATE_FIXTURE")   # DEMO_CACHE: a hand-typed state (wtdd/fixtures/page/dog-state.json) served as source "stub" for a dry screenshot; live: leave WTDD_STATE_FIXTURE unset and connect the dog
+        if fx:   # a missing or broken file raises here: the page shows no dog rather than a default one
+            if self.body is not None:   # a real dog is connected: never serve an invented pose in its place (evals.run_follow and field._dog read GET /dog/state without looking at source)
+                raise RuntimeError("WTDD_STATE_FIXTURE is set while a dog is connected: it is for dry screenshots only; unset it")
+            return {**json.loads((config.ROOT / fx).read_text()), "source": "stub"}
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
