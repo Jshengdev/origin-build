@@ -5,6 +5,9 @@ The honest line: the LiDAR sees 360 already; the spin fills the shadow behind it
 the heading. The Go2's L1 has a 360 x 90 degree field of view (https://www.unitree.com/mobile/LiDAR/), so the turn
 is not how the site gets seen: what it buys is the arc the body shadows, a few seconds of densifying, the narrow
 camera pointed all round, and a free check that the IMU yaw comes back to where it began. The only numbers it earns are cells_added and the closure degrees on its row.
+band_hits beside them (the band cells its frames put into the grid, one per cell per frame) is what says whether the z
+band caught anything: 0 is the FAILED "0 band cells"; hits with 0 cells added is a grid that already held them (a
+second press at the same spot), ok with a WARN, never blamed on the band.
 
 Run. POST /dog/scout (wtdd/api.py) calls DogSession.scout (wtdd/dog/session.py), which refuses while following or
 recording, connects, ties "nose at drop-off is up" to the empty canvas when nothing is tied yet (one dog.calibrate row,
@@ -15,7 +18,8 @@ also sends its own release halt when the held velocity drops (it still reads `mo
 flight), so the dog may see one or two StopMoves per press; the second is a harmless retry. This module holds only the
 pure parts it uses, read at call time as scout.X (the tests patch them): integrate_yaw, closed, row, the constants.
 z = 0 is the standing control (Needs the dog 14.4): nothing is commanded, it stands for timeout_s, and the row's
-cells_added is the number the spin is compared against. Offline:
+cells_added is the number the spin is compared against, each on a cleared grid (POST /dog/grid {clear: true}): on one
+grid the second press only counts what the first missed. Offline:
 
     python -m wtdd.dog.scout --replay wtdd/dog/fixtures/spin_frames.npz --png /tmp/scout.png [--threshold N] [--save F] [--frames N]
 
@@ -34,7 +38,7 @@ UNVERIFIED on the real dog (each is a Needs-the-dog step, none has run):
   14.2 whether the avoidance service's MOVE carries a yaw-only command (the shipped take ran avoid off); the row says
        which velocity path carried it and "did not turn" names avoid on or off.
   14.3 IMU closure within CLOSE_TOL_DEG, compared with 05a's utlidar yaw and 05b's summed dtheta when they exist.
-  14.4 cells added spinning versus the z 0 control standing still for the same seconds.
+  14.4 cells added spinning versus the z 0 control standing still for the same seconds, the grid cleared before each.
 """
 from __future__ import annotations
 import argparse
@@ -57,7 +61,7 @@ ARGS = ("z_rad_s", "target_deg", "timeout_s", "shift_id", "source")
 BEFORE = ("map", "heading0_deg", "grid_frames", "cells", "lidar_n", "range_obstacle", "localize", "utlidar")
 AFTER = ("seconds", "frames", "cells_added", "cells_total", "turned_deg", "heading_end_deg", "closed", "avoid",
          "cb_errors_during", "range_obstacle", "velocity", "yaw_speed", "localize", "utlidar_turned_deg",
-         "heading0", "closed_deg", "velocity_path", "why")
+         "heading0", "closed_deg", "velocity_path", "why", "band_hits")
 
 
 def integrate_yaw(prev: float, now: float, acc: float) -> float:

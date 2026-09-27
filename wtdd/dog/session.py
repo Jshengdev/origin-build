@@ -471,23 +471,24 @@ class DogSession:
         the scout's own one halt on every path (main's drive loop also sends its release halt when vel drops, while
         the scout's StopMove is in flight, so the dog may see two StopMoves), the yaw read back after it, then one dog.scout row whose
         state_after is complete on a FAILED row too. FAILED: a refused LiDAR switch, no turn after NO_TURN_S, timeout,
-        a stop, 0 frames, cb_errors rising, 0 band cells. Not closed is ok with closed false and a WARN; z 0 is the
-        standing control."""
+        a stop, 0 frames, cb_errors rising, 0 band cells (band_hits 0: no voxel of any frame in the z band). Not closed
+        is ok with closed false and a WARN; so is a band that was hit on a grid that already held every cell (cells_added
+        0: a second press at the same spot, the control after a spin); z 0 is the standing control."""
         self._scout_running = True   # first line, before any await: a stop before this only flags (a cancel now would run nothing, no row)
         b, ss = self.body, self.scout_state
 
-        def cells() -> int:
+        def cells() -> tuple[int, int]:   # (occupied cells, band hits: the counts' sum, one per band cell per frame)
             with self._grid_lock:
-                return int((self.grid.counts > 0).sum()) if self.grid is not None else 0
+                return (int((g.counts > 0).sum()), int(g.counts.sum())) if (g := self.grid) is not None else (0, 0)
 
         try:
             with step("dog", "dog.scout", "map", args) as r:
                 before: dict[str, Any] = {**dict.fromkeys(scout.BEFORE), "localize": "absent", "utlidar": "absent"}   # 05b and 05a are not on 01:
                 r["state_before"], err = before, None   # when they merge, read self.loc / 05a's utpose through getattr
-                turned, prev, n0, e0, c0, avoid, t0 = 0.0, None, 0, 0, 0, bool(b._avoid), time.monotonic()
+                turned, prev, n0, e0, c0, h0, avoid, t0 = 0.0, None, 0, 0, 0, 0, bool(b._avoid), time.monotonic()
                 try:
                     st, lp = await b.fresh_state(required=True), b.lidar_points()
-                    prev, n0, e0, c0 = st["rpy"][2], lp["n"], lp["cb_errors"], cells()
+                    prev, n0, e0, (c0, h0) = st["rpy"][2], lp["n"], lp["cb_errors"], cells()
                     before.update(map=self.map_pose(st), heading0_deg=round(math.degrees(prev), 1), grid_frames=g.frames if (g := self.grid) is not None else 0,
                                   cells=c0, lidar_n=n0, range_obstacle=st.get("range_obstacle"))
                     if self._scout_stop:   # a stop after the press's last look and before this task could be cancelled
@@ -501,7 +502,7 @@ class DogSession:
                         st, el = b.state(), time.monotonic() - t0
                         turned, prev = scout.integrate_yaw(prev, st["rpy"][2], turned), st["rpy"][2]
                         deg = math.degrees(turned)
-                        ss.update(turned_deg=round(deg, 1), frames=b.lidar_points()["n"] - n0, cells_added=cells() - c0, seconds=round(el, 1),
+                        ss.update(turned_deg=round(deg, 1), frames=b.lidar_points()["n"] - n0, cells_added=cells()[0] - c0, seconds=round(el, 1),
                                   ranges=st.get("range_obstacle"))
                         if time.monotonic() - tick >= 1.0:
                             tick += 1.0
@@ -531,25 +532,29 @@ class DogSession:
                 yaw_end = (st.get("rpy") or [None] * 3)[2]
                 if prev is not None and yaw_end is not None:
                     turned = scout.integrate_yaw(prev, yaw_end, turned)   # where the body stopped, not where the loop let go
-                deg, frames, added, cbe = math.degrees(turned), lp["n"] - n0, cells() - c0, lp["cb_errors"] - e0
-                if err is None:   # cb_errors before cells: a grid that refused every frame is not a z-band problem
+                total, hits = cells()
+                deg, frames, added, hits, cbe = math.degrees(turned), lp["n"] - n0, total - c0, hits - h0, lp["cb_errors"] - e0
+                if err is None:   # cb_errors before the band: a grid that refused every frame is not a z-band problem
                     err = (RuntimeError(f"0 frames in {el:.1f} s with the stream on") if frames == 0 else
                            RuntimeError(f"cb_errors rose by {cbe} during the spin: the grid refused frames (frame_id, resolution or MAX_SIDE; GET /dog/lidar)") if cbe > 0 else
-                           RuntimeError(f"0 cells added in z band {lidar.Z_MIN}..{lidar.Z_MAX} m over {frames} frames: tune lidar.Z_MIN/Z_MAX") if added == 0 else None)
+                           RuntimeError(f"0 band cells: no voxel of {frames} frames in z band {lidar.Z_MIN}..{lidar.Z_MAX} m: tune lidar.Z_MIN/Z_MAX") if hits == 0 else None)
                 shut = bool(z) and scout.closed(deg, target_deg)
-                why = (f"{type(err).__name__}: {err}" if err else None if shut else f"control: z 0, stood {el:.1f} s" if not z else
-                       f"not closed: turned {deg:.1f}° of {target_deg:g} (tolerance {scout.CLOSE_TOL_DEG:g}°)")
-                after = {"seconds": round(el, 1), "frames": frames, "cells_added": added, "cells_total": cells(), "turned_deg": round(deg, 1),
+                warns = ([] if shut else [f"control: z 0, stood {el:.1f} s" if not z else f"not closed: turned {deg:.1f}° of {target_deg:g} (tolerance {scout.CLOSE_TOL_DEG:g}°)"]) + \
+                        ([f"no new cells: the band was hit {hits} times but the grid already held all {total} cells here; POST /dog/grid {{clear: true}} "
+                          "to measure afresh"] if hits > 0 and added == 0 else [])   # the band caught the room; nothing here was new to the grid
+                why = f"{type(err).__name__}: {err}" if err else "; ".join(warns) or None
+                after = {"seconds": round(el, 1), "frames": frames, "cells_added": added, "cells_total": total, "turned_deg": round(deg, 1),
                          "heading_end_deg": round(math.degrees(yaw_end), 1) if yaw_end is not None else None, "closed": shut, "avoid": avoid,
                          "cb_errors_during": cbe, "range_obstacle": st.get("range_obstacle"), "velocity": st.get("velocity"), "yaw_speed": st.get("yaw_speed"),
                          "localize": "absent", "utlidar_turned_deg": "absent", "heading0": before["heading0_deg"], "closed_deg": round(deg, 1),
-                         "velocity_path": "avoid" if avoid else "sport", "why": why}
+                         "velocity_path": "avoid" if avoid else "sport", "why": why, "band_hits": hits}
                 ss.update(turned_deg=after["turned_deg"], frames=frames, cells_added=added, seconds=after["seconds"], ranges=after["range_obstacle"])
                 r.update(scout.row(args, before, after))
                 if err is not None:
                     raise err
-                if z and not shut:
-                    log("dog", f"WARN scout {why}")
+                for w in warns:
+                    if not w.startswith("control"):   # the control not closing is its design, not a finding
+                        log("dog", f"WARN scout {w}")
                 log("dog", "scouted", turned_deg=after["turned_deg"], closed=shut, frames=frames, cells=f"+{added}", s=after["seconds"], ranges=after["range_obstacle"])
         except Exception as e:  # noqa: BLE001  (the row above has it; the state carries it for the page)
             ss["error"] = f"{type(e).__name__}: {e}"
