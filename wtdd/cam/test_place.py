@@ -14,10 +14,11 @@ invented). Lights pass through a save untouched. The page's half (the `place cam
 Cams panel, the placing mode, the glyph `lap1 · zone a` / `lap1 · no zone` in yellow) is the headless screenshot gate
 in the PR body; here only the page's source is checked for the button, the mode, the marker and the lights' own
 `place dot` still being there.
-Fixture: 09's ui/map.json (cameras: lap1 at [322, 1284] in zone a) with route-saved.json's runnable path (the map's
-own path has a 526 px jump that check_path refuses, night-1 contracts F.4), copied to a scratch dir per test; a scratch
-ledger. The zones are the map's lighting zones a, b, c plus two no-go zones built here (04's fixture polygon, which sits
-inside b, and one alone in bedroom 3). Nothing real is touched."""
+Fixture: 09's ui/map.json with route-saved.json's runnable path (the map's own path has a 526 px jump that check_path
+refuses, night-1 contracts F.4), its camera (lap1 at [322, 1284] in zone a) and its zones a, b, c pinned here as
+literals, so a placement saved from the remote (23.1) or a zone redrawn never moves the fixture; copied to a scratch
+dir per test; a scratch ledger. The zones are the map's lighting zones a, b, c plus two no-go zones built here (04's
+fixture polygon, which sits inside b, and one alone in bedroom 3). Nothing real is touched."""
 from __future__ import annotations
 import http.client
 import io
@@ -40,9 +41,13 @@ os.environ["WTDD_SHIFT"] = "2026-09-26-test"
 from wtdd import api, cam, config, field, ledger  # noqa: E402
 
 UI = config.ROOT / "ui"
-BASE = json.loads((UI / "map.json").read_text())            # 09's map: cameras [{lap1, laptop at the gate, [322, 1284], a}]
+BASE = json.loads((UI / "map.json").read_text())            # 09's map: lights, rooms and the rest; cameras and zones pinned below
 ROUTE = json.loads((UI / "route-saved.json").read_text())   # the runnable taught route (23 points, max gap 75 px)
-ZONES = BASE["zones"]                                        # a, b, c: the lighting zones, none of them nogo
+ZONES = [   # 09's lighting zones a, b, c as committed on feat/09-fixed-cam, none of them nogo; literal so a redraw cannot move them
+    {"name": "a", "label": "zone a", "poly": [[255, 1040], [400, 1040], [400, 1470], [300, 1470], [255, 1400]], "strip": False},
+    {"name": "b", "label": "zone b", "poly": [[400, 1040], [560, 1040], [560, 1470], [400, 1470]], "strip": False},
+    {"name": "c", "label": "zone c", "poly": [[560, 1040], [700, 1040], [700, 1440], [560, 1440]], "strip": True},
+]
 NOGO_IN_B = {"name": "nogo-1", "label": "no-go 1", "nogo": True, "poly": [[450, 1040], [510, 1040], [510, 1250], [450, 1250]]}   # 04's fixture zone, inside b
 NOGO_ALONE = {"name": "nogo-2", "label": "no-go 2", "nogo": True, "poly": [[800, 200], [900, 200], [900, 300], [800, 300]]}      # bedroom 3: no lighting zone there
 SHIFT = os.environ["WTDD_SHIFT"]
@@ -79,6 +84,8 @@ def fresh_map() -> dict:
     """09's map with the runnable path, as the page would send it (cameras included in every save)."""
     m = json.loads(json.dumps(BASE))
     m["path"], m["stops"] = ROUTE["path"], ROUTE.get("stops", [])
+    m["zones"] = json.loads(json.dumps(ZONES))
+    m["cameras"] = [{"id": "lap1", "label": "laptop at the gate", "pt": [322, 1284], "zone": "a"}]   # 09's camera, pinned: 23.1 moves the real one
     return m
 
 
