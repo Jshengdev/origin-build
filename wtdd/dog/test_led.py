@@ -10,13 +10,15 @@ and are absent from the wheel, so these checks pin what we send and how we recor
            any send (a refused colour is still its FAILED dog.led row).
   Receipt  code 0 is one ok dog.led row {color, seconds, flash_ms} with the raw reply and Body.led_state.at set; code 7 is
            a FAILED row naming the code and .led {code: 7, error}; 1006's brightness lands in state_after and its absence
-           reads the string "no read-back", never a default; a stub caller's rows say cached=True, source="stub".
+           reads the string "no read-back", never a default; a stub caller's rows say cached=True, source="stub"; a
+           cancel after the ack (a newer state) keeps the ack: an ok row whose readback says so, and the cancel propagates.
   Hook     the colour table is the head's; a fake ask that calls the hook returns at once and completes while the dog
            refuses (code 7, the FAILED row lands later); no connected dog in the API is a WARN and no row; another
-           process goes through the API.
+           process goes through the API, and a short-lived one (intruder_alarm by hand) exits only once its post has
+           landed, or after a bounded wait with a WARN, never silently.
   Hold     a state is resent every WTDD_LED_TIME_S while it holds, on the first send's clock (a slow 1006 read-back never
-           stretches the period); a new state cancels the held one; a refusal is not resent; until the ceiling is known
-           one request holds 5 s.
+           stretches the period); a new state cancels the held one, and a resend it cancels during its read-back keeps
+           its ack; a refusal is not resent; until the ceiling is known one request holds 5 s.
   Wired    the real session.py with a fake body: lidar(True) and the follow's start are cyan, the follow's end green,
            stop() red. intruder_alarm's "who dis?!" (red) and the listener's "ok, standing down" (green) are read from
            the source: running either would post to the chat.
@@ -203,6 +205,29 @@ class Receipt(unittest.TestCase):
             self.assertIsInstance(r["response_or_error"]["readback"], str, bad)   # why: the error, the code or the key
             self.assertTrue(r["response_or_error"]["readback"], bad)
 
+    def test_a_cancel_after_the_ack_is_an_ok_row_and_still_cancels(self):
+        b = _body(delay={1006: 0.2})   # 1007 acked at once, 1006 still out when the cancel lands
+        n0 = _count()
+
+        async def go():
+            task = asyncio.ensure_future(b.led("cyan", 5))
+            for _ in range(400):   # until the 1006 is sent (bounded: a hang is a failure)
+                if len(b.conn.sent) == 2:
+                    break
+                await asyncio.sleep(0.005)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):   # the cancel is never swallowed
+                await task
+
+        _quiet(asyncio.run, go())
+        r = _led_rows(n0)[-1]
+        self.assertIs(r["ok"], True, r["response_or_error"])   # the dog acked the colour: never a FAILED row
+        self.assertEqual(r["response_or_error"]["led"]["header"]["status"]["code"], 0)   # the ack is kept
+        self.assertEqual(r["response_or_error"]["readback"], "CancelledError: superseded by a newer state")
+        self.assertEqual(r["state_after"], "no read-back")
+        self.assertEqual(b.led_state["code"], 0)
+        self.assertNotIn("error", b.led_state)
+
     def test_a_stub_callers_rows_are_labelled_cached_stub(self):
         b = _body()
         n0 = _count()
@@ -287,6 +312,42 @@ class Hook(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(self.posted, [("green", led.HOLD_S["clear"])])
 
+    def test_a_short_lived_callers_post_lands_before_exit_or_says_it_did_not(self):
+        """intruder_alarm by hand and `wtdd.chat simulate` exit right after the hook. In a subprocess with no dog and no
+        WTDD_API_PROCESS, the hook's post (a recorder standing for the API, which sleeps and then writes a file) must
+        land before the exit, or the exit waits out its bound and says so. WTDD_API_PORT names a dead port as well:
+        nothing here reaches an API."""
+        code = "\n".join([
+            "import pathlib, sys, time",
+            "from wtdd.dog import led",
+            "assert 'wtdd.dog.session' not in sys.modules   # no dog in this process: the hook posts",
+            "def rec(color, seconds):",
+            "    time.sleep(float(sys.argv[2]))",
+            "    pathlib.Path(sys.argv[1]).write_text(color)",
+            "    return {'code': 0}",
+            "led._post_api = rec",
+            "led.POST_WAIT_S = float(sys.argv[3])",
+            "t0 = time.perf_counter()",
+            "led.hook('asking')",
+            "print(round(time.perf_counter() - t0, 3))",
+        ])
+        env = {**os.environ, "WTDD_LEDGER": str(_TMP / "ledger-sub.jsonl"), "WTDD_API_PORT": "9"}
+        env.pop("WTDD_API_PROCESS", None)
+        for post_s, wait_s, lands in ((0.3, 5.0, True), (3.0, 0.2, False)):
+            mark = _TMP / f"posted-{post_s}.txt"
+            t0 = time.monotonic()
+            out = subprocess.run([sys.executable, "-c", code, str(mark), str(post_s), str(wait_s)], cwd=ROOT, env=env,
+                                 capture_output=True, text=True, timeout=60)
+            took = time.monotonic() - t0
+            self.assertEqual(out.returncode, 0, out.stderr[-500:])
+            self.assertLess(float(out.stdout.strip()), 0.2, "the hook returns at once: the caller never waits on the light")
+            self.assertEqual(mark.exists(), lands, f"post {post_s} s, exit bound {wait_s} s: {out.stderr[-300:]}")
+            if lands:
+                self.assertEqual(mark.read_text(), "red")
+            else:
+                self.assertIn("WARN led asking (red)", out.stderr)   # never silent
+                self.assertLess(took, post_s, "the exit's wait is bounded, never the post's whole wait")
+
 
 class Hold(unittest.TestCase):
     def tearDown(self):
@@ -356,6 +417,29 @@ class Hold(unittest.TestCase):
         i = colours.index("green")
         self.assertEqual(colours[i:], ["green"])   # nothing cyan after the new state
         self.assertGreaterEqual(i, 2)              # and cyan was being resent before it
+
+    def test_a_resend_superseded_during_its_read_back_keeps_its_ack(self):
+        os.environ["WTDD_LED_TIME_S"] = "0.1"
+        b = _body(delay={1006: 0.2})   # a slow read-back: on the dog a silent 1006 is 3 s of every 5 s request
+        n0 = _count()
+
+        async def go():
+            await led.hold(b, "cyan", 5.0)
+            for _ in range(400):   # until resend 1 is acked and its 1006 is out (bounded: a hang is a failure)
+                if [o["api_id"] for _, o in b.conn.sent].count(1006) == 2:
+                    break
+                await asyncio.sleep(0.005)
+            await led.hold(b, "green", 0.1)   # the new state arrives inside resend 1's read-back
+
+        _quiet(asyncio.run, go())
+        rows = _led_rows(n0)
+        self.assertEqual(sorted((r["args"]["color"], r["args"].get("resend") or 0) for r in rows),
+                         [("cyan", 0), ("cyan", 1), ("green", 0)])
+        r = next(r for r in rows if r["args"].get("resend") == 1)
+        self.assertIs(r["ok"], True, r["response_or_error"])   # the dog acked it: never a FAILED row
+        self.assertEqual(r["response_or_error"]["led"]["header"]["status"]["code"], 0)   # the ack is kept
+        self.assertEqual(r["response_or_error"]["readback"], "CancelledError: superseded by a newer state")
+        self.assertEqual(r["state_after"], "no read-back")
 
     def test_a_refused_state_is_not_resent(self):
         os.environ["WTDD_LED_TIME_S"] = "0.05"
