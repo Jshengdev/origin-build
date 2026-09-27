@@ -427,13 +427,16 @@ class Body:
         """The head light: VUI 1007 {color, time, flash_cycle?} for `seconds`, then 1006 for the brightness. One dog.led row
         per request (a resend says args.resend = k). state_after is {brightness} when 1006 answers, else "no read-back";
         the colour itself has no getter, so the ack is its receipt. A colour outside VUI_COLOR is refused before any send;
-        a non-zero code raises; both are FAILED rows and .led carries {code, error}. A stub caller passes cached=True,
-        source="stub" (the only keys taken from **row). Returns led_state."""
+        a non-zero code raises; both are FAILED rows and .led carries {code, error}. A cancel (a newer state) before the
+        ack is a FAILED row; after the ack the row stays ok, its readback says it was superseded, and the cancel is
+        re-raised once the row is written. A stub caller passes cached=True, source="stub" (the only keys taken from
+        **row). Returns led_state."""
         if set(row) - {"cached", "source"}:
             raise TypeError(f"led() takes cached/source only, got {sorted(row)}")
         args = {"color": color, "seconds": seconds, "flash_ms": flash_ms, **({"resend": resend} if resend else {})}
         before = dict(self.led_state) if self.led_state else None
         st = self.led_state = {"color": color, "seconds": seconds, "flash_ms": flash_ms, "code": None, "at": None}   # local: a newer request replaces it
+        gone, superseded = "CancelledError: superseded by a newer state", None
         with step("dog", "dog.led", "unitree", args, before) as r:
             r.update(row)
             try:
@@ -452,16 +455,19 @@ class Body:
                     if bcode != 0:
                         raise RuntimeError(f"brightness read-back (1006) refused: code={bcode}")
                     r["state_after"] = {"brightness": json.loads(bdata["data"])["brightness"]}
-                except Exception as e:  # noqa: BLE001  (the colour was acked; the missing read-back is said on the row, never defaulted)
+                except (Exception, asyncio.CancelledError) as e:  # noqa: BLE001  (the colour was acked: the row stays ok and says why there is no read-back, never a default; a cancel here is re-raised after the row)
+                    superseded = e if isinstance(e, asyncio.CancelledError) else None
                     r["state_after"] = "no read-back"
-                    r["response_or_error"]["readback"] = f"{type(e).__name__}: {e}"
+                    r["response_or_error"]["readback"] = gone if superseded else f"{type(e).__name__}: {e}"
                     log("dog", "WARN led acked, brightness not read back", color=color, err=r["response_or_error"]["readback"][:100])
-            except asyncio.CancelledError:   # a held colour superseded mid-request; BaseException, so step() would give no reason
-                r["response_or_error"] = st["error"] = "CancelledError: superseded by a newer state"
+            except asyncio.CancelledError:   # superseded before the ack; BaseException, so step() would give no reason
+                r["response_or_error"] = st["error"] = gone
                 raise
             except Exception as e:
                 st["error"] = f"{type(e).__name__}: {e}"
                 raise
+        if superseded is not None:
+            raise superseded
         return dict(st)
 
     async def _tick(self, via: str, x: float, y: float, z: float) -> int | None:
