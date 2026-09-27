@@ -819,9 +819,18 @@ class FailLoud(Harness):
         self.assertIn("stopped", str(r[0]["response_or_error"]))
 
     def test_a_state_read_that_fails_still_names_05a_and_05b_absent(self):
+        """With the LiDAR already on (the page's `lidar on` first), a press whose first state read fails never ran a
+        spin: its FAILED row credits it with no frames, cells or band hits, and state_before holds the session's own
+        counts at the press, never the whole history as the spin's."""
         body = FakeBody(yaw_rate=3.0, frames=self.frames)
         s = self.session(body)
         s.calibrate([300, 900], 0.0)
+        s.lidar(True)
+        t0 = time.monotonic()
+        while body._lidar_n < len(self.frames):
+            self.assertLess(time.monotonic() - t0, 5, "the fixture frames never all landed")
+            time.sleep(0.02)
+        self.assertEqual(s.grid.frames, len(self.frames))
 
         async def no_state(required: bool = False):
             raise RuntimeError("no fresh state")
@@ -831,6 +840,13 @@ class FailLoud(Harness):
         st, r = self.failed(s, body)
         self.assertIn("no fresh state", st["error"])
         self.assertEqual((r["state_before"]["localize"], r["state_before"]["utlidar"]), ("absent", "absent"))
+        b, c = r["state_before"], r["state_after"]
+        self.assertEqual((c["frames"], c["cells_added"], c["band_hits"], c["cb_errors_during"]), (0, 0, 0, 0),
+                         "the spin never ran: nothing of the session's history is its")
+        self.assertEqual((st["frames"], st["cells_added"]), (0, 0), "the page's scout line says the same")
+        self.assertEqual((b["lidar_n"], b["cells"], b["grid_frames"]), (len(self.frames), len(fx.world_cells()), len(self.frames)),
+                         "the baselines are the session's counts at the press")
+        self.assertEqual(c["cells_total"], len(fx.world_cells()))
 
 
 class Api(Harness):
