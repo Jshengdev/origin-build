@@ -44,10 +44,12 @@ tall or low singletons. Walls thicker than that, or a site whose walls are not a
 directions are searched, in whole degrees), give extra segments.
 
 UNVERIFIED on the real dog: where z = 0 sits (the fixture guesses the first window's z origin at -0.3 m; if z = 0 is
-the LiDAR, FLOOR, GROUND and TALL shift by the mount height, and this constants block is the only thing to change);
-every constant below; how high a wall at 3 m is seen through the cone (tunes TALL); how thick a wall accumulates over
-a walk (noise and odometry drift; THICK holds up to about 3 cells); the whole rule set until the first live frame. No
-accuracy number is claimed."""
+the LiDAR, two knobs shift together by the mount height: this constants block (FLOOR, GROUND, TALL) and 01's band
+lidar.Z_MIN/Z_MAX, which picks the cells that get classified at all, since only cells counted threshold+ times inside
+that band are read; a band set too high never counts the box, the chair seat or the low part of a wall, whatever FLOOR,
+GROUND and TALL say; set both from the first live frame's z range, Needs the dog 15.1); every constant below; how high
+a wall at 3 m is seen through the cone (tunes TALL); how thick a wall accumulates over a walk (noise and odometry
+drift; THICK holds up to about 3 cells); the whole rule set until the first live frame. No accuracy number is claimed."""
 from __future__ import annotations
 import argparse
 import math
