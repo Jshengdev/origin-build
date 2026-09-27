@@ -459,7 +459,8 @@ function ObjectsLayer() {
 // Blob labels (GET /dog/blobs, wtdd/dog/blobs.py): one outline ring per label at its blob's centre, the model's word and
 // p beside it ("shelf · 0.91", plus "· stub" or "· fixture" when no model said it) and the geometry's own verdict under
 // it; both verdicts in the ring's title. A FAILED label is red with its error, never a word. The grey of a moved run is
-// GET /dog/floorplan's (15's layer draws it); this layer only names. Its own 2 s poll, with or without a dog. The legend
+// GET /dog/floorplan's (15's layer draws it); this layer only names, and its "greyed" is the runs that same erase moved
+// (GET /dog/blobs `moved`). Its own 2 s poll, with or without a dog. The legend
 // always draws, below 15's, on a text-sized box; a zero is yellow, a FAILED press or read is red with the reason. "▶ name
 // blobs" is the press (POST /dog/blobs: one blob.labelled row per blob in the camera's view, or one failed row). The
 // page computes nothing.
@@ -470,7 +471,7 @@ function BlobsLayer() {
   const press = e => { e.stopPropagation(); fetch(`${API}/dog/blobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threshold: 3 }) })
     .then(r => r.json()).then(o => o.error ? setB(p => ({ ...(p || {}), error: `POST /dog/blobs failed: ${o.error}` })) : get())
     .catch(err => setB(p => ({ ...(p || {}), error: `POST /dog/blobs failed: ${err}` }))); };
-  const all = b?.labels || [], failed = all.filter(x => x.label == null).length, greyed = all.filter(x => x.erase).length;
+  const all = b?.labels || [], failed = all.filter(x => x.label == null).length, greyed = (b?.moved || []).length;
   const tag = x => x.source && x.source !== "live" ? ` · ${x.source}` : "";
   const why = b?.why || b?.error ? html`<text class="lbl blkey blwhy" x="12" y="148">${b.why ? (b.why.includes("FAILED") ? html`<tspan class="bad">${b.why}</tspan>` : b.why) : ""}${b.error ? html`${b.why ? " · " : ""}<tspan class="bad">FAILED ${b.error}</tspan>` : ""}</text>` : null;
   return html`<g>
