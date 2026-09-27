@@ -10,6 +10,10 @@ its guid's suffix, 248 with an empty name). The send gate (send.py) admits it by
 until the first live send: that AppleScript `chat id "any;-;<handle>"` resolves it (the group's `any;+;` form was
 verified 2026-09-13).
 
+S10, the demo: WTDD_ON_CALL_GUID (the group's guid, the same value as WTDD_CHAT_GUID for THE CASTLE) makes the group
+itself the on-call target: the flag goes there, any member's first clear reply decides (listen.py), and the handle is
+not needed. The send gate is not loosened: a guid that is neither the group nor the on-call 1:1 is still refused.
+
 The shift: every row of this item and every chat.post row carries args.shift_id = env WTDD_SHIFT, else today's local
 date YYYY-MM-DD. record_sign closes a shift with one ok record.signed row; the ledger is the record.
 
@@ -34,8 +38,12 @@ def guid(handle: str) -> str:
     return f"any;-;{handle}"
 
 
-def person() -> dict[str, str]:
-    """{name, handle, guid} of the on-call person; RuntimeError naming the missing key when unset."""
+def person() -> dict[str, Any]:
+    """{name, handle, guid} of the on-call person; RuntimeError naming the missing key when unset. WTDD_ON_CALL_GUID set
+    (S10: the group's guid, THE CASTLE for the demo) makes that chat the target: {name, handle None, guid, group True}."""
+    g = config.maybe("WTDD_ON_CALL_GUID")
+    if g:
+        return {"name": config.maybe("WTDD_ON_CALL_NAME") or "the group", "handle": None, "guid": g, "group": True}
     handle = config.get("WTDD_ON_CALL_HANDLE")
     return {"name": config.get("WTDD_ON_CALL_NAME"), "handle": handle, "guid": guid(handle)}
 
