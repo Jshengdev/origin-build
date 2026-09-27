@@ -4,9 +4,9 @@ believes it is to the camera's spot, and the route, the words and the numbers on
 filmed as an ask: WTDD_DISPATCH_AUTO is off by default, so a model's `dispatch` becomes an ask, stamped "auto off" on the
 row; the person's yes (wtdd/chat/listen.py verdict, pending kind "dispatch") runs the approved walk through the API.
 
-  run(cam, approved=False, dry=False, trigger=None, file=None, by=None)   the tool (wtdd/tools/dispatch.py) and the
-        camera's hook (wtdd/cam person_seen, on a thread); returns dispatch.json as its last phase wrote it
-  state_for_dispatch(cam, armed, dog, route, question_open)   five lines of words, no digits (decide._dedigit)
+  run(cam, approved=False, dry=False, trigger=None, file=None, by=None, unseen=None)   the tool (wtdd/tools/dispatch.py),
+        which the camera's hook (wtdd/cam person_seen, on a thread) calls; returns dispatch.json as its last phase wrote it
+  state_for_dispatch(cam, armed, dog, route, question_open, seen=True)   five lines of words, no digits (decide._dedigit)
   arrival(pt, grid, cal)   the camera's pt when walkable on plan.cost_map, else the nearest walkable cell within
         HALF_WIDTH + 1 cells (plan.replan's start_snapped rule); none: ValueError
   stub(state)   the DEMO_CACHE decision: ask or ignore, NEVER dispatch      ask_line(cam)   the question in the thread
@@ -14,21 +14,28 @@ row; the person's yes (wtdd/chat/listen.py verdict, pending kind "dispatch") run
   approval(cam, trigger, by)   the person's yes behind approved=true, read from the thread's own intruder.verdict row
         (young, this camera) or refused with a FAILED row; run() takes `approved` as given, so wtdd/tools/dispatch.py,
         every way in (the listener, POST /tools/dispatch, the model loop, the CLI), calls this first
+  why_unseen(cam)   why no person counts as seen at this camera, else None: the newest ok cam.detect row for it must box a
+        person and be under COOLDOWN_S old; the tool asks it for every run but a person's yes and hands it to run()
 
 run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written atomically, the full KEYS every time):
   1. One dispatch at a time: a module lock, taken without waiting; a second one is refused, never queued.
-  2. Refusals, before any plan: not calibrated (no calibration or believed pose, or DogSession.recheck: loaded from
-     disk or kept across a reconnect and not confirmed by a drag), following, recording, a question open (pending.json
+  2. Refusals, before any plan: no person seen (`unseen`, not dry: the local detector has not boxed one at this camera
+     in the last COOLDOWN_S; the post is text only), not calibrated (no calibration or believed pose, or
+     DogSession.recheck: loaded from disk or kept across a reconnect and not confirmed by a drag), following,
+     recording, a question open (pending.json
      younger than QUESTION_S: tonight's two-eyes rule, one question at a time and the dog's own eye wins, no second ask).
   3. plan.plan from the believed pose to arrival(): one plan.route row, no-go zones hard blocks. No route: a FAILED
      dispatch.decided offering only ask / ignore, the planner's own words in the thread. Phase `planned`.
   4. One dispatch.decided row: app imessage (a person said yes: choice dispatch, no model call), openrouter (JEV_API_KEY
-     set: Jev through decide._jev with CRITERIA and INSTRUCTIONS) or stub (# DEMO_CACHE, rows cached, source stub). Only
+     set: Jev through decide._jev with CRITERIA and INSTRUCTIONS) or stub (# DEMO_CACHE, rows cached, source stub; also
+     a dry run with no sighting, whose words say no person was seen). Only
      a model's dispatch is demoted to ask: always while auto is off ("auto off"), below WTDD_DISPATCH_THRESHOLD while it
      is on ("below threshold 0.7"). A live failure is the FAILED row, never the stub. Phase `decided`.
-  5. dry: stop here. ignore: a stderr line (phase `ignored`). ask: ask_line with the camera's frame, pending.json
-     {kind: dispatch} (phase `asked`); a question that opened since step 2 (looked for again just before the post and
-     just before pending.json) wins and this one is refused, its pending.json untouched. dispatch: DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
+  5. dry: stop here. ignore: a stderr line (phase `ignored`). ask: ask_line with the frame handed in (the camera hook's
+     boxed copy of the sighting; never a file found on disk, else text only), pending.json {kind: dispatch} (phase
+     `asked`); a question that opened since step 2 (looked for again just before the post and just before
+     pending.json) wins and this one is refused, its pending.json untouched. The reply is read by listen.verdict: only
+     a whole short yes (AFFIRM.fullmatch) walks. dispatch: DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
      len(path) * session.WP_TIMEOUT_S then stop() (phase `following`); on arrival a level look (dog_say.look_and_see) and
      one post with the photo, or the existing who-dis ask when the DETECTOR boxed a person (phase `arrived`); a failed
      detector is never "no person": the post says "detector FAILED" and the page's error carries it. Never STRANGER
@@ -55,7 +62,9 @@ no text, and the words say nothing about the picture.
 UNVERIFIED on the dog: the loop (camera -> decision -> route -> walk -> look -> thread) has run only against a fake session
 (wtdd/test_dispatch.py); no live Jev reply has been parsed here with a key (the canned reply is OpenRouter's published
 System One shape). The arrival is where the dog believes the camera's hand-placed spot is; the first live run's tape
-measure is the only accuracy number there will be.
+measure is the only accuracy number there will be. why_unseen() reads the newest cam.detect row: the hook's thread reaches
+it milliseconds after ingest writes it, before the next frame's row (a 1-2 s detector later); on the real laptop and
+detector that ordering is untested.
 """
 from __future__ import annotations
 import json
@@ -149,11 +158,12 @@ def _stop_words(p) -> str:
     return f"{'at' if d <= AT_STOP_PX else 'nearest to'} {decide.stop_name(i)}"
 
 
-def state_for_dispatch(cam: dict, armed: bool, dog: dict, route: dict, question_open: bool) -> str:
+def state_for_dispatch(cam: dict, armed: bool, dog: dict, route: dict, question_open: bool, seen: bool = True) -> str:
     """Five lines of words, no digits: the camera, the watch, the dog, the route, the thread. Only what the question needs
-    (Jev 1.13: accuracy falls with unrelated state; it is not a calculator, so lengths are rounded words)."""
+    (Jev 1.13: accuracy falls with unrelated state; it is not a calculator, so lengths are rounded words). seen=False
+    (a dry run with no sighting, why_unseen()) says no person was seen: the words never claim one nobody saw."""
     label = str(cam.get("label") or "no label")
-    lines = [f"a person is in view at camera {_id_words(str(cam['id']))}, {label if label.lower().startswith('the ') else 'the ' + label}, "
+    lines = [f"{'a person is in view at' if seen else 'no person has been seen recently at'} camera {_id_words(str(cam['id']))}, {label if label.lower().startswith('the ') else 'the ' + label}, "
              + (f"in zone {cam['zone']}." if cam.get("zone") else "in no zone on the map."),
              f"the intruder watch is {'armed' if armed else 'not armed'}."]
     if not dog.get("calibrated") or not dog.get("p"):
@@ -174,13 +184,14 @@ def state_for_dispatch(cam: dict, armed: bool, dog: dict, route: dict, question_
 
 
 def stub(state: str) -> dict:
-    # DEMO_CACHE: the decision without a model. What: one rule on the words: "the intruder watch is not armed" -> ignore
-    # 0.8, anything else -> ask 0.6, each with fixed probabilities. Why: no Jev key in a worktree, and a canned number
-    # must never move the body, so this stub NEVER returns dispatch; its rows say cached=True, source="stub". Live: set
-    # JEV_API_KEY in .env; the same state goes to Jev (decide._jev) and the row says app openrouter, source live.
-    if "the intruder watch is not armed" in state:
+    # DEMO_CACHE: the decision without a model. What: one rule on the words: "the intruder watch is not armed" or "no
+    # person has been seen" -> ignore 0.8, anything else -> ask 0.6, each with fixed probabilities. Why: no Jev key in a
+    # worktree, and a canned number must never move the body, so this stub NEVER returns dispatch; its rows say
+    # cached=True, source="stub". Live: set JEV_API_KEY in .env; the same state goes to Jev (decide._jev) and the row says
+    # app openrouter, source live.
+    if "the intruder watch is not armed" in state or "no person has been seen" in state:
         return {"choice": "ignore", "p": 0.8, "probabilities": {"dispatch": 0.05, "ask": 0.15, "ignore": 0.8},
-                "rule": "stub: the watch is not armed -> ignore 0.8 (the stub never dispatches)"}
+                "rule": "stub: the watch is not armed, or no person was seen -> ignore 0.8 (the stub never dispatches)"}
     return {"choice": "ask", "p": 0.6, "probabilities": {"dispatch": 0.3, "ask": 0.6, "ignore": 0.1},
             "rule": "stub: a person while armed -> ask 0.6 (the stub never dispatches)"}
 
@@ -247,6 +258,20 @@ def approval(cam: str, trigger: str | None, by: str | None = None) -> str | None
     raise ValueError(why)
 
 
+def why_unseen(cam: str) -> str | None:
+    """Why no person counts as seen at this camera now, else None. The device's own sighting, never a caller's word: the
+    newest ok cam.detect row for this camera (wtdd/cam ingest: the local detector, no model) must box a person and be
+    under COOLDOWN_S old. wtdd/tools/dispatch.py asks this before every run but a person's yes; run() takes it as given."""
+    from .watch import COOLDOWN_S
+    r = next((r for r in reversed(ledger.rows()) if r.get("tool") == "cam.detect" and r.get("ok") and (r.get("args") or {}).get("cam") == cam), None)
+    if r is None:
+        return "the camera has posted no detection"
+    age = time.time() - datetime.fromisoformat(r["ts"]).timestamp()
+    if "person" not in ((r.get("args") or {}).get("classes") or {}):
+        return f"its newest detection ({age:.0f} s ago) boxed no person"
+    return f"its newest person is {age:.0f} s old (over {COOLDOWN_S} s)" if age > COOLDOWN_S else None
+
+
 def _open_question() -> dict | None:
     if not PENDING.exists():
         return None
@@ -294,15 +319,6 @@ def _zone_names(m: dict) -> list[str]:
         return [f"malformed zone: {str(e)[:80]}"]
 
 
-def _frame(cam_id: str) -> str | None:
-    from .cam import cams
-    for f in (cams() / f"{cam_id}-boxed.jpg", cams() / f"{cam_id}.jpg"):
-        if f.is_file():
-            return str(f)
-    ledger.log("dispatch", "WARN no frame from this camera on disk: the ask goes as text only", cam=cam_id)
-    return None
-
-
 def _tell(dry: bool, key: str, text: str, file: str | None = None) -> str | None:
     """One post to the thread (never in dry); returns the post's own failure, if any, for the caller's error."""
     if dry:
@@ -318,11 +334,17 @@ def _tell(dry: bool, key: str, text: str, file: str | None = None) -> str | None
 
 
 def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None = None, file: str | None = None,
-        by: str | None = None) -> dict:
-    """dispatch.json at its last phase; every refusal or failure raises after its row, post and page (see the docstring)."""
+        by: str | None = None, unseen: str | None = None) -> dict:
+    """dispatch.json at its last phase; every refusal or failure raises after its row, post and page (see the docstring).
+    unseen: why no person counts as seen at this camera (why_unseen(), asked by the tool, like approval()); None = seen."""
     t0 = time.perf_counter()
     trigger = trigger or f"dispatch:{cam}:{int(time.time())}"
-    app = "imessage" if approved else decide.JEV_APP if config.maybe("JEV_API_KEY") else "stub"
+    # DEMO_CACHE: a dry run with no sighting is decided by the stub, even with JEV_API_KEY set. What: stub()'s fixed
+    # ignore on words that say no person was seen. Why: no model reads about a person the local detector never boxed
+    # (grade U3). Live: run the camera (python -m wtdd.cam --cam <id>) with a person in view; within COOLDOWN_S the same
+    # call reads that cam.detect row and Jev decides (app openrouter).
+    app = "imessage" if approved else "stub" if (unseen and dry) or not config.maybe("JEV_API_KEY") else decide.JEV_APP
+    label = {"cached": True, "source": "stub"} if app == "stub" else {}   # every dispatch.decided row this run writes
     args: dict[str, Any] = {"cam": cam, "trigger": trigger, "shift_id": decide.shift_id(), "threshold": None, "auto": auto(),
                             "choices": list(CHOICES), "pt": None, "arrival": None, "route": None, "state_chars": 0,
                             "approved": bool(approved), "by": by}
@@ -342,7 +364,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         "couldn't dispatch: <why>" in the thread (never in dry), then raise. Nothing has moved."""
         ledger.append({"step": "dispatch.decided", "agent": "dispatch", "tool": "dispatch.decided", "app": app, "args": args,
                        "state_before": before, "state_after": None, "ok": False, "response_or_error": f"RuntimeError: {why}",
-                       "latency_ms": round((time.perf_counter() - t0) * 1000), **({"cached": True, "source": "stub"} if app == "stub" else {})})
+                       "latency_ms": round((time.perf_counter() - t0) * 1000), **label})
         ledger.log("dispatch", "dispatch.decided ok=False REFUSED", app=app, cam=cam, why=why[:100])
         if own_page:
             _publish(page, phase="failed", error=why)
@@ -366,6 +388,8 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         before["dog"] = {"p": pose and pose["p"], "heading_deg": pose and pose["heading_deg"],
                          "calibrated": cal is not None and pose is not None and confirmed,
                          "following": bool(s and s.follow_state.get("active")), "recording": bool(s and s.rec), "pending": bool(pend)}
+        if unseen and not dry:   # the device's sighting first: nothing plans, asks a model or asks the thread about nobody
+            refuse(f"no person seen at camera {cam}: {unseen}", own_page=(pend or {}).get("kind") != "dispatch", frame=False)
         if not before["dog"]["calibrated"]:
             refuse("not calibrated: " + (uncal if cal is None or pose is None else "the calibration was loaded from disk or kept "
                                          "across a reconnect and not confirmed (drag the dog on the remote)"))
@@ -394,7 +418,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         args["route"] = {k: route[k] for k in ("exists", "length_m", "nogo")}
         dog = {**before["dog"], "avoid": getattr(getattr(s, "body", None), "_avoid", None)}
         from . import cam as fixedcam
-        state = state_for_dispatch(c, fixedcam.ARMED.exists(), dog, route, False)
+        state = state_for_dispatch(c, fixedcam.ARMED.exists(), dog, route, False, seen=not unseen)
         args["state_chars"], page["state"] = len(state), state
         if not route["exists"]:
             args["choices"] = ["ask", "ignore"]
@@ -403,8 +427,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
 
         try:
             with ledger.step("dispatch", "dispatch.decided", app, args, before) as r:
-                if app == "stub":
-                    r["cached"], r["source"] = True, "stub"
+                r.update(label)
                 thr = r["args"]["threshold"] = threshold()
                 if approved:
                     d, raw = {"choice": "dispatch", "p": None, "probabilities": None, "demoted": None, "model": None}, f"approved by {by or 'an unnamed sender'}"
@@ -443,9 +466,13 @@ def _ask(page: dict, c: dict, trigger: str, file: str | None, refuse) -> dict:
     """The question with the camera's frame, then pending.json {kind: dispatch}. One question at a time holds through
     the post itself (about 3 s: gate, claim, send, read-back): a question that opened since run() looked (the dog's own
     who-dis, most likely) is looked for just before the post and again just before pending.json is written, and wins:
-    its pending.json is never overwritten; run()'s refusal writes the FAILED row, the failed page and the text."""
+    its pending.json is never overwritten; run()'s refusal writes the FAILED row, the failed page and the text. The photo
+    is the frame handed in (the camera hook's boxed copy of the sighting), never a file found on disk: a later frame
+    replaces cams/<id>-boxed.jpg, maybe with nobody in it. None handed in: the ask is text only, said on stderr."""
     from .tools import chat_post
-    frame = file or _frame(c["id"])
+    frame = file
+    if frame is None:
+        ledger.log("dispatch", "WARN no frame of the sighting was handed in: the ask goes as text only", cam=c["id"], trigger=trigger)
 
     def hold(when: str) -> None:
         pend = _open_question()

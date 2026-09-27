@@ -3,8 +3,10 @@ The route is planned first from where the dog believes it is to the camera's spo
 decision on words (dispatch / ask / ignore: Jev with JEV_API_KEY, else a stub that never dispatches); with WTDD_DISPATCH_AUTO off
 (the default) a dispatch is asked in the thread first, and a person's yes runs approved=true. dry=true plans and decides
 only (the page draws it; nothing posts, nothing moves) and never goes through the API; otherwise the API process that
-owns the dog runs it. approved=true is refused unless the thread's own row says a person said yes to this trigger
-(dispatch.approval), whoever the caller is. wtdd/dispatch.py is the contract; the page reads GET /dispatch.
+owns the dog runs it. Whoever the caller is, the tool reads the devices, never the caller's word: approved=true is
+refused unless the thread's own row says a person said yes to this trigger (dispatch.approval); anything else is refused
+unless the camera's own detector boxed a person there under a minute ago (dispatch.why_unseen; a dry run with no sighting
+plans, says no person was seen, and the stub decides). wtdd/dispatch.py is the contract; the page reads GET /dispatch.
   cp wtdd/fixtures/grid_wall.json ui/grid.json && python -m wtdd dispatch cam=lap1 dry=true; rm -f ui/grid.json"""
 ARGS = {"cam": {"type": "string", "default": None, "doc": "a camera id on ui/map.json cameras[] (lap1)"},
         "approved": {"type": "boolean", "default": False,
@@ -12,7 +14,8 @@ ARGS = {"cam": {"type": "string", "default": None, "doc": "a camera id on ui/map
                             "row for this trigger is in the ledger, under 120 s old; no model call, the dog walks"},
         "dry": {"type": "boolean", "default": False, "doc": "true = plan and decide only: no post, no pending question, no walk"},
         "trigger": {"type": "string", "default": None, "doc": "the sighting's key (cam:<id>:<epoch>); the posts are keyed on it"},
-        "file": {"type": "string", "default": None, "doc": "the camera's frame to ask with (default: cams/<id>-boxed.jpg)"},
+        "file": {"type": "string", "default": None,
+                 "doc": "the sighting's photo (the camera hook's cams/<id>.<epoch>.boxed.jpg); none: the ask is text only"},
         "by": {"type": "string", "default": None, "doc": "not trusted when approved: the row's by is the verdict's sender"}}
 
 
@@ -25,6 +28,10 @@ def run(cam=None, approved=False, dry=False, trigger=None, file=None, by=None):
         if via is not None:
             return via
     from .. import dispatch
-    if approved:   # a person's yes is the thread's row, never an argument: checked in the process that walks
-        by = dispatch.approval(cam, trigger, by)
-    return dispatch.run(cam, approved=approved, dry=dry, trigger=trigger, file=file, by=by)
+    # both read in the process that walks, from the rows the devices wrote: a person's yes is the thread's
+    # intruder.verdict, a person at the camera is the local detector's cam.detect
+    if approved:
+        by, unseen = dispatch.approval(cam, trigger, by), None
+    else:
+        unseen = dispatch.why_unseen(cam)
+    return dispatch.run(cam, approved=approved, dry=dry, trigger=trigger, file=file, by=by, unseen=unseen)
