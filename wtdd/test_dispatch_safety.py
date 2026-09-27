@@ -24,6 +24,11 @@ Fix round 3:
                  is cached, source ui/grid.json (or the stub's), never a live row.
   GradeRefusal   a refusal decides nothing, so it is never "a model before the local detector" (U3); a decision on
                  words with no cam.detect before it still is.
+Fix round 4:
+  AnyFailure     any exception inside a run, not only the named refusals (an unreadable ui/grid.json, a sighting that
+                 cannot be read from the ledger), is one FAILED dispatch.decided naming it, the page's failed phase
+                 naming it and one text-only "couldn't dispatch" (never in dry): on the camera hook's thread there is
+                 no caller to see a traceback.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -316,6 +321,49 @@ class GradeRefusal(unittest.TestCase):
         g, why = td.D().grade([words])
         self.assertEqual(g, "unsafe", why)
         self.assertIn("cam.detect", why)
+
+
+class AnyFailure(Fresh):
+    def assert_failed_loud(self, err: str, posts: int = 1):
+        dec = td.rows_since(0, "dispatch.decided")
+        self.assertEqual([r["ok"] for r in dec], [False], "exactly one FAILED dispatch.decided")
+        self.assertIn(err, dec[0]["response_or_error"])
+        pg = self.page()
+        self.assertEqual(pg["phase"], "failed")
+        self.assertIn(err, pg["error"])
+        self.assertEqual(len(self.posts), posts, self.posts)
+        if posts:
+            self.assertTrue(self.posts[0]["text"].startswith("couldn't dispatch:"), self.posts)
+            self.assertIn(err, self.posts[0]["text"])
+            self.assertIsNone(self.posts[0]["file"], "text only")
+        self.assertEqual((self.s.follows, self.pending.exists()), ([], False))
+
+    def test_an_unreadable_saved_grid_is_one_failed_row_the_failed_page_and_one_post(self):
+        bad = Path(tempfile.mkdtemp(prefix="wtdd-dispatch-bad-grid-")) / "grid.json"
+        bad.write_text('{"cells": ')
+        with td.mock.patch.object(td.session, "GRID_FILE", bad):
+            with self.subTest("the API: no LiDAR grid in the session, the saved one is read"):
+                self.s.grid = None
+                with self.assertRaises(RuntimeError) as cm:
+                    self.D.run("lap1", trigger="cam:lap1:1790007000")
+                self.assertIn("JSONDecodeError", str(cm.exception))
+                self.assert_failed_loud("JSONDecodeError")
+            with self.subTest("dry with no API: the CLI reads the saved grid"), td.mock.patch.dict(os.environ):
+                os.environ.pop("WTDD_API_PROCESS")
+                self.enterContext(td.mock.patch.object(td.ledger, "LEDGER", Path(tempfile.mkdtemp(prefix="wtdd-dispatch-fresh-")) / "ledger.jsonl"))
+                self.posts[:] = []
+                self.out.unlink(missing_ok=True)
+                with self.assertRaises(RuntimeError):
+                    self.D.run("lap1", dry=True, trigger="cam:lap1:1790007001")
+                self.assert_failed_loud("JSONDecodeError", posts=0)
+
+    def test_a_sighting_that_cannot_be_read_is_refused_loud(self):
+        with td.mock.patch.object(self.D, "why_unseen", side_effect=ValueError("Expecting value: line 7 column 1 (char 900)")):
+            with self.assertRaises(RuntimeError) as cm:
+                self.call(cam="lap1", trigger="cam:lap1:1790007100", file=str(td.FRAME))
+        self.assertIn("FAILED to read the camera's sighting", str(cm.exception))
+        self.assert_failed_loud("FAILED to read the camera's sighting: ValueError: Expecting value")
+        self.assertEqual(td.rows_since(0, "plan.route"), [], "refused before any plan")
 
 
 if __name__ == "__main__":

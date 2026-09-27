@@ -275,6 +275,25 @@ class Person(Case):
         self.assertIsNone(json.loads(data)["person"])
         self.assertEqual(self.posts, [])
 
+    def test_a_sighting_that_never_reached_dispatch_is_a_failed_row(self):
+        """The hand-off itself fails (here the sighting's boxed copy: the disk is full): the reply says so, and one
+        FAILED row names the sighting, so the receipts show a person nobody was told about."""
+        from wtdd import tools
+        calls = []
+        (_TMP / "intruder.on").write_text("2026-09-26T00:00:00\n")
+        n0 = len(ledger.rows())
+        with mock.patch.object(tools, "call", lambda tool, **kw: calls.append((tool, kw))), \
+                mock.patch.object(cam.shutil, "copyfile", side_effect=OSError(28, "No space left on device")):
+            status, _, data = req("POST", "/cam/lap1/frame", FRAME)
+        r = json.loads(data)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("No space left on device", r["error"])
+        self.assertEqual(calls, [], "the sighting never reached dispatch")
+        failed = [x for x in ledger.rows()[n0:] if not x.get("ok")]
+        self.assertEqual([(x["tool"], x["args"]["cam"]) for x in failed], [("dispatch.decided", "lap1")], failed)
+        self.assertIn("No space left on device", failed[0]["response_or_error"])
+        self.assertIn("lap1-boxed.jpg", failed[0]["response_or_error"], "the row names the sighting whose copy failed")
+
 
 class Client(Case):
     """python -m wtdd.cam: the laptop side. --source <file> is the DEMO_CACHE replay of one JPEG (no camera in a worktree)."""
