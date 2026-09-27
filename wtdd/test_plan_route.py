@@ -288,6 +288,15 @@ class Tool(Fresh):
         clear_of_wall_and_zone(self, m["path"], self.wall)
         self.assertTrue(PREV.exists(), "the previous map is kept as map.prev.json")
         self.assertEqual(json.loads(PREV.read_text())["path"], prev["path"], "the taught route survives as the fallback")
+        rows = rows_since(self.n0, "plan.saved")
+        self.assertEqual(len(rows), 1, "one plan.saved row, the save's own receipt")
+        r = rows[0]
+        self.assertIs(r["ok"], True, r)
+        self.assertEqual((r["agent"], r["app"]), ("plan", "map"))
+        self.assertEqual((r["args"]["path_pts"], r["args"]["stops"]), (len(out["path"]), out["stops"]))
+        self.assertTrue(isinstance(r["args"].get("shift_id"), str) and r["args"]["shift_id"], "every shift row carries args.shift_id")
+        self.assertEqual(r["state_before"], {"path_pts": len(prev["path"]), "stops": prev.get("stops", [])}, "the map it replaced")
+        self.assertEqual(r["state_after"], {"path_pts": len(m["path"]), "stops": m["stops"], "prev": f"{TMP_MAP.parent.name}/map.prev.json"})
 
     def test_a_straight_leg_longer_than_a_jump_is_subdivided_so_the_save_is_accepted(self):
         out = self.run_tool(stops="300,1300;650,1300", save=True)   # 350 px straight on the grid: over MAX_STEP_PX as one segment
@@ -305,12 +314,17 @@ class Tool(Fresh):
         self.assert_nothing_written()
         rows = rows_since(self.n0, "plan.multistop")
         self.assertEqual([r["ok"] for r in rows], [True], "the plan itself succeeded on the grid; the refusal is the save's")
+        saved = rows_since(self.n0, "plan.saved")
+        self.assertEqual([r["ok"] for r in saved], [False], "the refusal is one plan.saved row, failed")
+        self.assertIn("outside every room", saved[0]["response_or_error"], "with check_path's words")
+        self.assertIsNone(saved[0]["state_after"], "nothing was written")
 
     def test_a_failed_leg_writes_nothing_even_with_save(self):
         with self.assertRaises(ValueError) as cm:
             self.run_tool(stops=f"300,900;650,900;{ON_WALL[0]},{ON_WALL[1]}", save=True)
         self.assertIn("leg 2 of 2", str(cm.exception))
         self.assert_nothing_written()
+        self.assertEqual(rows_since(self.n0, "plan.saved"), [], "no route, so no save was attempted: no plan.saved row")
 
 
 if __name__ == "__main__":
