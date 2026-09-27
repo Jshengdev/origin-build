@@ -4,7 +4,9 @@ listener then reads the group's verdict for PENDING_WINDOW_S: "idk" (no idea, du
 "STRANGER DANGER!!!" three times and the living room strobing red and blue for N seconds (light_alarm); any other
 answer stands it down with "ok". ask=false skips the question and alarms at once. Triggered by python -m wtdd.watch when the intruder watch is armed (GET/POST
 /intruder) and a person is in view for a few frames, at most once a minute; or by hand. One intruder.alarm row around
-the look, the boxes, the post and the lights; each part has its own rows. Nothing here retries."""
+the look, the boxes, the post and the lights; each part has its own rows. Nothing here retries. After the ask is
+posted the dog also says "who dis?!" on its own speaker (wtdd/dog/audio.py after: its own thread and dog.say row, so a
+failed say never blocks or fails the ask)."""
 ARGS = {"look": {"type": "string", "default": "level", "doc": "level | tilt | sit"},
         "seconds": {"type": "number", "default": 5},
         "trigger": {"type": "string", "default": None, "doc": "idempotence key of the post; defaults to intruder-<epoch>"},
@@ -20,6 +22,7 @@ def run(look="level", seconds=5, trigger=None, ask=True):
     import time
     from ..commands import look as _look
     from ..config import ROOT
+    from ..dog import audio
     from ..ledger import step
     from . import chat_post, light_alarm
     from .dog_say import boxed
@@ -34,6 +37,7 @@ def run(look="level", seconds=5, trigger=None, ask=True):
             det = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
         if ask:   # the question with the photo; the chat's answer decides (wtdd/chat/listen.py pending verdict)
             post = chat_post.run(text=ASK, file=file, trigger=key)
+            audio.after(ASK)   # 30: the dog says it too, after the post landed; never blocks or fails the ask
             (ROOT / "pending.json").write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": file, "seconds": seconds,
                                                            "trigger": key, "classes": (det or {}).get("classes")}))
             out = {"file": file, "pitch_deg": shot.get("pitch_deg"), "detector": det, "post": post, "text": ASK, "pending": True}
