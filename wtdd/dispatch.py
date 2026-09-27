@@ -226,7 +226,8 @@ def _publish(page: dict, quiet: bool = False, **fields: Any) -> dict:
 
 
 def read() -> dict:
-    """GET /dispatch: {} before the first dispatch, else the page plus age_ms (the remote marks it stale past 3 s)."""
+    """GET /dispatch: {} before the first dispatch, else the page plus age_ms (the remote marks a phase that is not an end
+    stale past its own window: following 3 s, asked QUESTION_S, planned and decided 60 s)."""
     if not OUT.exists():
         return {}
     return {**json.loads(OUT.read_text()), "age_ms": round((time.time() - OUT.stat().st_mtime) * 1000)}
