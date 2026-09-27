@@ -433,7 +433,7 @@ class Api(unittest.TestCase):
         self.assertIn("python -m wtdd.livecheck --step", d.get("why", ""))
 
     def test_serves_the_newest_verdict(self):
-        livecheck.run(step="04.4", ledger=LEDGER_UNSAFE, log=LOG_OK, replay=True, out=self.outp)
+        run(step="04.4", ledger=LEDGER_UNSAFE, log=LOG_OK, replay=True, out=self.outp)   # captured: the verdict line stays out of the gate's output
         d = self.get()
         self.assertEqual((d["step"], d["verdict"]), ("04.4", "UNSAFE"))
         self.assertEqual(d["deciding_row"]["tool"], "dog.follow")
