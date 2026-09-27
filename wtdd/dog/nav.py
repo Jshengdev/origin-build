@@ -2,7 +2,7 @@
 
 Frames. Odometry (LF_SPORT_MOD_STATE position x,y in meters and IMU yaw in radians) is fixed at power-on and drifts
 (leg odometry slips on rugs and turns; yaw is gyro-integrated). The map is ui/house.svg pixel space, y down, about
-PX_PER_M pixels per meter (the bottom living room is 445 px wide and 4.1 m). One calibration ties them: the odometry
+PX_PER_M pixels per meter (WTDD_PX_PER_M, measured; 108.5 when unset, from the bottom living room guessed at 445 px and 4.1 m). One calibration ties them: the odometry
 pose at the moment Johnny says "the dog is at map point (mx, my) facing heading h". Map heading is radians, 0 = +x on
 screen, increasing clockwise (because y is down); a positive ROS yaw turns the dog left, which is counter-clockwise on
 screen, so heading = h - (yaw - yaw0). "I'm here" later re-ties the position (keeps the heading): that is the
@@ -14,7 +14,27 @@ walls: the drawn path is the plan, obstacle avoidance is off, the controller and
 from __future__ import annotations
 import math
 
-PX_PER_M = 108.5
+from .. import config
+
+
+def _px_per_m() -> float:
+    """S5: the map scale is measured, not guessed. WTDD_PX_PER_M in .env (pixels per metre on house.svg); unset keeps
+    108.5, the first guess ("445 px wide and 4.1 m"). Measure it: the living room's width on the scan in pixels (scan_px,
+    drawn at the old scale) against the drawing's 445 px gives WTDD_PX_PER_M = 108.5 * 445 / scan_px. Read once at
+    import, so the API restarts to take a new value. A value that is not a number, or outside 20..400, stops loud."""
+    raw = config.maybe("WTDD_PX_PER_M")
+    if raw is None:
+        return 108.5
+    try:
+        v = float(raw)
+    except ValueError:
+        raise ValueError(f"WTDD_PX_PER_M must be pixels per metre as a number (like 103.4), got {raw!r}") from None
+    if not 20.0 <= v <= 400.0:
+        raise ValueError(f"WTDD_PX_PER_M={v} is outside 20..400 pixels per metre; house.svg's first guess was 108.5")
+    return v
+
+
+PX_PER_M = _px_per_m()
 VMAX, WMAX, AHEAD, K = 0.3, 0.5, 0.6, 1.6
 
 
