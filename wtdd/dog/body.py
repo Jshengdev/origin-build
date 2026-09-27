@@ -487,7 +487,9 @@ class Body:
 
     async def route(self, steps: list, name: str = "route") -> list[dict]:
         """Runs a validated list of steps with obstacle avoidance on; every step writes its own row with a
-        state read-back. Avoidance is switched back off afterwards, also on failure."""
+        state read-back. Afterwards, also on failure, avoidance is switched on again and read back, and the round's
+        row carries that read-back as state_after.avoid (S3: always on; B12: it used to be switched off here, which
+        left hand-driving unprotected). Whether the service accepts the switch right after StandDown is UNVERIFIED."""
         plan = _parse(steps)
         with step("dog", "dog.route", "unitree", {"name": name, "steps": [d for _, _, d in plan]}, self.state()) as r:
             await self.avoid(True)
@@ -507,9 +509,9 @@ class Body:
                         res = {"path": str(out), "sha256": hashlib.sha256(await self.frame(out)).hexdigest()}
                     done.append({"step": i + 1, "desc": desc, "result": res})
             finally:
-                await self.avoid(False)
+                on = await self.avoid(True)
+                r["state_after"] = {**(await self.fresh_state() or {}), "avoid": on}
             r["response_or_error"] = {"done": len(done), "of": len(plan)}
-            r["state_after"] = await self.fresh_state()
         return done
 
     # ---- lidar (wtdd/dog/lidar.py)
