@@ -26,7 +26,8 @@ demo in Johnny's order (dog_on_fire picture, "dog doin", the walk with a look-an
 photo, one sentence from the vision model posted with the photo, and with WTDD_ALARM=1 "who dis?!" when a person is in frame
 and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. WTDD_AGENT=1
 sends an armed message that is not a fixed command to wtdd.agent.ask with the chat context. A failed command is
-reported to the group as its class and message, never faked. Live wake demo receipt (2026-09-13 03:0x, in
+reported to the group as its class and message, never faked; a done one as its text, else the tool's result, else
+the raw dict (a registry tool answers {"result": ...}), never an empty message. Live wake demo receipt (2026-09-13 03:0x, in
 README.md): "what teh dog doin" recognized at 0.94, picture 3.4 s, walk 63.6 s, 3 posts, 3 read-back
 guids, 0 duplicates.
 
@@ -541,8 +542,8 @@ class Listener:
         except Exception as e:  # noqa: BLE001  (reported truthfully to the group; the ledger row already has it)
             self.say(f"res:{m['guid']}", f"couldn't {cmd}: {type(e).__name__}: {str(e)[:120]}")
             return
-        if isinstance(out, dict):
-            self.say(f"res:{m['guid']}", out.get("text"), out.get("file"))
+        if isinstance(out, dict):   # a photo {"text", "file"}, a registry tool's {"result"}, else the raw dict: never an empty post
+            self.say(f"res:{m['guid']}", out.get("text") or out.get("result") or str(out)[:300], out.get("file"))
         else:
             self.say(f"res:{m['guid']}", str(out)[:300])
 
