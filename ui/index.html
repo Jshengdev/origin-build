@@ -83,6 +83,7 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
 function App() {
@@ -243,7 +244,7 @@ function App() {
           </div>`}
           <div class="hint">${mode === "dot" ? `click where “${placing.label}” sits` : mode === "line" ? (pending ? "click the other end of the strip" : `click one end of “${placing.label}”`) : mode === "path" ? "click the floor to add a point at the end (the faint blue line is the saved route, trace it) · click an existing point to DELETE it · leave draw mode to drag points or double-click them into stops" : mode === "here" ? "click the floor where the dog actually is (its heading is kept)" : "drag the orange dog to where it really is, drag its cone tip to where it points (released = calibrated) · drag a lamp, a strip end, or a path point · double-click a path point to toggle a stop · click a light to blink it · save"}</div>
           ${map && html`<svg ref=${svgRef} class=${"map" + (mode ? " placing" : "")} viewBox="0 0 1060 1540" onClick=${onMapClick} onPointerMove=${onMove} onPointerUp=${onUp} onPointerLeave=${onUp}>
-            <image href="house.svg" x="0" y="0" width="1060" height="1540"/>
+            ${!map?.no_plan && html`<image href="house.svg" x="0" y="0" width="1060" height="1540"/>`}
             ${(map.rooms || []).map(r => html`<polygon key=${r.name} class=${"room" + (here === r.name ? " here" : "")} points=${r.poly.map(p => p.join(",")).join(" ")}/>`)}
             ${mode === "path" && guide?.path && html`<polyline class="guide" points=${guide.path.map(p => p.join(",")).join(" ")}/>`}
             <polyline class="path" points=${map.path.map(p => p.join(",")).join(" ")}/>
@@ -267,6 +268,7 @@ function App() {
             ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
+            <${NoPlanChip} on=${map?.no_plan}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
@@ -293,6 +295,7 @@ function App() {
             ${dog?.rec && html`<button class="small" onClick=${() => post("/dog/mark", {}).then(r => r.json()).then(setLast)}>mark stop here (${dog.rec.marks.length})</button>`}
             <button class=${"small" + (dog?.avoid ? " on" : "")} disabled=${!dog?.connected} title="the dog's own obstacle avoidance; velocities go through it while on" onClick=${() => post("/dog/avoid", { on: !dog?.avoid }).then(r => r.json()).then(setLast)}>${dog?.avoid ? "avoid on" : "avoid off"}</button>
             <button class=${"small" + (lidar?.on ? " on" : "")} disabled=${!dog?.connected} title="the dog's own LiDAR (rt/utlidar/voxel_map_compressed) drawn on the map through the calibration" onClick=${() => post("/dog/lidar", { on: !lidar?.on }).then(r => r.json()).then(setLast)}>${lidar?.on ? "lidar on" : "lidar off"}</button>
+            <${Scout} dog=${dog} ledger=${ledger} post=${post} setLast=${setLast}/>
             <button class=${"small" + (dog?.follow?.active ? " on" : "")} disabled=${!dog?.calibrated || dog?.follow?.active} onClick=${() => post("/dog/follow", {}).then(r => r.json()).then(setLast)}>follow the path</button>
             <button class="small" disabled=${dog?.follow?.stopped_at == null} onClick=${() => post("/dog/resume", {}).then(r => r.json()).then(setLast)}>resume</button>
             <span class="mono">${dog?.recheck ? html`<span class="bad">reconnected: drag the dog to where it really is · </span>` : ""}${dog?.map ? `thinks: ${dog.map.p[0]}, ${dog.map.p[1]} · ${dog.map.heading_deg}°` : "not calibrated"}${dog?.follow?.active ? ` · wp ${dog.follow.i}/${dog.follow.n - 1} · ${dog.follow.dist_px ?? "?"} px · ${dog.follow.err_deg ?? "?"}°${dog.follow.stopped_at != null ? ` · stopped at ${dog.follow.stopped_at}` : ""}` : dog?.follow?.error ? ` · follow: ${dog.follow.error}` : dog?.follow?.done ? ` · followed ${dog.follow.reached.length} waypoints` : ""}${lidar?.on ? ` · lidar ${lidar.frame?.id ?? "?"} · ${lidar.n} frames · ${(lidar.points_px || []).length} pts${lidar.why ? ` · ${lidar.why}` : ""}` : ""}</span>
@@ -384,6 +387,28 @@ function GridLayer() {
     <text class="lbl occlbl" x="12" y="28">grid · ${g ? `${c.length} cells seen ${g.threshold ?? "?"}+ times` : "…"}${g?.frames ? ` · ${g.frames} frames` : ""}${g?.source ? ` · ${g.source}` : ""}${g?.why ? ` · ${g.why}` : ""}${g?.error ? ` · FAILED ${g.error}` : ""}${g?.cb_errors ? ` · FAILED to take ${g.cb_errors} frames` : ""}</text></g>`;
 }
 // 01 · occupancy · end
+// 14 · scout-spin · start
+// The scout (POST /dog/scout, wtdd/dog/scout.py): one button turns the dog 360 in place while its LiDAR fills the grid
+// around it, and reads "stop" while it spins (POST /dog/stop cancels it). It waits only for GET /dog/state to answer:
+// the press connects itself, like the drive keys, and a connect failure is its FAILED row. The line beside it is
+// formatted, never computed: GET /dog/state .scout while it spins, else the newest dog.scout receipt from the ledger
+// rows App already polls (a fixture row says so). A failure is red and named. NoPlanChip: "no plan · site" under the
+// grid label when GET /map carries no_plan (WTDD_NO_PLAN=1: house.svg is not drawn, the house's rooms do not refuse
+// routes).
+function Scout({ dog, ledger, post, setLast }) {
+  const s = dog?.scout, r = [...(ledger || [])].reverse().find(x => x.tool === "dog.scout"), a = r?.state_after || {};
+  const n = v => (+v || 0).toLocaleString("en-US"), m = v => (v || []).map(x => (+x).toFixed(1)).join("/");
+  const text = s?.active ? `scout · ${Math.round(s.turned_deg)}° of ${s.target_deg} · ${s.frames} frames · +${n(s.cells_added)} cells · ${s.seconds} s${s.ranges ? ` · ranges ${m(s.ranges)} m` : ""}`
+    : !r ? null : !r.ok ? `scout FAILED: ${r.response_or_error}`
+    : `scouted · ${a.closed ? `${r.args?.target_deg}° closed at ${Math.round(a.turned_deg)}°` : r.args?.z_rad_s ? `${r.args?.target_deg}° not closed, at ${Math.round(a.turned_deg)}°` : "control, z 0"} · ${a.frames} frames · +${n(a.cells_added)} cells · ${a.seconds} s`;
+  return html`<${React.Fragment}>
+    <button class=${"small" + (s?.active ? " on" : "")} disabled=${!s?.active && (!dog || !!dog?.follow?.active || !!dog?.rec)} title="turns 360 in place while the LiDAR fills the grid around it; the LiDAR sees 360 already, this fills the shadow behind it and closes the heading" onClick=${() => post(s?.active ? "/dog/stop" : "/dog/scout", {}).then(x => x.json()).then(o => setLast({ ...o, tool: s?.active ? "dog stop" : "dog.scout" }))}>${s?.active ? "stop" : "scout: spin and draw"}</button>
+    ${text && html`<span class=${"mono" + (!s?.active && !r.ok ? " bad" : "")}>${text}${!s?.active && r.source === "stub" ? " · fixture" : ""}</span>`}</${React.Fragment}>`;
+}
+function NoPlanChip({ on }) {
+  return on ? html`<text class="lbl occlbl" x="12" y="52">no plan · site</text>` : null;
+}
+// 14 · scout-spin · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>

@@ -27,6 +27,11 @@ stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=
 real dog's calibrated odometry pose from the API, the follower (POST /dog/follow) drives it and pauses at the stops,
 and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. Measured on the live wake demo
 (2026-09-13): dark start 1.46 s, walk 63.6 s across four rooms (seven crossings, five lights), 67 writes, 0 errors.
+WTDD_NO_PLAN=1 (item 14, a drop-off site with no floor plan; read at the point of use): the drawn rooms are the house's,
+not this site's, so check_path's room rule is off, said once per call as `[wtdd:field] WARN rooms off under
+WTDD_NO_PLAN outside=N`, and a call the rule would have refused carries why "rooms off: WTDD_NO_PLAN" (rooms_off_why:
+this walk's field.walk row, dog.follow's row, and the POST /map and /dog/record responses). The other two rules, at
+least 2 points and no jump over MAX_STEP_PX, stay. Unset or 0 changes nothing.
 """
 from __future__ import annotations
 import json
@@ -37,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from . import tools
-from .config import ROOT
+from .config import ROOT, maybe
 from .ledger import log, step
 
 MAP = ROOT / "ui" / "map.json"
@@ -64,17 +69,31 @@ def room_of(p, rooms) -> str | None:
 
 
 MAX_STEP_PX = 300   # about 2.8 m: consecutive path points further apart are a jump (a stray click, or the trace hopping at a correction)
+NO_PLAN_WHY = "rooms off: WTDD_NO_PLAN"
+
+
+def no_plan() -> bool:
+    """WTDD_NO_PLAN=1: a drop-off site with no floor plan (item 14; see the module doc)."""
+    return maybe("WTDD_NO_PLAN") == "1"
+
+
+def rooms_off_why(path, rooms) -> str | None:
+    """NO_PLAN_WHY when the flag is on and some point is outside every room (the rule would have refused), else None."""
+    return NO_PLAN_WHY if no_plan() and any(room_of(q, rooms) is None for q in path) else None
 
 
 def check_path(path, rooms) -> list[str]:
-    """Why a path cannot be run, one line per problem, [] when it can: fewer than 2 points, a point outside every room,
-    two consecutive points further apart than MAX_STEP_PX. Points are numbered from 1 as on the remote."""
+    """Why a path cannot be run, one line per problem, [] when it can: fewer than 2 points, a point outside every room
+    (off under WTDD_NO_PLAN, with one WARN), two consecutive points further apart than MAX_STEP_PX. Points are
+    numbered from 1 as on the remote."""
     bad: list[str] = []
     if len(path) < 2:
         bad.append(f"only {len(path)} path point(s); draw at least 2")
-    for i, q in enumerate(path):
-        if room_of(q, rooms) is None:
-            bad.append(f"point {i + 1} at {int(q[0])},{int(q[1])} is outside every room")
+    outside = [(i, q) for i, q in enumerate(path) if room_of(q, rooms) is None]
+    if no_plan():
+        log("field", "WARN rooms off under WTDD_NO_PLAN", outside=len(outside))
+    else:
+        bad += [f"point {i + 1} at {int(q[0])},{int(q[1])} is outside every room" for i, q in outside]
     for i in range(1, len(path)):
         d = math.dist(path[i - 1], path[i])
         if d > MAX_STEP_PX:
@@ -150,6 +169,7 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     problems = check_path(pts, rooms)
     if problems:
         raise ValueError("the path cannot be run: " + "; ".join(problems))
+    why = rooms_off_why(pts, rooms)   # 14: on the row only when the room rule would have refused
     stops = sorted({int(i) for i in m.get("stops", []) if 0 <= int(i) < len(pts)})
     if FIELD.exists() and time.time() - FIELD.stat().st_mtime < BUSY_S:   # another process's walk is live: refuse, never interleave
         raise RuntimeError(f"a walk is already running ({FIELD.name} written {round(time.time() - FIELD.stat().st_mtime, 1)} s ago)")
@@ -191,7 +211,7 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
 
     with step("field", "field.walk", "map", {"path_pts": len(pts), "lights": len(lights), "radius": ent.get("radius_px"),
                                              "falloff": ent.get("falloff"), "speed": speed, "seconds": round(total / speed, 1),
-                                             "stops": stops, "dry": dry, "source": source, "follower": follower}) as r:
+                                             "stops": stops, "dry": dry, "source": source, "follower": follower, **({"why": why} if why else {})}) as r:
         t_dark = time.monotonic()
         if not dry:                                      # dark start: everything off, and wait for it
             for lid, fut in {L["id"]: pool.submit(_write, L, 0) for L in lights}.items():

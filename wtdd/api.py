@@ -28,6 +28,12 @@
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
+  POST /dog/scout {z?, target_deg?, timeout_s?}   the scout: one 360 in place while the LiDAR fills the grid (wtdd/dog/scout.py);
+                                  {ok, scout}; one dog.scout row per press (a refusal is a 500 and a FAILED row); GET /dog/state
+                                  .scout is its live status; POST /dog/stop cancels it
+  GET  /map under WTDD_NO_PLAN=1  also carries no_plan: true (the page hides house.svg, shows "no plan · site"); POST /map drops
+                                  no_plan before writing; POST /map, /dog/follow and /dog/record take a path the room rule would
+                                  have refused, with why "rooms off: WTDD_NO_PLAN" (wtdd/field.py)
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -43,7 +49,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import tools
 from .config import ROOT
-from .field import FIELD, MAP, STOP, check_path
+from .field import FIELD, MAP, STOP, check_path, no_plan, rooms_off_why
 from pathlib import Path
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -80,7 +86,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/tools":
             return self._json(200, tools.describe())
         if u.path == "/map":
-            return self._json(200, {**json.loads(MAP.read_text()), "_version": int(MAP.stat().st_mtime)})   # the page sends it back on save
+            return self._json(200, {**json.loads(MAP.read_text()), "_version": int(MAP.stat().st_mtime),   # the page sends it back on save
+                                    **({"no_plan": True} if no_plan() else {})})   # 14: the page hides house.svg on a site with no plan
         if u.path == "/ledger":
             return self._json(200, rows(int((parse_qs(u.query).get("n") or ["20"])[0])))
         if u.path == "/field":   # a walk writes it at 10 Hz; older than BUSY_S it is a leftover of a killed process, not a walk
@@ -163,6 +170,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/map":
             data = self._body()
             seen = data.pop("_version", None)
+            data.pop("no_plan", None)   # 14: GET's view of the env, never written into the map file
             if seen is not None and MAP.exists() and int(MAP.stat().st_mtime) != int(seen):   # a stale page must not overwrite a recording or another tab's save
                 log("api", "map NOT saved: stale page", page=seen, file=int(MAP.stat().st_mtime))
                 return self._json(409, {"ok": False, "error": "not saved: the map changed on the server since this page loaded (a recording, or another tab). Reload the page, then redo the edit."})
@@ -173,8 +181,9 @@ class H(BaseHTTPRequestHandler):
             if MAP.exists():
                 MAP.with_name("map.prev.json").write_text(MAP.read_text())   # the previous route survives one overwrite
             MAP.write_text(json.dumps(data, indent=2) + "\n")
-            log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])))
-            return self._json(200, {"ok": True, "_version": int(MAP.stat().st_mtime)})
+            why = {"why": w} if (w := rooms_off_why(data.get("path", []), data.get("rooms", []))) else {}   # 14: no row here; the response and the log say it
+            log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])), **why)
+            return self._json(200, {"ok": True, "_version": int(MAP.stat().st_mtime), **why})
         if u.path in ("/dog/drive", "/dog/stop", "/dog/calibrate", "/dog/follow", "/dog/resume", "/dog/avoid", "/dog/record", "/dog/mark", "/dog/lidar"):
             import math
             from .dog import nav
@@ -196,7 +205,8 @@ class H(BaseHTTPRequestHandler):
                     problems = check_path(m["path"], m.get("rooms", []))
                     if problems:
                         raise ValueError("the path cannot be followed: " + "; ".join(problems))
-                    out = {"follow": s.follow(m["path"], [int(i) for i in m.get("stops", [])], float(body.get("reach_px", 30)), avoid=bool(body.get("avoid", True)))}
+                    out = {"follow": s.follow(m["path"], [int(i) for i in m.get("stops", [])], float(body.get("reach_px", 30)), avoid=bool(body.get("avoid", True)),
+                                              why=rooms_off_why(m["path"], m.get("rooms", [])))}   # 14: on the dog.follow row when the rooms would have refused
                 elif u.path == "/dog/avoid":          # {on: true|false}: the dog's own obstacle avoidance, read back
                     out = {"avoid": s.avoid(bool(body.get("on", True)))}
                 elif u.path == "/dog/mark":           # {look?, say?}: a stop with its action at the current believed position, while recording
@@ -211,7 +221,9 @@ class H(BaseHTTPRequestHandler):
                         m["path"], m["stops"], m["actions"] = rec["path"], rec["stops"], rec["actions"]
                         MAP.write_text(json.dumps(m, indent=2) + "\n")
                         rec["problems"] = check_path(rec["path"], m.get("rooms", []))
-                        log("api", "map saved from the recorded route", points=len(rec["path"]), stops=rec["stops"], problems=len(rec["problems"]))
+                        if w := rooms_off_why(rec["path"], m.get("rooms", [])):   # 14: the dog.record row is written before this check; the response says it
+                            rec["why"] = w
+                        log("api", "map saved from the recorded route", points=len(rec["path"]), stops=rec["stops"], problems=len(rec["problems"]), **({"why": rec["why"]} if rec.get("why") else {}))
                     out = {"rec": rec}
                 elif u.path == "/dog/lidar":          # {on: true|false}: the dog's LiDAR voxel stream (GET /dog/lidar reads it)
                     out = {"lidar": s.lidar(bool(body.get("on", True)))}
@@ -228,6 +240,15 @@ class H(BaseHTTPRequestHandler):
                 out = s.grid_clear(str(body.get("why") or "cleared from the page")) if body.get("clear") else s.grid_save()
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 14 · scout-spin
+        if u.path == "/dog/scout":   # {z?, target_deg?, timeout_s?}: the spin runs as a task; the refusal's FAILED row is already written
+            from .dog.session import DogSession
+            body = self._body()
+            try:   # the raw values: DogSession.scout coerces them, so a malformed number is its FAILED row too
+                out = DogSession.get().scout(body.get("z", 0.5), body.get("target_deg", 360), body.get("timeout_s", 30))
+                return self._json(200, {"ok": True, "scout": out})
+            except Exception as e:  # noqa: BLE001  (a refusal or a connect failure is reported, never hidden)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
