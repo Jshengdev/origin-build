@@ -25,7 +25,8 @@ line the dog already lists is never uploaded again. say() plays by uuid: one dog
 response_or_error the raw 1002 response, state_after the next rt/audiohub/player/state message (Body._on_player,
 subscribed at connect) plus the sport state, or, when that topic is silent for PLAYER_WAIT_S, the literal "no read-back"
 plus GET_PLAY_MODE and a fresh sport state, never a default. A non-zero code is a FAILED row. Body.say_state is the last
-play; served() adds age_s and speaking for GET /dog/state .say. speaking is the ack (code 0) plus the line's own length
+play, published at the ack (its player_state joins after the read-back); served() adds age_s and speaking for GET
+/dog/state .say. speaking is the ack (code 0) plus the line's own length
 (the WAV's seconds) until 30.3 pastes the player-state shape here; the row always carries the raw player state or
 "no read-back". after(text) is the one hook line an ask calls after its chat post: a thread, so the text lands in the
 thread first and a failed say is only its own row, .say.error (the red badge) and one WARN line.
@@ -232,6 +233,9 @@ async def say(body, text: str, cache: Path | None = None) -> dict:
             r["response_or_error"] = data
             if code != 0:
                 raise RuntimeError(f"SELECT_START_PLAY refused by the dog: code={code}")
+            wav = SAY_DIR / f"{LINES[text]}.wav"   # .say at the ack: speaking runs while the line plays, not after the read-back
+            body.say_state = {"text": text, "code": 0, "at": time.time(), "ms": ms, "uuid": uuid,
+                              "seconds": seconds(wav) if wav.exists() else None, **({"source": "stub"} if stub else {})}
             player = await _next_player(body, n0)
             if player == NO_READ_BACK:
                 pc, pd = await request(body, TOPIC, PLAY_MODE, {})
@@ -239,10 +243,7 @@ async def say(body, text: str, cache: Path | None = None) -> dict:
                                     "sport": await body.fresh_state()}
             else:
                 r["state_after"] = {"player_state": player, "sport": body.state()}
-            wav = SAY_DIR / f"{LINES[text]}.wav"
-            body.say_state = {"text": text, "code": 0, "at": time.time(), "ms": ms, "uuid": uuid,
-                              "seconds": seconds(wav) if wav.exists() else None, "player_state": player,
-                              **({"source": "stub"} if stub else {})}
+            body.say_state = {**body.say_state, "player_state": player}
     except Exception as e:
         body.say_state = {"text": text, "code": code, "at": time.time(), "error": f"{type(e).__name__}: {e}",
                           **({"source": "stub"} if stub else {})}
