@@ -372,8 +372,8 @@ function App() {
 }
 // 22 · livecheck · start
 function LiveCheck() {   // GET /livecheck every second (python -m wtdd.livecheck): its `short` line drawn verbatim; the page computes nothing
-  const [d, setD] = useState(null);
-  useEffect(() => { const f = () => fetch("/livecheck").then(r => r.json()).then(setD).catch(e => setD({ verdict: "FAIL", short: `GET /livecheck FAILED · ${e}` })); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
+  const [d, setD] = useState(null);   // a non-2xx reply (main's API has no route: 404) or a body with no `verdict` key is a red FAILED line, never the idle one
+  useEffect(() => { const f = () => fetch("/livecheck").then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(`HTTP ${r.status} ${t.slice(0, 80)}`); })).then(d => { if (!("verdict" in d)) throw new Error(`no verdict key in ${JSON.stringify(d).slice(0, 80)}`); setD(d); }).catch(e => setD({ verdict: "FAIL", short: `GET /livecheck FAILED · ${e}` })); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
   if (!d) return null;
   const text = d.verdict == null ? `livecheck · no step running · ${d.why}` : d.stale ? `livecheck stopped · ${d.step} · ${d.age_s} s` : d.short;
   const cls = d.verdict == null ? "idle" : d.stale || d.verdict === "FAIL" || d.verdict === "UNSAFE" ? "bad" : d.verdict === "PASS" ? "ok" : "";
