@@ -19,6 +19,10 @@ cached true / source stub) and the table wtdd/livecheck/steps.json:
   Api      GET /livecheck serves livecheck.json with age_s (the remote's mono line), a stale waiting state is flagged,
            and with no file it says how to make one.
   Where    match() handles a plain value, gte/lte/in/re, and a missing path, and says which field failed.
+  Rows     the table against the rows and log lines the branches write, each check seen failing on what it claims: 01.1
+           grades frame_id from a dog.grid_save row and fails on a first lidar frame that is not odom (feat/01 refuses
+           only a frame_id that changes); 02.4 is UNSAFE when the first stop's decided lands before its watch.boxes;
+           14.3 passes a closed clockwise spin (feat/14 closes on the magnitude); a replay row with no readable ts WARNs.
 Nothing here touches a dog, the real ledger or the real livecheck.json: every path is a fixture or a temp file."""
 from __future__ import annotations
 import io
@@ -100,7 +104,8 @@ class Replay(unittest.TestCase):
         self.assertEqual(v["verdict"], "FAIL", v)
         last = out.strip().splitlines()[-1]
         self.assertTrue(last.startswith("FAIL 01.3 · "), last)
-        self.assertIn("WARN lidar frame callback failed err=ValueError: frame_id map is not odom", last, "the fatal line, verbatim")
+        self.assertIn("WARN lidar frame callback failed err=ValueError: frame_id 'map' is not the grid's 'odom': another frame, refused",
+                      last, "the fatal line, verbatim (feat/01's occupancy.update_frame refusal)")
         self.assertIn("WARN lidar frame callback failed", str(v["deciding_row"]))
         self.assertEqual(livecheck.exit_code(v), 1)
 
@@ -217,10 +222,10 @@ class Live(unittest.TestCase):
                 f.write(self.live_row("2026-09-27T21:00:00", "dog.calibrate", {"p": [1, 2], "heading_deg": 0.0}, {"map": {"p": [1, 2]}})); f.flush()
                 time.sleep(0.3)
                 f.write(self.live_row("2026-09-27T21:00:03", "dog.grid_save", {"file": "ui/grid.json", "frames": 5, "frame_id": "odom", "resolution": 0.05, "cal_at": "x"},
-                                      {"cells": 50, "frames": 5, "extent_m": 4.0})); f.flush()
+                                      {"cells": 50, "frames": 5, "extent_m": {"x": [-3.2, 3.2], "y": [-3.2, 3.2]}})); f.flush()
                 time.sleep(0.3)
                 f.write(self.live_row("2026-09-27T21:00:09", "dog.grid_save", {"file": "ui/grid.json", "frames": 60, "frame_id": "odom", "resolution": 0.05, "cal_at": "x"},
-                                      {"cells": 900, "frames": 60, "extent_m": 7.5})); f.flush()
+                                      {"cells": 900, "frames": 60, "extent_m": {"x": [-3.2, 6.4], "y": [-3.2, 3.2]}})); f.flush()
                 t_row.append(time.monotonic())
 
         threading.Thread(target=land, daemon=True).start()
@@ -362,6 +367,70 @@ class Where(unittest.TestCase):
         why = livecheck.match(self.ROW, {"tool": "dog.grid_save", "ok": True, "where": {"args.cal_at": {"re": "."}}})
         self.assertIn("args.cal_at", why)
         self.assertIsNotNone(livecheck.match(self.ROW, {"tool": "dog.grid_save", "agent": "watch", "ok": True, "where": {}}), "agent, when given, must match")
+
+
+class Rows(unittest.TestCase):
+    """steps.json's rows against the shapes on feat/01-occupancy, feat/02-decide and feat/14-scout-spin, replayed from temp files."""
+    FIRST = ("[wtdd:dog] first lidar frame frame_id={} voxels=3812 width=[128, 128, 38] res=0.05 origin=[-3.2, -3.2, -0.3] "
+             "center=[0.0, 0.0, 0.65] odom_pos=[0.28, 0.12, 0.31] center_vs_odom_m=0.31 z_layers={{}}\n")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.ledger, self.log, self.out = d / "ledger.jsonl", d / "api.log", d / "livecheck.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def r(s: int, tool: str, agent: str = "dog", args=None, after=None, **kw) -> dict:
+        return {"ts": f"2026-09-27T21:00:{s:02d}", "run_id": "test", "cached": False, "source": "live", "step": tool, "agent": agent,
+                "tool": tool, "app": "map", "args": args or {}, "state_before": None, "state_after": after, "ok": True,
+                "response_or_error": None, "latency_ms": 1, **kw}
+
+    def replay(self, step: str, rows: list[dict], log: str = "", **kw):
+        self.ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        self.log.write_text(log)
+        return run(step=step, ledger=self.ledger, log=self.log, replay=True, out=self.out, **kw)
+
+    def test_01_1_grades_the_frame_id_from_the_device(self):
+        connect = self.r(0, "dog.connect", app="unitree")
+        save = lambda fid: self.r(6, "dog.grid_save", args={"file": "ui/grid.json", "frames": 40, "frame_id": fid, "resolution": 0.05, "cal_at": None})
+        v, out, _ = self.replay("01.1", [connect, save("odom")], self.FIRST.format("odom"))
+        self.assertEqual(v["verdict"], "PASS", out)
+        self.assertEqual(v["deciding_row"]["tool"], "dog.grid_save", "the save carrying frame_id decides, not the connect")
+        v, out, _ = self.replay("01.1", [connect, save("map")], self.FIRST.format("map"))
+        self.assertEqual(v["verdict"], "FAIL", out)
+        self.assertIn("first lidar frame frame_id=map", out.strip().splitlines()[-1],
+                      "a frame_id that is consistently not odom is refused nowhere on feat/01: the first-frame line decides")
+        v, out, _ = self.replay("01.1", [connect, save("map")], "", timeout_s=5)
+        self.assertEqual(v["verdict"], "FAIL", "without the first-frame line the row's own frame_id still fails it: " + out)
+        v, out, _ = self.replay("01.1", [connect], "", timeout_s=5)
+        self.assertTrue(out.strip().splitlines()[-1].startswith("FAIL 01.1 · timeout after 5 s: missing dog.grid_save where args.frame_id odom"),
+                        "a LiDAR never switched on is a FAIL, not a PASS on the connect alone: " + out)
+
+    def test_02_4_the_first_stop_order_decides(self):
+        boxes = lambda s: self.r(s, "watch.boxes", "watch", {"file": "look-down.jpg"}, {"n": 1}, app="yolo")
+        dec = lambda s, stop: self.r(s, "decided", "decide", {"stop": stop}, {"label": "clear", "p": 0.91, "model": "typesafe/jev-1.13-2026-09-01"},
+                                     app="openrouter")
+        v, out, _ = self.replay("02.4", [boxes(0), dec(2, 1), boxes(10), dec(12, 2)])
+        self.assertEqual((v["verdict"], (v["deciding_row"] or {}).get("ts")), ("PASS", "2026-09-27T21:00:02"), out)
+        v, out, _ = self.replay("02.4", [dec(0, 1), boxes(2), dec(10, 2), boxes(12)])
+        self.assertEqual(v["verdict"], "UNSAFE", "the same rows with the stop's decided before its watch.boxes: " + out)
+        self.assertTrue(out.strip().splitlines()[-1].startswith("UNSAFE 02.4 · watch.boxes after decided · "), out)
+        self.assertEqual(v["deciding_row"]["ts"], "2026-09-27T21:00:02")
+
+    def test_14_3_a_clockwise_spin_that_closed_passes(self):
+        want = livecheck.load_steps()["14.3"]["rows"][0]
+        after = {"turned_deg": -358.2, "closed_deg": -358.2, "closed": True, "avoid": True, "velocity_path": "sport"}
+        self.assertIsNone(livecheck.match(self.r(0, "dog.scout", after=after), want), "feat/14 closes a negative-z spin on its magnitude")
+        self.assertIsNotNone(livecheck.match(self.r(0, "dog.scout", after={**after, "closed": False}), want))
+
+    def test_replay_row_without_a_ts_is_loud(self):
+        save = self.r(6, "dog.grid_save", args={"frames": 40, "frame_id": "odom"})
+        del save["ts"]
+        _, _, err = self.replay("01.1", [self.r(0, "dog.connect"), save], self.FIRST.format("odom"))
+        self.assertIn("WARN 01.1 · replay row has no readable ts", err)
 
 
 if __name__ == "__main__":
