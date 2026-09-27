@@ -468,7 +468,8 @@ class Castle(unittest.TestCase):
                            "state_before": {"max_rowid": 1}, "state_after": {"guid": "P-C", "rowid": 2, "ts": "2026-09-27 12:18:10"},
                            "response_or_error": None, "latency_ms": 900})
         self.pend.write_text(json.dumps({"kind": kind, "t": time.time(), "file": "/tmp/f.jpg", "seconds": 5,
-                                         "trigger": self.trigger, "chat": GROUP}))
+                                         "trigger": self.trigger, "chat": GROUP,   # 17: a decide pending names its question
+                                         **({"question": "not sure: person at sixty percent. what is it?"} if kind == "decide" else {})}))
 
     def _handle(self, m: dict, housemates: dict | None = None, **env: str):
         with mock.patch.dict(os.environ, env), mock.patch.dict(L.HOUSEMATES, housemates or {}, clear=True), \
@@ -522,7 +523,7 @@ class Castle(unittest.TestCase):
         a = row["args"]
         self.assertEqual((a["from"], a["by"], a["decided"], a["chat"], a["acked_ms"]), (self.JO, "Jo", True, GROUP, 12000))
         self.assertEqual(a["say"], "Jo answered first: 'thats my friend' (known) after 12 s. I'm standing down.")
-        self.assertEqual(row["state_after"], {"verdict": "known"})
+        self.assertEqual(row["state_after"], {"verdict": "known", "meaning": "standing_down", "p": 0.85, "action": "stand_down"})   # 17's typed reading
         self.assertFalse(self.pend.exists())
         self.assertEqual(self.posts, [(GROUP, "ok:R-1", "listen", "ok, standing down", None)])
 
@@ -542,7 +543,7 @@ class Castle(unittest.TestCase):
         call = self._handle(_msg("R-3", "idk", GROUP, sender=self.JO), {self.JO: "Jo"})
         [row] = self._verdicts()
         self.assertIsNone(row["args"]["acked_ms"])
-        self.assertEqual(row["args"]["say"], "Jo answered first: 'idk' (answered). I'm standing down.")
+        self.assertEqual(row["args"]["say"], "Jo answered first: 'idk' (stranger). I'm standing down.")   # 17 reads it; a decide question never alarms
         call.assert_not_called()
 
 

@@ -613,7 +613,8 @@ class HeadsUp(unittest.TestCase):
                 ({"label": "hazard", "p": 1.0, "needs_person": False}, 10, "heads up: hazard at one hundred percent at stop one. what is it?"),
                 ({"label": "hazard", "p": 0.71, "needs_person": False}, 23, "heads up: hazard at seventy one percent at stop three. what is it?"),
                 ({"label": "opening", "p": 0.9, "needs_person": False}, None, "heads up: opening at ninety percent at a stop off the route. what is it?")):
-            line = decide.heads_up_line(d, stop)
+            with mock.patch("wtdd.field.MAP", ROOT / "wtdd" / "fixtures" / "map_route.json"):   # stops [10, 22, 23]; ui/map.json ships none
+                line = decide.heads_up_line(d, stop)
             self.assertEqual(line, want)
             self.assertIsNone(DIGIT.search(line), line)
 
@@ -683,7 +684,7 @@ class ListenEscalate(unittest.TestCase):
         self.pending = Path(_TMP) / f"pending-{self._testMethodName}.json"
         self.pending.unlink(missing_ok=True)
         self.map = Path(_TMP) / "listen-17-map.json"
-        m = json.loads((ROOT / "ui" / "map.json").read_text())
+        m = json.loads((ROOT / "wtdd" / "fixtures" / "map_route.json").read_text())   # the old route, stops [10, 22, 23]: ui/map.json ships none
         m["actions"] = {"10": {"look": "tilt", "ask": False}, "22": {"look": "sit", "ask": True}, "23": {"look": "tilt", "ask": False}}
         self.map.write_text(json.dumps(m))
         self.l = self._listener()
