@@ -4,8 +4,9 @@ model must never be added: the halt is the detector's person box (wtdd/watch.py,
 constant, and the resume is a person's name or one exact word.
 
   near(boxes, W, H)       the tallest box named "person" at least NEAR_FRAC of the frame's height, or None
-  freshness(path)         {fresh, age_ms, why}: watch.json by its own `t`; missing, unreadable, untimed or older than
-                          FRESH_S is not a person watch, and says why (the page's yellow chip, the session's WARN line)
+  freshness(path)         {fresh, age_ms, why}: watch.json by its own `t`; missing, unreadable, untimed, timed in the
+                          future or older than FRESH_S is not a person watch, and says why (the page's yellow chip, the
+                          session's WARN line)
   frame(path)             (bytes, W, H) of the frame watch.json names (read once; its sha256 is the row's frame_sha)
   is_word(text)           text, stripped and case-folded, equals WTDD_RESUME_WORD (default "resume"); no regex
   last_halt(rows)         the last stop.person with no ok stop.resumed after it, as the page's `halted`, else None
@@ -84,6 +85,8 @@ def freshness(path: Path, now: float | None = None) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001  (not fresh, and the reason is returned to the page and the WARN line)
         return {"fresh": False, "age_ms": None, "why": f"detector unreadable: {path.name} {type(e).__name__}"}
     age = round((now - t) * 1000)
+    if age < 0:   # the detector's clock ahead of this one: fresh until it caught up, even from a dead detector
+        return {"fresh": False, "age_ms": age, "why": f"detector clock ahead: {path.name} t is in the future"}
     if age > FRESH_S * 1000:
         return {"fresh": False, "age_ms": age, "why": f"detector stale: {path.name} older than {FRESH_S} s"}
     return {"fresh": True, "age_ms": age, "why": None}
