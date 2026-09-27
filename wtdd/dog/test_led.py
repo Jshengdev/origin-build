@@ -14,15 +14,17 @@ and are absent from the wheel, so these checks pin what we send and how we recor
   Hook     the colour table is the head's; a fake ask that calls the hook returns at once and completes while the dog
            refuses (code 7, the FAILED row lands later); no connected dog in the API is a WARN and no row; another
            process goes through the API.
-  Hold     a state is resent every WTDD_LED_TIME_S while it holds; a new state cancels the held one; a refusal is not
-           resent; until the ceiling is known one request holds 5 s.
+  Hold     a state is resent every WTDD_LED_TIME_S while it holds, on the first send's clock (a slow 1006 read-back never
+           stretches the period); a new state cancels the held one; a refusal is not resent; until the ceiling is known
+           one request holds 5 s.
   Wired    the real session.py with a fake body: lidar(True) and the follow's start are cyan, the follow's end green,
            stop() red. intruder_alarm's "who dis?!" (red) and the listener's "ok, standing down" (green) are read from
            the source: running either would post to the chat.
   Served   GET /dog/state .led is the body's led_state, None without a body; WTDD_STATE_FIXTURE (the DEMO_CACHE path)
            serves the planted file with source "stub", a relative path from the repo root.
-  Tool     dog_led in the registry with {color, seconds, flash_ms} and in `python -m wtdd list`; importing the hook
-           module does not load the driver (the listener imports it).
+  Tool     dog_led in the registry with {color, seconds, flash_ms} and in `python -m wtdd list`; the CLI waits out a hold
+           (its resends die with the process otherwise), the API process does not; importing the hook module does not
+           load the driver (the listener imports it).
   Page     the ring's marked block in ui/index.html with its texts, colours only as var(--x, #fallback), the dot still
            orange, and the night-1 dry-mode patches 1 and 1b the screenshot needs.
 """
@@ -314,6 +316,29 @@ class Hold(unittest.TestCase):
         self.assertTrue(all(r["ok"] and r["args"]["color"] == "cyan" for r in rows))
         self.assertEqual({o["parameter"]["time"] for _, o in b.conn.sent if o["api_id"] == 1007}, {0.05})
 
+    def test_the_resend_period_is_time_not_time_plus_the_read_back(self):
+        os.environ["WTDD_LED_TIME_S"] = "0.05"
+        b = _body(delay={1006: 0.03})   # a slow read-back; a silent 1006 on the dog waits REQ_TIMEOUT_S (3 s) every request
+        ps, sent_at = b.conn.datachannel.pub_sub, []
+        send = ps.publish_request_new
+
+        async def stamped(topic, opts):
+            if opts["api_id"] == 1007:
+                sent_at.append(time.monotonic())
+            return await send(topic, opts)
+
+        ps.publish_request_new = stamped
+
+        async def go():
+            await led.hold(b, "cyan", 0.2)
+            await asyncio.sleep(0.45)
+
+        _quiet(asyncio.run, go())
+        self.assertEqual(len(sent_at), 4)
+        gaps = [round(y - x, 3) for x, y in zip(sent_at, sent_at[1:])]
+        self.assertTrue(all(g < 1.4 * 0.05 for g in gaps), f"1007 gaps {gaps}: the read-back's latency must not dark the head")
+        self.assertLess(sent_at[-1] - sent_at[0], 0.2, "every request of the 0.2 s hold starts within the 0.2 s")
+
     def test_a_new_state_cancels_the_held_one(self):
         os.environ["WTDD_LED_TIME_S"] = "0.05"
         b = _body()
@@ -472,6 +497,33 @@ class Tool(unittest.TestCase):
         out = subprocess.run([sys.executable, "-m", "wtdd", "list"], cwd=ROOT, capture_output=True, text=True, timeout=120)
         self.assertEqual(out.returncode, 0, out.stderr[-500:])
         self.assertRegex(out.stdout, r"(?m)^dog_led\s")
+
+    def test_the_cli_waits_out_the_hold_and_the_api_process_does_not(self):
+        """In a CLI the resend task lives on the session's daemon thread and dies at exit, so run() waits for it; in the
+        API process the hold stays fire-and-forget. _via_api is replaced: nothing here reaches an API."""
+        from wtdd import commands
+        dog_led = tools.registry()["dog_led"]
+        inst, api = session.DogSession._inst, os.environ.pop("WTDD_API_PROCESS", None)
+        os.environ["WTDD_LED_TIME_S"] = "0.1"
+        try:
+            with mock.patch.object(commands, "_via_api", lambda tool, **a: None):
+                for proc, at_return in ((None, 4), ("1", 1)):   # 0.4 s held in 0.1 s requests
+                    if proc:
+                        os.environ["WTDD_API_PROCESS"] = proc
+                    s = session.DogSession()
+                    s.body = _body()
+                    session.DogSession._inst = s
+                    n0 = _count()
+                    _quiet(dog_led.run, color="cyan", seconds=0.4)
+                    self.assertEqual(len(_led_rows(n0)), at_return, f"rows when run() returns, WTDD_API_PROCESS={proc}")
+                    _quiet(_wait_led_rows, n0, 4)
+                    self.assertEqual([r["args"].get("resend") for r in _led_rows(n0)], [None, 1, 2, 3], proc)
+        finally:
+            session.DogSession._inst = inst
+            os.environ.pop("WTDD_LED_TIME_S", None)
+            os.environ.pop("WTDD_API_PROCESS", None)
+            if api is not None:
+                os.environ["WTDD_API_PROCESS"] = api
 
     def test_importing_the_hook_module_does_not_load_the_driver(self):
         code = "import sys, wtdd.dog.led; print('unitree_webrtc_connect' in sys.modules)"
