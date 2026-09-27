@@ -38,7 +38,15 @@ confirmed chat.db time to the reply's chat.db time, UTC, whole seconds; None + a
 confirmed post), shift_id and chat. No person configured, or the send to them failed: one WARN at boot for the first,
 and either is posted to the group as its error under escalate-fail:<key> (never alarm:<key>, which a failed send has
 already claimed), no question opened, no hold, the round goes on. UNVERIFIED until the first live run: a reply landing
-in the 1:1 chat as read here, and the send to it (send.py)."""
+in the 1:1 chat as read here, and the send to it (send.py).
+
+S10, the demo: WTDD_ON_CALL_GUID set to the group's own guid makes the group the on-call target (oncall.person()). The
+flag goes to the group, the group is read once, and it keeps its wake words, commands and chat turns: while a flag is
+open those are not an answer (the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
+reply from a member (not a wake word, a command or a chat turn) decides, as in the 1:1. Every intruder.verdict row
+carries args.by (the HOUSEMATES first name, else "a member"), args.say (one first-person sentence, the reply quoted
+with any phone or email in it replaced by "a member", as the page's redact() does) and args.decided true; args.from
+keeps the raw handle (the ledger is private, the page is filmed). UNVERIFIED until the first live run in THE CASTLE."""
 from __future__ import annotations
 import json
 import re
@@ -61,6 +69,7 @@ PENDING_WINDOW_S = 120
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
 IDK = re.compile(r"\b(idk|dunno|no idea|dont know|don t know|no clue|not me|nope|who|never seen|stranger)\b")
 GATHER_S = 6.0                # after "yo dog ...", the same sender's next messages within this long join the request
+PRIVATE = re.compile(r"\+\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")   # a phone handle or an email: ui/index.html's redact() pattern
 
 Poster = Callable[[str, str, str, str | None, str | None], Any]   # (guid, trigger_key, kind, text, file)
 OWN_OPENERS = ("the dog is doin", "dog doin", "dog done", "on it:", "couldn't", "here's what i see", "yo, we don't know", "noted:",
@@ -80,17 +89,18 @@ class Listener:
         self.last = db.max_rowid()          # no replay at boot
         self._warned = False
         self.oncall_handle = config.maybe("WTDD_ON_CALL_HANDLE")
-        self.oncall = oncall.guid(self.oncall_handle) if self.oncall_handle else None   # the on-call 1:1 (item 03)
+        self.oncall = config.maybe("WTDD_ON_CALL_GUID") or (oncall.guid(self.oncall_handle) if self.oncall_handle else None)   # the group (S10) or the 1:1 (03)
+        self.group_oncall = self.oncall == guid   # S10: the group answers its own flags and keeps its wake words and commands
         self.marks = {g: self.last for g in (guid, self.oncall) if g}   # one watermark per chat read (ROWIDs are global)
         if not self.oncall:
-            log("chat", "WARN no on-call person (WTDD_ON_CALL_HANDLE unset): a flag will be posted to the group as its error")
+            log("chat", "WARN no on-call person (WTDD_ON_CALL_GUID and WTDD_ON_CALL_HANDLE unset): a flag will be posted to the group as its error")
 
     @property
     def armed(self) -> bool:
         return time.time() < self.armed_until
 
     def allowed(self, m: dict[str, Any]) -> bool:
-        if self.oncall and m.get("chat") == self.oncall:   # the on-call 1:1: only that person's own words, never a from-me bubble
+        if self.oncall and not self.group_oncall and m.get("chat") == self.oncall:   # the on-call 1:1: only that person's own words, never a from-me bubble
             return not m["is_from_me"] and m["sender"] == self.oncall_handle
         if m["is_from_me"]:
             # WTDD_ALLOW_SELF=1 lets Johnny trigger from his own phone (same account as the dog). The dog's own posts are
@@ -265,12 +275,20 @@ class Listener:
         chat = m.get("chat") or self.guid
         if pend.get("chat") and chat != pend["chat"]:   # only the chat that was asked answers (the on-call person, not the group)
             return False
+        if self.group_oncall and (is_wake(m["text"]) or match_command(m["text"]) or is_chat(m["text"])):   # S10: not an answer, the group's own
+            return False
         from .. import tools
         stranger = pend.get("kind") != "decide" and bool(IDK.search(normalize(m["text"])))
         PENDING.unlink(missing_ok=True)
         acked = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
+        by = HOUSEMATES.get(m["sender"]) or "a member"   # the name on camera (the page's Receipts): never the handle
+        meaning = "answered" if pend.get("kind") == "decide" else "stranger" if stranger else "known"
+        after = f" after {acked['acked_ms'] // 1000} s" if acked["acked_ms"] is not None else ""
+        say = (f"{by} answered first: '{PRIVATE.sub('a member', m['text'])[:80]}' ({meaning}){after}. "
+               + ("I'm sounding the alarm." if stranger else "I'm standing down."))
         append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
-                "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger"), **acked, "chat": chat},
+                "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger"), **acked, "chat": chat,
+                         "by": by, "say": say[:1].upper() + say[1:], "decided": True},
                 "state_before": None, "state_after": {"verdict": "stranger" if stranger else "known"}, "response_or_error": None, "latency_ms": 0})
         log("chat", "VERDICT", by=hname(m["sender"]), verdict="stranger" if stranger else "known", text=m["text"][:60], acked_ms=acked["acked_ms"])
         if not stranger:
@@ -309,7 +327,7 @@ class Listener:
         text = m["text"]
         if not text or not self.allowed(m):
             return
-        if self.oncall and m.get("chat") == self.oncall:   # the on-call 1:1 answers flags only; it never wakes or commands the dog
+        if self.oncall and not self.group_oncall and m.get("chat") == self.oncall:   # the on-call 1:1 answers flags only; it never wakes or commands the dog
             if not (self.verdict(m) or self.correction(m)):
                 log("chat", "on-call message answers no open flag: not a command there", chars=len(text))
             return
