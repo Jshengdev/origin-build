@@ -50,7 +50,8 @@ DANGER!!!" x3 + light_alarm) only on a who_dis question (a person in frame at an
 heads_up or decide question it stands down. standing_down: "ok, standing down" (verdict known); handled: "ok, closed";
 acknowledged: the question stays open for handled, nothing posted; below WTDD_REPLY_THRESHOLD or unclear: "do you know
 them? yes or no" once (no verdict row yet; the round keeps holding; the next reply is read against the re-ask), then
-stand down, logged as unclear. A failed live reading: "couldn't read the reply: <error>", verdict unread, stand down,
+stand down, logged as unclear; a re-ask nobody answers gets that unclear row from the first reply's reading and acked
+fields when the hold times out or the window expires (_drop), never a silent unlink. A failed live reading: "couldn't read the reply: <error>", verdict unread, stand down,
 never the regex. Never an alarm on an unclear reply. A pending of kind halt (item 00) is never read as a reply. One
 acked_ms per flag: the verdict row after a hold carries closed_ms instead, and after a re-ask the final row keeps the
 first reply's time. A verdict read by the DEMO_CACHE stub (no JEV_API_KEY) is a cached/stub row, like its reply.decided
@@ -225,7 +226,7 @@ class Listener:
         """After "who dis?!" at a stop, the listener is inside the round, so it reads the chats here: the asked chat's
         next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, within the
         same `seconds`. No answer in `seconds` = the question is withdrawn and the round goes on; that is logged, never
-        faked."""
+        faked, and a re-ask nobody answered is its unclear verdict row (_drop)."""
         t0 = time.monotonic()
         log("chat", "who dis: waiting for the verdict", seconds=seconds)
         while time.monotonic() - t0 < seconds:
@@ -237,9 +238,34 @@ class Listener:
                     return True
                 log("chat", "who dis: a message while holding, not the verdict: not handled", chat=m["chat"], chars=len(m.get("text") or ""))
             time.sleep(1.0)
-        PENDING.unlink(missing_ok=True)
-        log("chat", "who dis: no answer at the stop, moving on", waited_s=round(time.monotonic() - t0))
+        self._drop(json.loads(PENDING.read_text()) if PENDING.exists() else {}, "who dis: no answer at the stop, moving on",
+                   waited_s=round(time.monotonic() - t0))
         return False
+
+    def _row(self, pend: dict[str, Any], reply: dict[str, Any], fields: dict[str, Any], stub: bool,
+             verdict: str, meaning: str | None, p: float | None, did: str) -> None:
+        """One intruder.verdict row: the reply it rests on (from, text, guid, chat), the flag it answers, the reply-clock
+        fields; a reading by the DEMO_CACHE stub labels it cached/stub (unread: there was no reading at all)."""
+        append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
+                "args": {"from": reply["from"], "text": reply["text"], "guid": reply["guid"], "asked": pend.get("trigger"), **fields,
+                         "chat": reply["chat"]},
+                "state_before": None, "state_after": {"verdict": verdict, "meaning": meaning, "p": p, "action": did},
+                "response_or_error": None, "latency_ms": 0,
+                **({"cached": True, "source": "stub"} if stub and verdict != "unread" else {})})
+        log("chat", "VERDICT", by=hname(reply["from"]), verdict=verdict, meaning=meaning or "", p=p, action=did,
+            text=reply["text"][:60], **{k: v for k, v in fields.items() if k.endswith("_ms")})
+
+    def _drop(self, pend: dict[str, Any], unanswered: str, **kv: Any) -> None:
+        """An open question withdrawn with no final reading (the hold timed out, or its window expired), never silently.
+        A re-ask nobody answered: one intruder.verdict row, unclear / stand_down, from the first reply's reading and with
+        its acked fields (the person answered then). Nobody answered at all: the `unanswered` line, no row (no reply)."""
+        PENDING.unlink(missing_ok=True)
+        first = pend.get("first")
+        if pend.get("reasked") and not pend.get("acknowledged") and first:
+            self._row(pend, first, pend.get("acked") or {}, first["stub"], "unclear", first["meaning"], first["p"], "stand_down")
+            log("chat", "re-ask unanswered: standing down, unclear", trigger=pend.get("trigger"), **kv)
+        else:
+            log("chat", unanswered, **kv)
 
     def wake_show(self, m: dict[str, Any]) -> None:
         """The wake demo, in Johnny's order: the picture, "dog doin" as the walk starts, the walk (wtdd/field.py, the same
@@ -312,8 +338,8 @@ class Listener:
         three times and light_alarm, only when the question was "who dis?!" (kind who_dis); a heads_up (17) or decide
         (02) question stands down, so WTDD_ALARM and the map's ask flags still gate the alarm. standing_down: "ok,
         standing down"; handled: "ok, closed"; acknowledged: the question stays open for handled. Unclear or below
-        WTDD_REPLY_THRESHOLD: one re-ask (the pending's question becomes it, and keeps this reply's acked fields), no
-        verdict row yet, then stand down as unclear. After a hold, acked_ms is the hold row's; this row gets closed_ms.
+        WTDD_REPLY_THRESHOLD: one re-ask (the pending's question becomes it, and keeps this reply's acked fields and
+        reading), no verdict row yet, then stand down as unclear (unanswered: _drop writes that row). After a hold, acked_ms is the hold row's; this row gets closed_ms.
         Rows read by the stub say cached/stub. A failed reading is posted as its error and stands down (verdict unread),
         never the regex. A halt (00) is never read here. Only the chat that was asked answers (a decide question with no
         chat is dog_say's, posted to the group). A reply stamped before the question's confirmed post answers an earlier
@@ -322,8 +348,7 @@ class Listener:
             return False
         pend = json.loads(PENDING.read_text())
         if time.time() - pend.get("t", 0) > PENDING_WINDOW_S:
-            PENDING.unlink(missing_ok=True)
-            log("chat", "who dis: no answer in time, standing down")
+            self._drop(pend, "who dis: no answer in time, standing down")
             return False
         chat = m.get("chat") or self.guid
         kind = pend.get("kind")
@@ -349,15 +374,10 @@ class Listener:
         # reply's time from the flag is closed_ms; after a re-ask, the first reply's time stands (the person answered then)
         acked = {k.replace("acked_", "closed_"): v for k, v in now.items()} if pend.get("acknowledged") else (pend.get("acked") or now)
         stub = not config.maybe("JEV_API_KEY")   # read_reply's own test: its DEMO_CACHE reading labels this verdict row too
+        reply = {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "chat": chat}
 
         def row(verdict: str, meaning: str | None, p: float | None, did: str) -> None:
-            append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
-                    "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger"), **acked, "chat": chat},
-                    "state_before": None, "state_after": {"verdict": verdict, "meaning": meaning, "p": p, "action": did},
-                    "response_or_error": None, "latency_ms": 0,
-                    **({"cached": True, "source": "stub"} if stub and verdict != "unread" else {})})   # unread: no reading at all
-            log("chat", "VERDICT", by=hname(m["sender"]), verdict=verdict, meaning=meaning or "", p=p, action=did,
-                text=m["text"][:60], **{k: v for k, v in acked.items() if k.endswith("_ms")})
+            self._row(pend, reply, acked, stub, verdict, meaning, p, did)
 
         try:
             r = read_reply(asked, m["text"], trigger=pend.get("trigger"), chat=chat, guid=m["guid"], **{"from": m["sender"]})
@@ -366,8 +386,9 @@ class Listener:
             row("unread", None, None, "stand_down")
             self.say(f"unread:{m['guid']}", f"couldn't read the reply: {type(e).__name__}: {str(e)[:100]}", guid=chat)
             return True
-        if r["action"] == "reask" and not pend.get("reasked"):
-            PENDING.write_text(json.dumps({**pend, "reasked": True, "question": REASK, "acked": acked}))   # the next reply answers the re-ask
+        if r["action"] == "reask" and not pend.get("reasked"):   # the next reply answers the re-ask; none, and _drop rows this one
+            PENDING.write_text(json.dumps({**pend, "reasked": True, "question": REASK, "acked": acked,
+                                           "first": {**reply, "meaning": r["meaning"], "p": r["p"], "stub": stub}}))
             log("chat", "reply unclear: asked once more", meaning=r["meaning"], p=r["p"])
             self.say(f"reask:{m['guid']}", REASK, guid=chat)
             return True
@@ -486,8 +507,7 @@ class Listener:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None
         if PENDING.exists() and time.time() - json.loads(PENDING.read_text()).get("t", 0) > PENDING_WINDOW_S:
-            PENDING.unlink(missing_ok=True)
-            log("chat", "who dis: no answer in time, standing down")
+            self._drop(json.loads(PENDING.read_text()), "who dis: no answer in time, standing down")
         msgs = self.read()
         for m in msgs:
             self.handle(m)
