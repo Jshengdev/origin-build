@@ -1,6 +1,6 @@
 # The API contract
 
-Every route `wtdd/api.py` serves on main (read at 0ad5dc9), what it takes and what it answers. It is read from the handler code and the
+Every route `wtdd/api.py` serves on main (read at 96f9b63), what it takes and what it answers. It is read from the handler code and the
 functions each route calls (`wtdd/dog/session.py`, `scout_zones.py`, `objects.py`, `occupancy.py`, `floorplan.py`,
 `record.py`, `shift.py`, `decide.py`), then checked against a dry API (no dog) with curl. The shapes are today's, including
 their inconsistencies: a client builds against these, and a change to one is a change to this file.
@@ -65,6 +65,9 @@ their inconsistencies: a client builds against these, and a change to one is a c
   confirm is 404. What works live is dismissing an auto zone, `id` = its map name (`nogo-<n>`).
 - **The record** is GET `/record?shift=<id>` (default: the run in force) and GET `/record/shifts`. An unknown shift is a
   404 naming the shifts that exist, never an empty record.
+- **Five GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts` and
+  `/ledger`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
+  Keys and numbers are untouched, the ledger file keeps the raw values, and the other routes are not redacted.
 - `_version` is `int(mtime)` of `ui/map.json`. Send it back on POST `/map` and `/dog/scout`, or the write is a 409.
 
 ## GET
@@ -106,7 +109,7 @@ What the keys hold:
 - **`/record`**: what `python -m wtdd.record --shift <id>` prints.
   - `window` is `{from, to, closed_by}`.
   - `flags[]` is `{ts, trigger, stop, to, text, file, resolved: null | {by, text, verdict, acked_ms, ts, closed_ms?}}`;
-    `to` is the chat guid the flag went to.
+    `to` is the chat guid the flag went to; a 1:1's handle in it reads `a member`.
   - `signed` is null or `{by, at}`.
 - **`/record/shifts`**: `shifts` is newest first; `current` is the run in force.
 - **`/dog/state`**:
