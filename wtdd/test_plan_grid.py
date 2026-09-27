@@ -281,7 +281,7 @@ class Replan(unittest.TestCase):
         self.assertEqual(a["from"], [400, 1400])
         self.assertEqual((a["blocked"], a["rejoin"], a["skipped"]), (det["blocked"], det["rejoin"], [3, 4, 5]))
         self.assertEqual((a["cost_map"], a["threshold"], a["nogo"], a["cell_px"]), ("grid", occupancy.THRESHOLD, [ZONE["name"]], plan.CELL))
-        self.assertGreater(a["walls"], 31, "the wall's cells and the blob's")
+        self.assertGreater(a["walls"], plan.cost_map(MAP_DICT, fx.grid(), CAL)[1]["walls"], "the wall's cells and the blob's, more than the wall alone")
         self.assertTrue(isinstance(a.get("shift_id"), str) and a["shift_id"], "every shift row carries args.shift_id")
         self.assertEqual(r["state_after"]["waypoints"], len(pts))
         self.assertEqual(rows_since(n0, "plan.route"), [], "a replan is its own row, not a plan.route")
