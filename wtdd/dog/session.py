@@ -837,7 +837,7 @@ class DogSession:
         tie (what the page draws as blue dots); None when there is no live view: no body or stream, a window older than
         LIVE_MAX_AGE_MS, no pose, or not calibrated."""
         b = self.body
-        if b is None or not hasattr(b, "lidar_points") or self.cal is None:
+        if b is None or self.cal is None:
             return None
         lp, st = b.lidar_points(), b.state()
         if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
