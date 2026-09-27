@@ -53,6 +53,17 @@ The contract under test:
                                      the word; a refused or unreachable resume is posted as "couldn't resume: ..."
   field.walk(source="dog")           while GET /dog/state says halted, the walk holds on the dog's spot (the lights stay
                                      where it stopped) instead of ending when the cancelled follower goes inactive
+
+Review round 1 (the classes at the end, RED before their fixes):
+  a follower paused at a stop        is a still body: no halt there (a person is in frame at a who-dis stop by design);
+                                     the tick after resume() halts it, was follow; a key held during the pause is drive,
+                                     and the paused follower it cancels still writes its dog.follow row before stop.person
+  look("level") while halted         allowed (BalanceStand and a frame: the armed intruder watch's alarm calls it) and
+                                     graded still; tilt and sit stay refused
+  state().person_watch               also carries the tick's own failure (a frame it cannot read, a raise), naming it
+  the thumbnail copy                 its failure is state_after.file_error on an ok stop.person: ok is the device's
+  field.walk(on_hold=)               on_hold() runs every tick of the hold; the chat's round passes its resume-word
+                                     reader, so the word is read while the listener is inside its own walk
 """
 from __future__ import annotations
 import asyncio
@@ -866,6 +877,207 @@ class Fixture(unittest.TestCase):
     def test_the_committed_fixture_grades_pass(self):
         g, why, detail = halt.grade(self.rows())
         self.assertEqual(g, "pass", f"{why} | {detail}")
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+class Paused(Dry):
+    """A follower paused at a stop is a still body (vel 0, waiting for the field's resume): nothing to halt, and at a
+    who-dis stop a person is in frame by design. Its look (Pose, Euler) must not land inside a stop.person."""
+    STOPS = [[100, 100], [101, 100], [900, 100]]   # waypoints 0 and 1 are reached where the fake dog stands; 1 is a stop
+
+    def pause(self) -> None:
+        self.s.follow([list(p) for p in self.STOPS], [1])
+        self.assertTrue(wait_for(lambda: self.s.follow_state.get("stopped_at") == 1, 5.0), self.s.follow_state)
+
+    def test_a_follower_paused_at_a_stop_is_not_halted_and_the_tick_after_resume_is(self):
+        self.pause()
+        self.plant([person(near_h() + 10)], t=time.time())
+        self.s.person_tick()
+        time.sleep(0.6)   # the watch thread's ticks on the same frame, still paused
+        self.assertEqual(of("stop.person"), [])
+        self.assertFalse(self.s.state()["halted"])
+        self.assertIsNone(self.s.follow_state.get("error"))
+        self.s.resume()   # what the field's POST /dog/resume {} does after the stop's look
+        self.assertTrue(wait_for(lambda: self.s.follow_state.get("stopped_at") is None, 2.0))
+        self.plant([person(near_h() + 10)], t=time.time())
+        self.s.person_tick()
+        rows = of("stop.person")
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["args"]["was"], "follow")
+        tools = [r["tool"] for r in ledger.rows()]
+        self.assertLess(tools.index("dog.follow"), tools.index("stop.person"), tools)
+
+    def test_a_key_held_during_the_pause_is_drive_and_the_paused_follower_lands_first(self):
+        self.pause()
+        self.plant([person(near_h() + 10)], t=time.time())
+        self.s.drive(0.3, 0.0, 0.0)
+        self.s.person_tick()
+        rows = of("stop.person")
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["args"]["was"], "drive")
+        tools = [r["tool"] for r in ledger.rows()]
+        self.assertIn("dog.follow", tools)
+        self.assertLess(tools.index("dog.follow"), tools.index("stop.person"), tools)
+        self.assertEqual(halt.grade([DET()] + ledger.rows() + [RESUMED()])[0], "pass")
+
+
+class LevelLook(Dry):
+    """The armed intruder watch (wtdd/watch.py) calls intruder_alarm -> commands.look('level') when a person is near:
+    the halt must not silence it. A level look is BalanceStand and a frame: still."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake.raw = lambda: {"imu_state": {"rpy": [0.0, 0.0, 0.0]}}
+
+        async def frame(out):
+            return str(out)
+        self.fake.frame = frame
+        self._pics = mock.patch.object(session, "PICTURES", self.tmp / "pictures")
+        self._pics.start()
+
+    def tearDown(self):
+        self._pics.stop()
+        super().tearDown()
+
+    def test_a_level_look_runs_while_halted_and_tilt_and_sit_do_not(self):
+        self.plant([person(near_h() + 10)], t=time.time())
+        self.s.drive(0.3, 0.0, 0.0)
+        self.s.person_tick()
+        self.assertTrue(self.s.state()["halted"])
+        n = len(self.fake.cmds)
+        out = self.s.look("level")
+        self.assertEqual(out["kind"], "level")
+        self.assertTrue(set(c for c, _ in self.fake.cmds[n:]) <= set(halt.STILL_CMDS), self.fake.cmds[n:])
+        for kind in ("tilt", "sit"):
+            with self.assertRaises(RuntimeError):
+                self.s.look(kind)
+        self.assertTrue(self.s.state()["halted"])
+
+    def test_a_level_look_inside_a_stop_grades_still_and_a_tilt_does_not(self):
+        look = lambda kind: R("dog.look", args={"kind": kind})  # noqa: E731
+        self.assertEqual(halt.grade([DET(), STOP(), look("level"), CMD("BalanceStand"), RESUMED()])[0], "pass")
+        for kind in ("tilt", "sit"):
+            self.assertEqual(halt.grade([DET(), STOP(), look(kind), RESUMED()])[0], "unsafe", kind)
+
+
+class TickFailure(Dry):
+    """A person watch that cannot do its job is never silent on the page: freshness alone would say fresh."""
+
+    def test_a_frame_the_tick_cannot_read_is_the_pages_chip_naming_it(self):
+        d = self.plant([person(near_h() + 10)], t=time.time())
+        d["file"] = str(self.tmp / "missing-frame.jpg")
+        (self.tmp / "watch.json").write_text(json.dumps(d))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.s.drive(0.3, 0.0, 0.0)
+            self.s.person_tick()
+        self.assertEqual(of("stop.person"), [])
+        pw = self.s.state()["person_watch"]
+        self.assertIs(pw["fresh"], False, pw)
+        self.assertIn("missing-frame.jpg", pw["why"])
+
+    def test_a_tick_that_raises_is_the_pages_chip_too(self):
+        self.plant([{"name": "person", "conf": 0.9}], t=time.time())   # a box without xyxy: near() raises in the tick
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            seen = wait_for(lambda: (self.s.drive(0.3, 0.0, 0.0), "FAILED" in str(self.s.state()["person_watch"]["why"]))[1], 3.0)
+        self.assertTrue(seen, (self.s.state()["person_watch"], buf.getvalue()[-400:]))
+        self.assertIs(self.s.state()["person_watch"]["fresh"], False)
+        self.assertEqual([l for l in buf.getvalue().splitlines() if "person watch back" in l], [], "a failing tick flickers")
+
+
+class Thumbnail(Dry):
+    def test_a_thumbnail_that_cannot_be_written_leaves_ok_to_the_device(self):
+        blocker = self.tmp / "a-file"
+        blocker.write_text("not a directory")
+        with mock.patch.object(halt, "PICTURES", blocker / "pictures"), contextlib.redirect_stderr(io.StringIO()):
+            self.plant([person(near_h() + 10)], t=time.time())
+            self.s.drive(0.3, 0.0, 0.0)
+            self.s.person_tick()
+        rows = of("stop.person")
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIs(rows[0]["ok"], True, rows[0]["response_or_error"])
+        self.assertTrue(rows[0]["state_after"]["file_error"])
+        self.assertIn("StopMove", [c for c, _ in self.fake.cmds])
+        h = self.s.state()["halted"]
+        self.assertIs(h["ok"], True)
+        self.assertTrue(h["file_error"])
+
+
+class RoundHold(unittest.TestCase):
+    """The chat's own round (WTDD_ROUND=dog): Listener.poll -> handle -> wake_show -> field.walk run in ONE thread, so
+    while the walk holds on a halt the listener reads no message unless the walk hands it the tick."""
+    MAP = {"path": [[100, 100], [200, 100], [300, 100]], "stops": [], "lights": [], "entity": {},
+           "rooms": [{"name": "corridor", "poly": [[0, 0], [1000, 0], [1000, 300], [0, 300]]}]}
+
+    def setUp(self):
+        from .. import field
+        self.field = field
+        self.tmp = Path(tempfile.mkdtemp(prefix="wtdd-halt-round-"))
+        (self.tmp / "map.json").write_text(json.dumps(self.MAP))
+        self._p = [mock.patch.object(ledger, "LEDGER", self.tmp / "ledger.jsonl"),
+                   mock.patch.object(field, "MAP", self.tmp / "map.json"),
+                   mock.patch.object(field, "FIELD", self.tmp / "field.json"),
+                   mock.patch.object(field, "STOP", self.tmp / "field.stop")]
+        for p in self._p:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._p):
+            p.stop()
+
+    def test_the_word_is_read_while_the_chats_own_round_holds_on_a_halt(self):
+        from ..chat import db, listen
+        state = {"halted": {"was": "follow", "latency_ms": 400}}
+        posts: list[tuple[str, dict | None]] = []
+        said: list[str | None] = []
+
+        def dog():
+            return {"map": {"p": [150, 100], "heading_deg": 0.0}, "follow": {"active": False, "error": "stopped", "i": 1},
+                    "halted": state["halted"]}
+
+        def post_(url, json=None, timeout=None):
+            posts.append((url, json))
+            if url.endswith("/dog/resume") and json and "by" in json:
+                state["halted"] = None
+            return mock.Mock(json=lambda: {"ok": True, "follow": {"i": 0, "n": 3, "stops": []}, "resumed": {}})
+        inbox = [[msg("resume", rowid=2)]]
+        with mock.patch.object(self.field, "_dog", dog), mock.patch("requests.post", post_), \
+                mock.patch.object(db, "new_messages", side_effect=lambda guid, last: inbox.pop(0) if inbox else []), \
+                mock.patch.object(db, "max_rowid", return_value=0), mock.patch.object(listen.memory, "store"), \
+                mock.patch.object(listen, "HEARTBEAT", self.tmp / "listen.json"), mock.patch.object(listen, "PENDING", self.tmp / "p.json"), \
+                mock.patch.object(listen, "STATE", self.tmp / "s.json"), mock.patch("wtdd.tools.call", return_value={"file": None}), \
+                mock.patch.dict(os.environ, {"WTDD_ROUND": "dog"}), contextlib.redirect_stderr(io.StringIO()):
+            L = listen.Listener(GROUP, lambda guid, key, kind, text, file: said.append(text), listen_s=60)
+            L.allowed = lambda m: True
+            L.look_and_say = lambda *a, **k: None
+            t = threading.Thread(target=L.wake_show, args=(msg("what the dog doin", rowid=1),), daemon=True)
+            t.start()
+            t.join(8.0)
+            deaf = t.is_alive()
+            if deaf:   # end the held walk before the patches go (never let it reach the real API)
+                (self.tmp / "field.stop").touch()
+                t.join(5.0)
+        self.assertFalse(deaf, "the listener is still inside its own round: the resume word was never read")
+        self.assertEqual([j for u, j in posts if u.endswith("/dog/resume") and j and "by" in j], [{"by": SENDER, "via": "imessage"}])
+        self.assertEqual(inbox, [])
+        self.assertIn(f"resumed by {SENDER}", " ".join(str(x) for x in said))
+
+    def test_the_window_before_the_follower_says_stopped_holds_too(self):
+        """_follow's finally sets active False before the cancel writes error 'stopped': a poll in between, with the dog
+        halted, holds the lights; it is not 'the follower is not running'."""
+        window = {"map": {"p": [150, 100], "heading_deg": 0.0}, "follow": {"active": False, "i": 1}, "halted": {"was": "follow"}}
+        stopped = {"active": False, "error": "stopped", "i": 1}
+        seq = [window, {**window, "follow": stopped}, {**window, "follow": stopped, "halted": None}]
+        polls: list[int] = []
+
+        def dog():
+            polls.append(1)
+            return seq[min(len(polls), len(seq)) - 1]
+        with mock.patch.object(self.field, "_dog", dog), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(RuntimeError) as cm:
+                self.field.walk(dry=True, source="dog")
+        self.assertIn("stopped", str(cm.exception))
+        self.assertNotIn("not running", str(cm.exception))
 
 
 if __name__ == "__main__":
