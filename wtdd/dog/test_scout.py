@@ -55,7 +55,10 @@ The contract under test:
                             plus NIGHT-2 contract D's names for 10/11/22's fixtures: {heading0, closed_deg, velocity_path, why}
                             (why: None on a clean close; the WARNs, "; "-joined, on a turn that did not close or on a
                             grid that already held every cell the band hit; the error on a FAILED row);
-                            args.source is "dropoff" when the scout tied the pose itself, else the tie's own source ("tap")
+                            args.source is "dropoff" when the scout tied the pose itself, else the tie's own source ("tap");
+                            args.recheck is the session's recheck read after the connect and any drop-off tie: true when
+                            the spin runs under a tie nobody confirmed this power-on (dog_cal.json loaded, or a stale
+                            reconnect), with one stderr `[wtdd:dog] WARN scout under an unconfirmed tie ...` line
                             state_after is complete on a FAILED row too (the finding is the numbers it reached)
   FAILED (ok false, the error named, the scout's own one halt): LiDAR switch refused; no turn after NO_TURN_S (names "avoid on" or
                             "avoid off"); timeout (turned_deg on the row); 0 frames; 0 band cells, i.e. no voxel of any
@@ -366,6 +369,7 @@ class Spin(Harness):
         self.assertTrue(AFTER <= set(r["state_after"]), sorted(r["state_after"]))
         a, b, c = r["args"], r["state_before"], r["state_after"]
         self.assertEqual((a["z_rad_s"], a["target_deg"], a["timeout_s"], a["source"]), (0.5, 360, 10, "dropoff"))
+        self.assertIs(a["recheck"], False, "the drop-off tie was just made: nothing left to confirm")
         self.assertTrue(isinstance(a["shift_id"], str) and a["shift_id"])
         self.assertEqual((b["grid_frames"], b["cells"], b["lidar_n"]), (0, 0, 0))
         self.assertEqual(b["range_obstacle"], RANGES)
@@ -409,7 +413,28 @@ class Spin(Harness):
         self.assertEqual(cal[0]["args"]["p"], [300, 900])
         r = self.rows("dog.scout")[0]
         self.assertEqual(r["args"]["source"], "tap")
+        self.assertIs(r["args"]["recheck"], False, "a tap this session confirms the tie")
         self.assertEqual(r["state_before"]["map"]["p"], [300, 900])
+        self.assertNotIn("unconfirmed tie", self.err.getvalue())
+
+    def test_a_tie_loaded_from_disk_and_not_confirmed_is_named_on_the_row_and_warned(self):
+        """A dog_cal.json from another place or power-on (loaded, recheck, nobody has dragged the dog since) stays the
+        tie, as before: no drop-off tie is written. The press says so: args.recheck true and one stderr WARN, never a
+        silent "tap" that reads as a person's tie made here."""
+        session.CAL_FILE.write_text(json.dumps({**nav.calibration([0.0, 0.0, 0.0], 0.0, [300, 900], 0.0),
+                                                "at": "2026-09-25T20:00:00", "source": "tap"}))
+        body = FakeBody(yaw_rate=6.0, frames=self.frames)
+        s = self.session(body)
+        self.assertTrue(s.recheck, "loaded from disk, not confirmed")
+        s.scout(z=0.5, target_deg=360, timeout_s=10)
+        st = self.wait(s)
+        self.assertIsNone(st["error"], st)
+        self.assertEqual(self.rows("dog.calibrate"), [], "the loaded tie is kept (re-tie or not is Johnny's call)")
+        r = self.rows("dog.scout")[0]
+        self.assertTrue(r["ok"], r["response_or_error"])
+        self.assertIs(r["args"]["recheck"], True, "the row names the unconfirmed tie")
+        self.assertEqual(r["state_before"]["map"]["p"], [300, 900])
+        self.assertEqual(self.err.getvalue().count("[wtdd:dog] WARN scout under an unconfirmed tie"), 1, self.err.getvalue()[-600:])
 
     def test_refused_while_following_or_recording_nothing_moves(self):
         body = FakeBody(yaw_rate=6.0, frames=self.frames)
