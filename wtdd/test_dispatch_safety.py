@@ -36,6 +36,11 @@ Fix round 4:
                  dispatch's own ask is "still waiting for a yes on the last ask about camera <id>" (no dog's eye is
                  involved, and the ask is not withdrawn); a who-dis or a decide is "the dog's own question is open".
                  The key and the kind stay on the row.
+Fix round 5 (the independent review's probes):
+  Armed          nothing dispatches while the intruder watch is off (intruder.on absent, the file the camera hook reads):
+                 a yes that comes after the watch was switched off (probe 1), and a tool call with a person boxed
+                 (probe 2), are each one FAILED dispatch.decided "not armed", the failed page and one text-only
+                 "couldn't dispatch", with no plan.route, no model, no ask and no follow. A dry run is not refused.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -417,6 +422,46 @@ class QuestionWords(td.RunCase):
             self.pending.write_text('{"kind": "who')
             self.refused("lap1", trigger="cam:lap1:1790009070", file=str(td.FRAME))
             self.assertEqual([(p["text"], p["file"]) for p in self.posts], [("couldn't dispatch: a question is open in the thread", None)])
+
+
+class Armed(Fresh):
+    def assert_not_armed(self, app: str):
+        dec = td.rows_since(0, "dispatch.decided")
+        self.assertEqual([(r["ok"], r["app"]) for r in dec], [(False, app)], "exactly one FAILED dispatch.decided")
+        self.assertIn("not armed", dec[0]["response_or_error"])
+        self.assertEqual(td.rows_since(0, "plan.route"), [], "refused before any plan")
+        pg = self.page()
+        self.assertEqual(pg["phase"], "failed")
+        self.assertIn("not armed", pg["error"])
+        self.assertEqual(len(self.posts), 1, self.posts)
+        self.assertTrue(self.posts[0]["text"].startswith("couldn't dispatch: not armed"), self.posts)
+        self.assertIsNone(self.posts[0]["file"], "text only: the watch is off, no photo of the person goes out")
+        self.assertEqual((self.s.follows, self.pending.exists()), ([], False), "no follow, no ask")
+
+    def test_a_yes_after_the_watch_was_switched_off_is_refused(self):
+        trig = "cam:lap1:1790010000"
+        verdict(trig)
+        self.armed.unlink()                       # someone switched the intruder watch off after the ask (review 5, probe 1)
+        with self.assertRaises(RuntimeError) as cm:
+            self.call(cam="lap1", approved=True, trigger=trig, by=MODEL_SAYS)
+        self.assertIn("not armed", str(cm.exception))
+        self.assert_not_armed("imessage")
+
+    def test_a_tool_call_with_a_person_seen_while_disarmed_asks_nobody(self):
+        detect("lap1", {"person": 1})             # the camera boxed a person a moment ago; the watch is off (probe 2)
+        self.armed.unlink()
+        jev = td.mock.Mock(side_effect=AssertionError("no model is asked while the watch is off"))
+        with self.env(JEV_API_KEY="k"), td.mock.patch.object(td.decide.requests, "post", jev):
+            with self.assertRaises(RuntimeError) as cm:
+                self.call(cam="lap1", trigger="cam:lap1:1790010100", file=str(td.FRAME))
+        self.assertIn("not armed", str(cm.exception))
+        self.assert_not_armed(td.decide.JEV_APP)
+
+    def test_a_dry_run_while_disarmed_still_plans_and_decides(self):
+        self.armed.unlink()
+        out = self.call(cam="lap1", dry=True, trigger="cam:lap1:1790010200")
+        self.assertEqual(out["phase"], "decided")
+        self.assertEqual((self.posts, self.s.follows), ([], []))
 
 
 if __name__ == "__main__":
