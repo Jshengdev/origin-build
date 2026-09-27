@@ -239,22 +239,27 @@ def read() -> dict:
 def approval(cam: str, trigger: str | None, by: str | None = None) -> str | None:
     """The person's yes behind approved=true, read from the thread's own row, never taken from the caller: the newest ok
     intruder.verdict asking this trigger (the listener's, on "send the dog? yes / no") must say approved, be younger
-    than QUESTION_S, and the trigger must name this camera. Returns that row's sender (the decided row's `by`).
+    than QUESTION_S, and the trigger must name this camera. A yes is spent by the first ok dispatch.decided it made (app
+    imessage, this trigger): one yes, one walk. Returns that row's sender (the decided row's `by`).
     Otherwise one FAILED dispatch.decided row (app imessage) and ValueError: nothing has planned or moved.
     wtdd/tools/dispatch.py calls it for every approved run: the listener's, POST /tools/dispatch, the model loop, the CLI."""
-    t0, now, why = time.perf_counter(), time.time(), "no approved intruder.verdict row asks it"
-    for r in reversed(ledger.rows()):
+    no = f"approved without a person's yes on the thread for {trigger}: "
+    t0, now, why, spent = time.perf_counter(), time.time(), no + "no approved intruder.verdict row asks it", None
+    for r in reversed(ledger.rows()):   # newest first: a decision this yes made comes before the yes itself
         a, sa = r.get("args") or {}, r.get("state_after") or {}
-        if trigger and r.get("tool") == "intruder.verdict" and r.get("ok") and a.get("asked") == trigger and sa.get("verdict") == "approved":
+        if trigger and r.get("tool") == "dispatch.decided" and r.get("ok") and r.get("app") == "imessage" and a.get("trigger") == trigger:
+            spent = spent or r.get("ts")
+        elif trigger and r.get("tool") == "intruder.verdict" and r.get("ok") and a.get("asked") == trigger and sa.get("verdict") == "approved":
             age = now - datetime.fromisoformat(r["ts"]).timestamp()
-            if age > QUESTION_S:
-                why = f"the yes is {age:.0f} s old (over {QUESTION_S} s)"
+            if spent:
+                why = f"this yes already sent the dog (its walk was decided at {spent}): one yes, one walk"
+            elif age > QUESTION_S:
+                why = no + f"the yes is {age:.0f} s old (over {QUESTION_S} s)"
             elif str(trigger).split(":")[1:2] != [cam]:
-                why = f"the question was about another camera than {cam}"
+                why = no + f"the question was about another camera than {cam}"
             else:
                 return a.get("from")
             break
-    why = f"approved without a person's yes on the thread for {trigger}: {why}"
     ledger.append({"step": "dispatch.decided", "agent": "dispatch", "tool": "dispatch.decided", "app": "imessage",
                    "args": {"cam": cam, "trigger": trigger, "shift_id": decide.shift_id(), "approved": True, "by": by},
                    "state_before": None, "state_after": None, "ok": False, "response_or_error": f"ValueError: {why}",
