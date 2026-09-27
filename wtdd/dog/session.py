@@ -609,13 +609,14 @@ class DogSession:
                 self._fp = ({"ok": False, "why": f"FAILED floor plan press: {type(e).__name__}: {str(e)[:120]}", "threshold": threshold,
                              "frames": g.frames if g is not None else 0, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}, source, None)
             raise
-        return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution")}
+        return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution", "top", "seg_top")}
 
     def floorplan_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/floorplan: the newest floor plan in map pixels (floorplan.to_px) through a file grid's saved
         calibration, else the session's: {ok, threshold, frames, ms, ts, source, cell_px, classes, segments_px,
-        class_px, why?}. A read: it never runs one and writes no row; nothing yet, not calibrated, no wall, a FAILED
-        tick and a result at another threshold each say why."""
+        class_px, segments_top_m?, class_top_m?, why?} (the heights, S13, only from a grid with a height profile). A
+        read: it never runs one and writes no row; nothing yet, not calibrated, no wall, a FAILED tick and a result at
+        another threshold each say why."""
         empty = {"segments_px": [], "classes": {}, "class_px": {}}
         if self._fp is None:
             return {**empty, "source": None, "why": "no floor plan yet: switch the LiDAR on and walk, or press floor plan (POST /dog/floorplan)"}
