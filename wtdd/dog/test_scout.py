@@ -203,7 +203,6 @@ class Harness(unittest.TestCase):
     def session(self, body: FakeBody) -> session.DogSession:
         s = session.DogSession()
         s.body = body
-        s.recheck = False   # main's state() reads it before any calibrate (a fresh API has no dog_cal.json); not this item's bug to patch
         self.s = s
         return s
 

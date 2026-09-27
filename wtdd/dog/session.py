@@ -91,6 +91,7 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
             self.cal = json.loads(CAL_FILE.read_text())
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
