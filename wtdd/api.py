@@ -28,6 +28,9 @@
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
+  POST /dog/scout {z?, target_deg?, timeout_s?}   the scout: one 360 in place while the LiDAR fills the grid (wtdd/dog/scout.py);
+                                  {ok, scout}; one dog.scout row per press (a refusal is a 500 and a FAILED row); GET /dog/state
+                                  .scout is its live status; POST /dog/stop cancels it
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -228,6 +231,15 @@ class H(BaseHTTPRequestHandler):
                 out = s.grid_clear(str(body.get("why") or "cleared from the page")) if body.get("clear") else s.grid_save()
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 14 · scout-spin
+        if u.path == "/dog/scout":   # {z?, target_deg?, timeout_s?}: the spin runs as a task; the refusal's FAILED row is already written
+            from .dog.session import DogSession
+            body = self._body()
+            try:
+                out = DogSession.get().scout(float(body.get("z", 0.5)), float(body.get("target_deg", 360)), float(body.get("timeout_s", 30)))
+                return self._json(200, {"ok": True, "scout": out})
+            except Exception as e:  # noqa: BLE001  (a refusal or a connect failure is reported, never hidden)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})

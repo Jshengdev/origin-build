@@ -33,6 +33,12 @@ un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
 are rows, reads are not.
+
+scout(z, target_deg, timeout_s) (item 14, wtdd/dog/scout.py) is a task like the follower: it turns the dog in place by
+holding (0, 0, z) for the same drive loop until the IMU yaw has integrated past target_deg, halts once, and writes one
+dog.scout row; with nothing tied yet it first ties the pose to the canvas centre facing up (a dog.calibrate row with
+args.source "dropoff"; the page's drag and "dog is here..." are "tap"). state().scout is its live status; stop()
+cancels it. It refuses while following or recording, and follow() refuses while it spins: one task owns the velocity.
 """
 from __future__ import annotations
 import asyncio
@@ -43,8 +49,9 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from ..config import maybe
 from ..ledger import log, step
-from . import lidar, nav, occupancy
+from . import lidar, nav, occupancy, scout
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -95,6 +102,9 @@ class DogSession:
         self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
         self._grid_lock = threading.Lock()           # frames arrive on the driver's dispatcher, reads on HTTP threads
         self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
+        self.scout_state: dict[str, Any] = {"active": False, "target_deg": None, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
+                                            "seconds": 0.0, "ranges": None, "error": None}   # the scout's live status (GET /dog/state .scout)
+        self._scouter: Any = None                    # the running scout (a future on the session loop); stop() cancels it
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -142,7 +152,7 @@ class DogSession:
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
-                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
+                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None, "scout": dict(self.scout_state)}
 
     # ---- recording a route by driving (the trace of where it thinks it is becomes the map's path)
     def record(self, on: bool) -> dict[str, Any]:
@@ -315,11 +325,12 @@ class DogSession:
         px, py, h = nav.to_map(self.cal, st["position"], st["rpy"][2])
         return {"p": [round(px), round(py)], "heading_deg": round(math.degrees(h), 1)}
 
-    def calibrate(self, p, heading: float) -> dict[str, Any]:
-        """Ties the odometry pose right now to map point p facing `heading` (radians). One dog.calibrate row."""
+    def calibrate(self, p, heading: float, source: str = "tap") -> dict[str, Any]:
+        """Ties the odometry pose right now to map point p facing `heading` (radians). One dog.calibrate row. source: "tap"
+        is a person's tie (the drag, "dog is here..."), "dropoff" the scout's convention (nose at drop-off is up)."""
         st = self.run(self.with_body(lambda b: b.fresh_state(required=True)))
-        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1)}, self.map_pose(st)) as r:
-            self.cal = {**nav.calibration(st["position"], st["rpy"][2], p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1), "source": source}, self.map_pose(st)) as r:
+            self.cal = {**nav.calibration(st["position"], st["rpy"][2], p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "source": source}
             self.recheck = False
             CAL_FILE.write_text(json.dumps(self.cal))
             r["state_after"] = {"cal": self.cal, "map": self.map_pose(st)}
@@ -330,6 +341,8 @@ class DogSession:
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
         if self.cal is None:
             raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
+        if self.scout_state["active"]:   # 14: the scout holds the velocity; two tasks must not fight over _set_vel
+            raise RuntimeError("scouting: POST /dog/stop first")
         if self._follower and not self._follower.done():
             raise RuntimeError("already following; POST /dog/stop first")
         if len(path) < 2:
@@ -403,6 +416,123 @@ class DogSession:
             fs["error"] = f"{type(e).__name__}: {e}"
             log("dog", "follow FAILED", err=fs["error"][:120])
 
+    # ---- 14 · scout-spin: one 360 in place at drop-off while the LiDAR fills the grid (wtdd/dog/scout.py)
+    def scout(self, z: float = 0.5, target_deg: float = 360, timeout_s: float = 30) -> dict[str, Any]:
+        """POST /dog/scout. Refused while following, recording or scouting, or with |z| over DRIVE_MAX z (never clamped):
+        one FAILED dog.scout row, raised, nothing moved so nothing halted; a connect failure is the same FAILED row. Else
+        it ties the pose to the canvas centre facing up when nothing is tied yet (dog.calibrate, source "dropoff"; done
+        here, not in the task: calibrate runs on the loop through run()) and starts the spin. Returns state().scout."""
+        args = {"z_rad_s": z, "target_deg": target_deg, "timeout_s": timeout_s, "shift_id": maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"),
+                "source": self.cal.get("source", "tap") if self.cal else None}   # None only on a press refused before any tie
+        mine = False
+        try:
+            if self._follower and not self._follower.done():
+                raise RuntimeError("scout refused: following the path; POST /dog/stop first")
+            if self.rec:
+                raise RuntimeError("scout refused: recording a route; stop the recording first")
+            if self.scout_state["active"]:
+                raise RuntimeError("scout refused: already scouting; POST /dog/stop first")
+            if abs(z) > DRIVE_MAX["z"]:
+                raise ValueError(f"scout refused: |z| {abs(z)} rad/s is over DRIVE_MAX z {DRIVE_MAX['z']} (never clamped)")
+            self.scout_state, mine = {"active": True, "target_deg": target_deg, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
+                                      "seconds": 0.0, "ranges": None, "error": None}, True   # claimed before the connect: a double click is refused above
+            self.run(self._ensure())
+            if self.cal is None:   # nose at drop-off is up: a stated convention, not a measurement (no map to orient against yet)
+                self.calibrate(scout.CANVAS_CENTRE, math.radians(scout.DROPOFF_HEADING_DEG), source="dropoff")
+        except Exception as e:
+            if mine:
+                self.scout_state.update(active=False, error=f"{type(e).__name__}: {e}")
+            with step("dog", "dog.scout", "map", args):   # the refusal is this press's one row, then the caller's error
+                raise e
+        args["source"] = self.cal.get("source", "tap")   # a dog_cal.json from before item 14 has no source: a person's tie
+        self._scouter = asyncio.run_coroutine_threadsafe(self._scout(args, z, target_deg, timeout_s), self.loop)
+        log("dog", "scout started", z=z, target_deg=target_deg, timeout_s=timeout_s, source=args["source"])
+        return dict(self.scout_state)
+
+    async def _scout(self, args: dict[str, Any], z: float, target_deg: float, timeout_s: float) -> None:
+        """The spin: snapshot, LiDAR on, (0, 0, z) held every scout.TICK_S until the integrated IMU yaw passes target_deg,
+        one halt on every path, the yaw read back after it, then one dog.scout row whose state_after is complete on a
+        FAILED row too. FAILED: a refused LiDAR switch, no turn after NO_TURN_S, timeout, a stop, 0 frames, cb_errors
+        rising, 0 band cells. Not closed is ok with closed false and a WARN; z 0 is the standing control."""
+        b, ss = self.body, self.scout_state
+
+        def cells() -> int:
+            with self._grid_lock:
+                return int((self.grid.counts > 0).sum()) if self.grid is not None else 0
+
+        try:
+            with step("dog", "dog.scout", "map", args) as r:
+                before: dict[str, Any] = dict.fromkeys(scout.BEFORE)
+                r["state_before"], err = before, None
+                turned, prev, n0, e0, c0, avoid, t0 = 0.0, None, 0, 0, 0, bool(b._avoid), time.monotonic()
+                try:
+                    st, lp = await b.fresh_state(required=True), b.lidar_points()
+                    prev, n0, e0, c0 = st["rpy"][2], lp["n"], lp["cb_errors"], cells()
+                    before.update(map=self.map_pose(st), heading0_deg=round(math.degrees(prev), 1), grid_frames=g.frames if (g := self.grid) is not None else 0,
+                                  cells=c0, lidar_n=n0, range_obstacle=st.get("range_obstacle"),
+                                  localize="absent", utlidar="absent")   # 05b and 05a are not on 01: when they merge, read self.loc / 05a's utpose through getattr
+                    await b.lidar_on(self._on_frame)   # a refused disable_traffic_saving raises here (wtdd/dog/lidar.py subscribe)
+                    t0 = tick = time.monotonic()
+                    while True:
+                        if z:
+                            self._set_vel(0.0, 0.0, z)   # the Q/E keys' path: the drive loop publishes it; DRIVE_HOLD_S is the dead-man
+                        await asyncio.sleep(scout.TICK_S)
+                        st, el = b.state(), time.monotonic() - t0
+                        turned, prev = scout.integrate_yaw(prev, st["rpy"][2], turned), st["rpy"][2]
+                        deg = math.degrees(turned)
+                        ss.update(turned_deg=round(deg, 1), frames=b.lidar_points()["n"] - n0, cells_added=cells() - c0, seconds=round(el, 1),
+                                  ranges=st.get("range_obstacle"))
+                        if time.monotonic() - tick >= 1.0:
+                            tick += 1.0
+                            log("dog", f"scout {deg:.0f}° of {target_deg:g}", frames=ss["frames"], cells=f"+{ss['cells_added']}", s=ss["seconds"], ranges=ss["ranges"])
+                        if z and abs(deg) >= target_deg:
+                            break
+                        if z and el >= scout.NO_TURN_S and abs(deg) < scout.NO_TURN_DEG:
+                            raise RuntimeError(f"did not turn: {deg:.1f}° in {el:.1f} s of z {z} rad/s with avoid {'on' if avoid else 'off'}: "
+                                               "the velocity path did not move the body")
+                        if el >= timeout_s:
+                            if z:
+                                raise TimeoutError(f"scout timeout after {timeout_s:g} s: turned {deg:.1f}° of {target_deg:g}")
+                            break   # z 0: the standing control ends here
+                except asyncio.CancelledError:   # POST /dog/stop; ledger.step records Exception, and CancelledError is not one
+                    err = RuntimeError("stopped (POST /dog/stop)")
+                except Exception as e:  # noqa: BLE001  (raised below as the row's error, after the halt: never swallowed)
+                    err = e
+                self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
+                try:
+                    await self._halt()   # exactly one halt on every path out of the spin (a zero through avoidance first when it is on)
+                except Exception as e:  # noqa: BLE001  (a failed halt outranks the spin's own error: it becomes the row's error)
+                    err = RuntimeError(f"halt FAILED: {type(e).__name__}: {e}" + (f" (after {type(err).__name__}: {err})" if err else ""))
+                st, lp, el = b.state() or {}, b.lidar_points(), time.monotonic() - t0
+                yaw_end = (st.get("rpy") or [None] * 3)[2]
+                if prev is not None and yaw_end is not None:
+                    turned = scout.integrate_yaw(prev, yaw_end, turned)   # where the body stopped, not where the loop let go
+                deg, frames, added, cbe = math.degrees(turned), lp["n"] - n0, cells() - c0, lp["cb_errors"] - e0
+                if err is None:   # cb_errors before cells: a grid that refused every frame is not a z-band problem
+                    err = (RuntimeError(f"0 frames in {el:.1f} s with the stream on") if frames == 0 else
+                           RuntimeError(f"cb_errors rose by {cbe} during the spin: the grid refused frames (frame_id, resolution or MAX_SIDE; GET /dog/lidar)") if cbe > 0 else
+                           RuntimeError(f"0 cells added in z band {lidar.Z_MIN}..{lidar.Z_MAX} m over {frames} frames: tune lidar.Z_MIN/Z_MAX") if added == 0 else None)
+                shut = bool(z) and scout.closed(deg, target_deg)
+                why = (f"{type(err).__name__}: {err}" if err else None if shut else f"control: z 0, stood {el:.1f} s" if not z else
+                       f"not closed: turned {deg:.1f}° of {target_deg:g} (tolerance {scout.CLOSE_TOL_DEG:g}°)")
+                after = {"seconds": round(el, 1), "frames": frames, "cells_added": added, "cells_total": cells(), "turned_deg": round(deg, 1),
+                         "heading_end_deg": round(math.degrees(yaw_end), 1) if yaw_end is not None else None, "closed": shut, "avoid": avoid,
+                         "cb_errors_during": cbe, "range_obstacle": st.get("range_obstacle"), "velocity": st.get("velocity"), "yaw_speed": st.get("yaw_speed"),
+                         "localize": "absent", "utlidar_turned_deg": "absent", "heading0": before["heading0_deg"], "closed_deg": round(deg, 1),
+                         "velocity_path": "avoid" if avoid else "sport", "why": why}
+                ss.update(turned_deg=after["turned_deg"], frames=frames, cells_added=added, seconds=after["seconds"], ranges=after["range_obstacle"])
+                r.update(scout.row(args, before, after))
+                if err is not None:
+                    raise err
+                if z and not shut:
+                    log("dog", f"WARN scout {why}")
+                log("dog", "scouted", turned_deg=after["turned_deg"], closed=shut, frames=frames, cells=f"+{added}", s=after["seconds"], ranges=after["range_obstacle"])
+        except Exception as e:  # noqa: BLE001  (the row above has it; the state carries it for the page)
+            ss["error"] = f"{type(e).__name__}: {e}"
+            log("dog", "scout FAILED", err=ss["error"][:160])
+        finally:
+            ss["active"] = False
+
     def close(self) -> None:
         if self.body is not None:
             self.run(self.body.close())
@@ -431,6 +561,8 @@ class DogSession:
         StopMove alone), then StopMove, then the state read back."""
         if self._follower and not self._follower.done():
             self._follower.cancel()
+        if self._scouter and not self._scouter.done():   # 14: the scout halts itself and its row says stopped
+            self._scouter.cancel()
         self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
         out: dict[str, Any] = {"vel": [0.0, 0.0, 0.0]}
         if self.body is not None:
