@@ -63,6 +63,22 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 24 · vitals-strip · start */
+  .vitals { display: grid; gap: var(--gap-in); margin: 0 0 var(--gap-group); font-family: var(--mono); font-size: 10.5px; }
+  .vrow { display: flex; flex-wrap: wrap; gap: var(--gap-in); align-items: center; }
+  .vchip { padding: 2px 8px; border-radius: var(--r-pill); background: #fff; box-shadow: 0 0 0 1px rgba(38,35,35,.15); white-space: nowrap; }
+  .vchip.grey { background: transparent; color: rgba(38,35,35,.5); box-shadow: 0 0 0 1px rgba(38,35,35,.1); }
+  .vchip.warn { background: #fff3c4; box-shadow: 0 0 0 1px var(--warn, #d9a400); }
+  .vchip.bad { background: var(--bad, #b2382e); color: #fff; box-shadow: none; }
+  .vtile { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 8px; background: #fff; box-shadow: 0 0 0 1px var(--card-edge, rgba(38,35,35,.08)); }
+  .vbar { position: relative; width: 160px; height: 10px; overflow: hidden; background: rgba(38,35,35,.05); }
+  .vbar .v0 { position: absolute; left: 80px; top: -2px; bottom: -2px; width: 1px; background: var(--ink, #262323); }
+  .vbar .vc { position: absolute; top: 0; height: 8px; box-shadow: inset 0 0 0 1.5px var(--ink, #262323); }   /* commanded: outline */
+  .vbar .vm { position: absolute; top: 3px; height: 4px; background: #e8590c; }                                 /* measured: fill */
+  .vfault { padding: 4px 8px; color: var(--bad, #b2382e); box-shadow: inset 3px 0 0 var(--bad, #b2382e), 0 0 0 1px var(--bad, #b2382e); background: #fff; }
+  .vdraw { display: grid; gap: var(--gap-in); } .vbars { display: grid; gap: 3px; } .vitals.stale .vdraw { opacity: .4; }
+  .stat.fault { box-shadow: 0 0 0 2px var(--bad, #b2382e); }
+  /* 24 · vitals-strip · end */
 </style>
 </head>
 <body>
@@ -203,7 +219,7 @@ function App() {
         const hueOk = status && !status.error && Array.isArray(status.hue), stripOk = status && status.strip && !status.strip.error;
         const chatOn = chat?.alive, watchOn = watch && watch.age_ms != null && watch.age_ms < 3000;
         return html`
-          <div class=${"stat " + (dogOn ? (dog.recheck ? "warn" : "on") : dogStale ? "warn" : "")}><span class="sq"></span><b>dog</b><span>${dogOn ? `on · ${dog.recheck ? "confirm its location (drag it)" : dog.calibrated ? "located" : "not located"}${dog.avoid ? " · avoid on" : ""}` : dogStale ? `stale · ${Math.round(age / 1000)} s` : "off"}</span></div>
+          <div class=${"stat " + (dogOn ? (dog.recheck ? "warn" : "on") : dogStale ? "warn" : "") + (dog?.faults?.length ? " fault" : "")}><span class="sq"></span><b>dog</b><span>${dogOn ? `on · ${dog.recheck ? "confirm its location (drag it)" : dog.calibrated ? "located" : "not located"}${dog.avoid ? " · avoid on" : ""}` : dogStale ? `stale · ${Math.round(age / 1000)} s` : "off"}</span></div>
           <div class=${"stat " + (hueOk && stripOk ? "on" : hueOk || stripOk ? "warn" : "")}><span class="sq"></span><b>lights</b><span>${status ? (hueOk && stripOk ? "online" : hueOk ? "strip offline" : stripOk ? "hue offline" : "offline") : "reading…"}</span></div>
           <div class=${"stat " + (chatOn ? "on" : "")}><span class="sq"></span><b>group chat</b><span>${chat ? (chatOn ? `${chat.group} · ${chat.pending ? "waiting for who dis" : chat.armed ? "armed" : "listening"}` : "listener down") : "…"}</span></div>
           <div class=${"stat " + (watchOn ? "on" : "")}><span class="sq"></span><b>detector</b><span>${watchOn ? `live · ${watch.ms} ms` : "off"}${watch?.intruder ? " · intruder watch armed" : ""}</span></div>`;
@@ -279,6 +295,7 @@ function App() {
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
           <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${dog ? (dog.connected ? `connected · mode ${dog.state?.mode ?? "?"} · pos ${(dog.state?.position || []).slice(0, 2).map(v => (+v).toFixed(2)).join(", ")} · ${dog.moving ? "moving " + dog.vel.map(v => (+v).toFixed(1)).join("/") : "still"}` : "not connected · the first command connects (about 1 s)") : "…"}</div>
+          <${Vitals} dog=${dog}/>
           ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<span class="mono">hold a key or a button · 0.3 m/s · 0.5 rad/s</span></div>
           <div class="row tight">${key("a", "A ◀")}${key("s", "S ▼")}${key("d", "D ▶")}<button class="small" onClick=${() => post("/dog/stop")}>stop</button></div>`}
           <div class="row tight">
@@ -365,6 +382,62 @@ function App() {
     </div>
   </div>`;
 }
+// 24 · vitals-strip · start
+// Vitals: the body's own numbers from GET /dog/state (App's existing 1 s poll, passed in as `dog`; no new poll). It draws
+// only served numbers: values are formatted (toFixed, ms to s), radians become degrees only inside SVG transforms, bar
+// lengths are a served value times a fixed px scale. Failures are named, never blank: a stream past the 2 s rule is a red
+// "<stream> stale · N s" chip (stale and age_ms are served) and dims the drawing, a missing key is an amber "<key> absent",
+// no dog is a grey "no state message · not connected", a typed WTDD_STATE_FIXTURE is a grey chip that says so.
+// UNVERIFIED on the dog, and said on the strip: the temperature's unit, error_code's meaning, the frame of
+// state.velocity, the fault path, the sign of roll on the horizon, whether foot_force / range_obstacle ever leave zero.
+function Vitals({ dog }) {
+  if (!dog) return html`<div class="vitals"><div class="vrow"><span class="vchip grey">…</span></div></div>`;
+  const fx = dog.fixture && html`<span class="vchip grey">fixture · ${dog.fixture.split("/").pop()} · typed, not the dog</span>`;
+  if (!dog.connected) return html`<div class="vitals"><div class="vrow">${fx}<span class="vchip grey">no state message · not connected</span></div></div>`;
+  const st = dog.state, S = dog.streams || {}, f = (v, n) => (+v).toFixed(n), R = 180 / Math.PI;
+  const chip = name => { const s = S[name];
+    if (!s) return html`<span class="vchip warn">${name} health absent</span>`;
+    if (s.stale) return html`<span class="vchip bad">${name} stale · ${(s.age_ms / 1000).toFixed(1)} s</span>`;
+    if (!s.on) return html`<span class="vchip grey">${name} off</span>`;
+    if (!s.n) return html`<span class="vchip warn">${name} · no message yet</span>`;
+    return html`<span class="vchip">${name} · ${s.age_ms} ms${name === "state" && st ? `${st.hz == null ? " · rate after 2 msgs" : ` · ${st.hz} Hz`}${st.skew_ms == null ? "" : ` · skew ${st.skew_ms} ms`}` : ""}</span>`; };
+  const zero = a => Array.isArray(a) && a.length > 0 && a.every(v => v === 0);   // body.py's zero rule, drawn grey
+  const bar = (label, cmd, meas, unit) => { const seg = (v, cls) => html`<i class=${cls} style=${{ left: 80 + Math.min(0, v) * 100 + "px", width: Math.abs(v) * 100 + "px" }}></i>`;   // 100 px per unit, track ±0.8 (MAX_SPEED)
+    return html`<div class="vrow"><span style=${{ width: 26 }}>${label}</span><span class="vbar"><i class="v0"></i>${seg(cmd, "vc")}${meas != null && seg(meas, "vm")}</span><span>cmd ${f(cmd, 2)} · meas ${meas == null ? "absent" : f(meas, 2)} ${unit}</span></div>`; };
+  const faults = dog.faults == null ? html`<span class="vchip warn">faults absent</span>`
+    : dog.faults.length ? dog.faults.map(F => html`<div class="vfault" key=${F.id}>${F.id} · ${F.text} · ${F.age_s} s</div>`) : html`<span class="vchip grey">no fault pushed</span>`;
+  const absent = ["rpy", "velocity", "yaw_speed", "body_height", "range_obstacle", "gyroscope", "accelerometer", "imu_temp", "error_code", "foot_force", "skew_ms"].filter(k => st && st[k] == null);
+  const ro = st?.range_obstacle, ff = st?.foot_force;
+  return html`<div class=${"vitals" + (S.state?.stale ? " stale" : "")}>
+    <div class="vrow">${fx}${chip("state")}${chip("video")}${chip("lidar")}</div>
+    <div class="vrow">${faults}<span style=${{ opacity: .6 }}>fault path UNVERIFIED on this dog</span></div>
+    ${st && html`<div class="vdraw">
+      <div class="vrow" style=${{ alignItems: "stretch" }}>
+        ${st.rpy && html`<div class="vtile"><svg width="96" height="64" viewBox="-48 -32 96 64">
+          <g transform=${`translate(0 ${-st.rpy[1] * 64}) rotate(${-st.rpy[0] * R})`}><rect x="-90" y="0" width="180" height="90" fill="rgba(38,35,35,.14)"/><line x1="-90" y1="0" x2="90" y2="0" stroke="#262323" stroke-width="1.5"/></g>
+          <path d="M-22 0h14M8 0h14M0 -3v6" stroke="#e8590c" stroke-width="2.5" fill="none"/><rect x="-47.5" y="-31.5" width="95" height="63" fill="none" stroke="rgba(38,35,35,.25)"/></svg>
+          <span>roll ${f(st.rpy[0], 3)} rad</span><span>pitch ${f(st.rpy[1], 3)} rad</span></div>`}
+        <div class="vtile">${dog.map ? html`<svg width="64" height="64" viewBox="-32 -32 64 64"><circle r="28" fill="none" stroke="rgba(38,35,35,.25)"/><line x1="0" y1="0" x2="26" y2="0" stroke="#e8590c" stroke-width="3" stroke-linecap="round" transform=${`rotate(${dog.map.heading_deg})`}/><circle r="3" fill="#262323"/></svg><span>heading ${dog.map.heading_deg}°</span>` : html`<span>heading · not calibrated</span>`}</div>
+        ${st.body_height != null && html`<div class="vtile"><svg width="14" height="64"><rect x="2" y="0" width="10" height="64" fill="rgba(38,35,35,.06)"/><rect x="2" y=${64 - st.body_height * 128} width="10" height=${st.body_height * 128} fill="#262323"/></svg><span>height ${f(st.body_height, 2)} m</span></div>`}
+        ${st.imu_temp != null && html`<div class="vtile" style=${{ justifyContent: "center" }}><span style=${{ fontSize: 20, fontFamily: "Onest, ui-sans-serif, system-ui, sans-serif" }}>imu ${st.imu_temp}</span><span>(unit UNVERIFIED)</span></div>`}
+        ${st.error_code != null && html`<div class="vtile" style=${{ justifyContent: "center" }}><span class="vchip" title="meaning UNVERIFIED; never translated with the fault table">error_code ${st.error_code}</span><span>meaning UNVERIFIED</span></div>`}
+      </div>
+      <div class="vbars">
+        ${bar("x", dog.vel[0], st.velocity?.[0], "m/s")}${bar("y", dog.vel[1], st.velocity?.[1], "m/s")}${bar("yaw", dog.vel[2], st.yaw_speed, "rad/s")}
+        <div class="mono">outline cmd = vel commanded · fill = measured: state.velocity / yaw_speed · frame UNVERIFIED</div>
+      </div>
+      <div class="vrow">
+        ${zero(ro) ? html`<span class="vchip grey">range_obstacle ${ro.join(" ")} · all zeros on this dog so far</span>`
+          : ro && html`<div class="vtile"><svg width="44" height="44" viewBox="-22 -22 44 44"><circle r="3" fill="#262323"/>${ro.map((v, i) => html`<path key=${i} d="M 11 -11 A 15.6 15.6 0 0 1 11 11" transform=${`rotate(${i * 90 - 90})`} stroke=${v ? "#e8590c" : "rgba(38,35,35,.2)"} stroke-width="3" fill="none"/>`)}</svg><span>range_obstacle ${ro.join(" ")} · order UNVERIFIED</span></div>`}
+        ${zero(ff) ? html`<span class="vchip grey">foot_force · 0 · all zeros on this dog so far</span>`
+          : ff && html`<div class="vtile"><svg width="44" height="44">${ff.map((v, i) => html`<rect key=${i} x=${4 + (i % 2) * 22} y=${4 + (i >> 1) * 22} width="14" height="14" fill=${v ? "#262323" : "none"} stroke="#262323"/>`)}</svg><span>foot_force ${ff.join(" ")} · order UNVERIFIED</span></div>`}
+      </div>
+      ${st.gyroscope && st.accelerometer && html`<div>gyro ${st.gyroscope.map(v => f(v, 4)).join(" ")} rad/s · accel ${st.accelerometer.map(v => f(v, 2)).join(" ")} m/s²</div>`}
+      ${absent.length > 0 && html`<div class="vrow">${absent.map(k => html`<span class="vchip warn" key=${k}>${k} absent</span>`)}</div>`}
+    </div>`}
+  </div>`;
+}
+// 24 · vitals-strip · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
