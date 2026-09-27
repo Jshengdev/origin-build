@@ -20,6 +20,7 @@ def run(look="level", seconds=5, trigger=None, ask=True):
     import time
     from ..commands import look as _look
     from ..config import ROOT
+    from ..dog import led
     from ..ledger import step
     from . import chat_post, light_alarm
     from .dog_say import boxed
@@ -34,6 +35,7 @@ def run(look="level", seconds=5, trigger=None, ask=True):
             det = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
         if ask:   # the question with the photo; the chat's answer decides (wtdd/chat/listen.py pending verdict)
             post = chat_post.run(text=ASK, file=file, trigger=key)
+            led.hook("asking")   # 25 · red while the question is open
             (ROOT / "pending.json").write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": file, "seconds": seconds,
                                                            "trigger": key, "classes": (det or {}).get("classes")}))
             out = {"file": file, "pitch_deg": shot.get("pitch_deg"), "detector": det, "post": post, "text": ASK, "pending": True}

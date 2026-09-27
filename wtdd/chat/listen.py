@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 from .. import commands as cmds
 from .. import config
+from ..dog import led
 from ..ledger import append, log, rows as ledger_rows
 from . import db, memory
 from .housemates import HOUSEMATES, name as hname
@@ -223,6 +224,7 @@ class Listener:
         log("chat", "VERDICT", by=hname(m["sender"]), verdict="stranger" if stranger else "known", text=m["text"][:60])
         if not stranger:
             self.say(f"ok:{m['guid']}", "ok, standing down")
+            led.hook("clear")   # 25 · green: stood down
             return True
         self.say(f"danger:{m['guid']}", "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!")
         try:
