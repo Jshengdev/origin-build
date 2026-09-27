@@ -30,7 +30,8 @@ whose cells overlap an open proposal, a dismissed one or a scout zone already on
 call, no row). A failed call, an unreadable frame or a blob that raises is a failed row and a line in state()["failed"],
 never a canned label, never retried. An empty blob is a wait, not a failure: the cone from where the dog is now misses
 07's hit because the dog moved since 07 placed the thing, so no row, one WARN per change, named in state()'s why, and
-the thing is taken again by the next feed with the hit 07 refreshes each window. confirm(id, by) follows POST /map's rules (a stale _version is 409, the
+the thing is taken again by the next feed with the hit 07 refreshes each window; a stale thing (07 no longer sees it)
+is never taken, so nothing waits forever. confirm(id, by) follows POST /map's rules (a stale _version is 409, the
 previous map kept as map.prev.json) and nogo.zones() must accept the entry first; every refusal is a failed
 zone.confirmed row before anything is written.
 
@@ -267,7 +268,7 @@ class Proposals:
 
     def feed(self, objs: list[dict], frame: dict, pose: dict | None, grid: occupancy.Grid | None, cal: dict | None,
              fov_deg: float | None, threshold: int = occupancy.THRESHOLD, grid_lock=None) -> dict[str, int]:
-        """Every placed object not handled before is handled once, or waits (see the module docstring);
+        """Every placed, not stale object not handled before is handled once, or waits (see the module docstring);
         returns the counts. A raise (a bad WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a failed ledger write) is
         kept as state()["error"] and re-raised for the objects thread's log; the objects it had not taken yet are taken
         by the next feed."""
@@ -280,8 +281,9 @@ class Proposals:
 
     def _feed(self, objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock) -> dict[str, int]:
         t_all = time.perf_counter()
-        with self._lock:
-            cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and o["id"] not in self.handled]
+        with self._lock:   # a stale thing is not taken: 07 no longer sees it, so it never waits forever
+            cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and not o.get("stale")
+                     and o["id"] not in self.handled]
         n = {"handled": 0, "decided": 0, "proposed": 0, "failed": 0, "deduped": 0}
         if not cands:
             self._warn(None)
