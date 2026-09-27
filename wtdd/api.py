@@ -22,6 +22,8 @@
   GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, why?} (polled every 500 ms while
                                   connected); POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
   GET  /dog/frame.jpg             the newest camera frame (no ledger row; the page's live view), 503 without a dog
+  GET  /dog/scale                 the map scale in force {px_per_m, source: default | WTDD_PX_PER_M | dog_cal.json | page} (a read, no row)
+  POST /dog/scale {px_per_m}      the page's slider: one dog.scale row, saved in dog_cal.json beside the tie; a bad value is a 400 naming it
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
@@ -111,6 +113,9 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/dog/lidar":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().lidar())
+        if u.path == "/dog/scale":
+            from .dog.session import DogSession
+            return self._json(200, DogSession.get().scale())
         if u.path == "/dog/frame.jpg":
             from .dog.session import DogSession
             try:
@@ -244,6 +249,13 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        if u.path == "/dog/scale":   # {px_per_m}: the page's slider; one dog.scale row, ok or not; no value is a bad value, not a read
+            from .dog.session import DogSession
+            v = self._body().get("px_per_m")
+            try:
+                return self._json(200, {"ok": True, **DogSession.get().scale("none sent" if v is None else v)})
+            except Exception as e:  # noqa: BLE001  (the row has it; a bad value is the caller's 400, anything else ours)
+                return self._json(400 if isinstance(e, ValueError) else 500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
         name, args = u.path[len("/tools/"):], self._body()
