@@ -35,10 +35,11 @@ livecheck writes no ledger row: it reads and grades, like the record (10) and th
 
 Tailing: both files are opened and seeked to their end when the command starts (--from-start reads history too); rows
 are matched by `tool` (and `agent` when given) and by `ok`, then by every `where` field (a dotted path over the row:
-args.zone, state_after.extent_m, source; a plain value is equality, {gte, lte, in, re} are operators). Rows that match
+args.zone, state_after.cells, source; a plain value is equality, {gte, lte, in, re} are operators). Rows that match
 nothing are traffic and skipped; a row with the expected tool that misses a field is a WARN naming the field and the
 value seen; a complete ledger line that is not JSON is a WARN naming it, never dropped in silence. Log lines carry no
-timestamp, so in --replay every log line is read before the first tick and the clock is the rows' ts.
+timestamp, so in --replay every log line is read before the first tick and the clock is the rows' ts; a row with no
+readable ts is a WARN naming it and is clocked with the row before it.
 
 UNVERIFIED on the real dog: nothing here has tailed a live ledger; the frames/cells thresholds in steps.json are guesses
 (marked in each step's `note`) until the first live 01.3 writes its two dog.grid_save rows.
@@ -286,14 +287,20 @@ def _replay(c: _Check) -> None:
         c.logline(l)
         if c.v:
             return
-    q, first, off = [], None, 0
+    q, first, off, unclocked = [], None, 0, 0
     for l in (l for l in c.ledger.read_text().splitlines() if l.strip()):
         try:
-            ts = datetime.fromisoformat(json.loads(l)["ts"])
+            r = json.loads(l)
+        except ValueError:
+            r = None   # not JSON: c.row() WARNs and counts it when it lands
+        try:
+            ts = datetime.fromisoformat(r["ts"])
             first = first or ts
             off = (ts - first).total_seconds()
         except (ValueError, KeyError, TypeError):
-            pass   # no clock on this line: it lands with the row before it, and c.row() WARNs if it is not a row
+            if isinstance(r, dict):
+                unclocked += 1
+                say(f"WARN {c.step} · replay row has no readable ts ({unclocked} so far), clocked with the row before it: {l[:160]}")
         q.append((off, l))
     c.t0 = first.isoformat() if first else c.t0
     s = j = 0
