@@ -434,13 +434,16 @@ class DogSession:
         or just handing over) is read here and again by the task before the LiDAR switch: the same FAILED row naming
         the stop, nothing held. A tie nobody confirmed this power-on (dog_cal.json loaded, or kept across a stale
         reconnect: recheck) stays the tie, and the press says so: args.recheck true and one stderr WARN. Returns
-        state().scout."""
-        num = lambda v: v if math.isfinite(v) else str(v)  # noqa: E731  (a bare Infinity/NaN in the ledger breaks the page's JSON.parse of GET /ledger)
+        state().scout. POST /dog/scout passes its raw values: one that float() refuses (null, "abc") is the same FAILED row,
+        the raw value kept on it as a string."""
+        num = lambda v: v if isinstance(v, (int, float)) and math.isfinite(v) else str(v)  # noqa: E731  (a bare Infinity/NaN or a raw non-number breaks the page's JSON.parse of GET /ledger)
         args = {"z_rad_s": num(z), "target_deg": num(target_deg), "timeout_s": num(timeout_s), "shift_id": maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"),
                 "source": self.cal.get("source", "tap") if self.cal else None,   # None only on a press refused before any tie
                 "recheck": self.recheck}
         mine = False
         try:
+            z, target_deg, timeout_s = float(z), float(target_deg), float(timeout_s)   # inside the try: a malformed number is this press's row
+            args.update(z_rad_s=num(z), target_deg=num(target_deg), timeout_s=num(timeout_s))
             if self._follower and not self._follower.done():
                 raise RuntimeError("scout refused: following the path; POST /dog/stop first")
             if self.rec:

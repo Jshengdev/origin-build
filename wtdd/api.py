@@ -245,8 +245,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/dog/scout":   # {z?, target_deg?, timeout_s?}: the spin runs as a task; the refusal's FAILED row is already written
             from .dog.session import DogSession
             body = self._body()
-            try:
-                out = DogSession.get().scout(float(body.get("z", 0.5)), float(body.get("target_deg", 360)), float(body.get("timeout_s", 30)))
+            try:   # the raw values: DogSession.scout coerces them, so a malformed number is its FAILED row too
+                out = DogSession.get().scout(body.get("z", 0.5), body.get("target_deg", 360), body.get("timeout_s", 30))
                 return self._json(200, {"ok": True, "scout": out})
             except Exception as e:  # noqa: BLE001  (a refusal or a connect failure is reported, never hidden)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
