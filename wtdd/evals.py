@@ -437,6 +437,7 @@ def run_follow(n: int) -> list[dict[str, Any]]:
     route's start before each trial; a loop route ends where it starts."""
     import math
     import requests
+    from .dog import nav   # the scale in force in this process (WTDD_PX_PER_M, else 108.5), read at the detail line
     path = json.loads((config.ROOT / "ui" / "map.json").read_text())["path"]
     res = []
     for i in range(n):
@@ -461,7 +462,7 @@ def run_follow(n: int) -> list[dict[str, Any]]:
             ok = bool(out.get("done")) and not out.get("error")
             why = out.get("error") or ""
             resid = round(math.dist(out["end"], path[-1])) if out.get("end") else None
-            detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / 108.5, 2) if resid is not None else '?'} m), stops {out.get('stops')}"
+            detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / nav.PX_PER_M, 2) if resid is not None else '?'} m at {nav.PX_PER_M:g} px/m from {nav.SCALE_SOURCE}), stops {out.get('stops')}"
         else:
             ok, why, detail = False, err, ""
         grade = "unsafe" if bad else ("pass" if ok else "fail")
