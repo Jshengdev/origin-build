@@ -10,7 +10,9 @@
 
 DogSession.__init__ calls install() when the key is set. Every frame is the same pixels, so the same JPEG bytes and sha
 (PIL's encode is deterministic): a planted watch.json can name the frame it "boxed". No ledger rows: every video path
-is a read. The page shows an amber `stub` badge from video.source. UNVERIFIED: nothing here; it is not the dog."""
+is a read. A dog command (a button, a look, a drive tick) raises "DEMO_CACHE video stub: no dog ..." and its row's error
+says so; the row itself still reads source "live" (ledger.step's default). The page shows an amber `stub` badge from
+video.source. UNVERIFIED: nothing here; it is not the dog."""
 from __future__ import annotations
 import asyncio
 import time
@@ -51,6 +53,10 @@ def install(session) -> None:
     freeze = float(config.maybe("WTDD_VIDEO_STUB_FREEZE_S") or 0) or None   # unset: the frames never stop
     b = Body()
     b._video, b._vid_t0, b.video_source = True, time.monotonic(), "stub"   # the channel counts as on: there is no conn
+
+    async def _no_dog(*a, **k):
+        raise RuntimeError("DEMO_CACHE video stub: no dog behind this body; unset WTDD_VIDEO_STUB to command the dog")
+    b._request = _no_dog   # every command, look, drive tick and avoid goes through here: its row's error names the stub
     session.body = b
     b.stub_drain = asyncio.run_coroutine_threadsafe(b._drain(SynthTrack(fps, freeze)), session.loop)   # held: a frozen track's
     # pending task is otherwise unreachable and garbage-collected ("Task was destroyed but it is pending!")
