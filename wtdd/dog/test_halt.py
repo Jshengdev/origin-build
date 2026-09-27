@@ -80,6 +80,13 @@ Review round 3 (the classes after OwnAccount, RED before their fixes):
                                      when the row has it (latency_ms stays the first read-back's, as the contract says)
   a read-back with no velocity       has not said the body is still: state_after.velocity is what the device sent
                                      (None), the settle read is taken, and none again is stop.person ok false naming it
+
+Review round 4 (the classes after StillMs, RED before their fixes):
+  a body still turning after _halt()  (a halt that lands mid-turn: the follower turns in place, x 0 and z up to
+                                     nav.WMAX) yaw_speed from the same read-back is judged against halt.STILL_RADPS
+                                     next to the velocity, written as state_after.yaw_speed (and yaw_speed_settled
+                                     when the settle read ran); still above it, or never read back, stop.person is ok
+                                     false naming yaw_speed, the halt stands and the eval grades fail
 """
 from __future__ import annotations
 import asyncio
@@ -1272,6 +1279,82 @@ class StillMs(Dry):
         self.assertIsNone(sa["velocity"])
         self.assertEqual(sa["velocity_settled"], [0.0, 0.0, 0.0])
         self.assertGreaterEqual(sa["still_ms"] - sa["latency_ms"], halt.SETTLE_S * 1000)
+
+
+# ------------------------------------------------------------------------------------------------ review round 4
+class Spinning(FakeBody):
+    """A halt that lands mid-turn: the follower turns in place (nav.steer: x 0, z up to WMAX, whenever the heading error
+    is over AHEAD), and the avoidance service keeps its last command (2026-09-13). After a StopMove this body reads back
+    velocity 0 and yaw_speed W for `reads` fresh reads (forever by default); W None drops the key."""
+    W = 0.5
+
+    def __init__(self, reads: int = 10 ** 9, w: float | None = W) -> None:
+        super().__init__()
+        self.left, self.w = reads, w
+
+    async def fresh_state(self, required: bool = False) -> dict:
+        st = await super().fresh_state(required)
+        if self.left > 0 and "StopMove" in [n for n, _ in self.cmds]:
+            self.left -= 1
+            st = {**st, "yaw_speed": self.w}
+            if self.w is None:
+                st.pop("yaw_speed")
+        return st
+
+
+class Yaw(Dry):
+    """A body that reads back no velocity but still turns has not stopped: the halt is judged on yaw_speed from the
+    same read-back too, and a read-back without it has not said the body is still."""
+    halt_on = StillMoving.halt_on
+
+    def test_the_yaw_ceiling_sits_between_a_standing_body_and_the_followers_turn(self):
+        self.assertIsInstance(halt.STILL_RADPS, float)
+        self.assertTrue(0.094 < halt.STILL_RADPS < nav.WMAX, halt.STILL_RADPS)   # the take's standing max; the turn
+
+    def test_a_body_still_turning_after_the_halt_is_a_failed_stop_and_the_halt_stands(self):
+        r = self.halt_on(Spinning())
+        sa = r["state_after"]
+        self.assertIs(r["ok"], False, r)
+        self.assertIn("yaw_speed", r["response_or_error"])
+        self.assertEqual(sa["velocity"], [0.0, 0.0, 0.0])
+        self.assertEqual(sa["yaw_speed"], Spinning.W)
+        self.assertEqual(sa["yaw_speed_settled"], Spinning.W)
+        self.assertNotIn("still_ms", sa)
+        h = self.s.state()["halted"]
+        self.assertTrue(h)
+        self.assertIs(h["ok"], False)
+        self.assertIn("yaw_speed", h["error"])
+        for move in (lambda: self.s.drive(0.3, 0.0, 0.0), lambda: self.s.follow([list(p) for p in PATH], []),
+                     lambda: self.s.cmd("Hello"), lambda: self.s.look("tilt")):
+            with self.assertRaises(RuntimeError):
+                move()
+        g, why, _ = halt.grade([DET()] + ledger.rows() + [RESUMED()])
+        self.assertEqual(g, "fail", why)
+        self.assertIn("yaw_speed", why)
+
+    def test_a_body_that_stops_turning_within_the_settle_is_an_ok_stop_timed_there(self):
+        r = self.halt_on(Spinning(reads=1))
+        sa = r["state_after"]
+        self.assertIs(r["ok"], True, r["response_or_error"])
+        self.assertEqual(sa["yaw_speed"], Spinning.W)   # the first read-back, as it was
+        self.assertEqual(sa["yaw_speed_settled"], 0.0)
+        self.assertGreaterEqual(sa["still_ms"] - sa["latency_ms"], halt.SETTLE_S * 1000)
+
+    def test_a_read_back_with_no_yaw_speed_is_not_a_stop(self):
+        r = self.halt_on(Spinning(w=None))
+        sa = r["state_after"]
+        self.assertIs(r["ok"], False, r)
+        self.assertIn("no yaw_speed in the read-back", r["response_or_error"])
+        self.assertIsNone(sa["yaw_speed"])   # what the device sent, not a default
+        self.assertIsNone(sa["yaw_speed_settled"])
+        self.assertNotIn("still_ms", sa)
+        self.assertIs(self.s.state()["halted"]["ok"], False)
+
+    def test_a_still_body_writes_its_yaw_speed_on_the_row(self):
+        sa = self.halt_on(FakeBody())["state_after"]
+        self.assertEqual(sa["yaw_speed"], 0.0)
+        self.assertNotIn("yaw_speed_settled", sa)
+        self.assertEqual(sa["still_ms"], sa["latency_ms"])
 
 
 if __name__ == "__main__":
