@@ -19,6 +19,8 @@ records the believed pose while Johnny drives, mark(look, say) adds a stop at th
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
 row; a failed or cancelled follow says so in state().follow.error.
+A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
+calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -419,6 +421,8 @@ class DogSession:
 
     # ---- following the drawn path
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
+        from ..nogo import refuse                  # 04: a route through a drawn no-go zone is refused before anything else is looked at
+        refuse(path, "dog")                        # reads the map's zones; one route.refused row, then ValueError; no probe, no connect, no dog.follow row
         if self.cal is None:
             raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
         if self._follower and not self._follower.done():

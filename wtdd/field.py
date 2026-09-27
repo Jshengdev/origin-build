@@ -27,6 +27,11 @@ stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=
 real dog's calibrated odometry pose from the API, the follower (POST /dog/follow) drives it and pauses at the stops,
 and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. Measured on the live wake demo
 (2026-09-13): dark start 1.46 s, walk 63.6 s across four rooms (seven crossings, five lights), 67 writes, 0 errors.
+No-go zones (map zones with nogo: true, wtdd/nogo.py): a route that touches one is refused right after the path check,
+before the busy check and the dark start: one route.refused row, no field.walk row, nothing published, no light written.
+WTDD_MAP (plain process env, read once at import like WTDD_LEDGER; .env is not consulted) points every reader of the
+map (MAP, imported by name by plan, nogo, api, tools and the chat) at another file: the tests' scratch copy and the dry
+remote; unset = ui/map.json.
 """
 from __future__ import annotations
 import json
@@ -34,13 +39,14 @@ import math
 import time
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable
 
 from . import tools
 from .config import ROOT
 from .ledger import log, step
 
-MAP = ROOT / "ui" / "map.json"
+MAP = Path(os.environ.get("WTDD_MAP", ROOT / "ui" / "map.json"))
 HZ = 10.0
 FIELD = ROOT / "field.json"   # the running walk: p, here, levels, s, total, stop; written at HZ, removed at the end (GET /field)
 STOP = ROOT / "field.stop"    # POST /field/stop touches it: the running walk ends at its next tick (lights off, row written)
@@ -150,6 +156,8 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     problems = check_path(pts, rooms)
     if problems:
         raise ValueError("the path cannot be run: " + "; ".join(problems))
+    from .nogo import refuse                       # lazy: nogo imports this module
+    refuse(pts, "field", m)                        # a route through a drawn no-go zone: one route.refused row, then ValueError; nothing moves, nothing published
     stops = sorted({int(i) for i in m.get("stops", []) if 0 <= int(i) < len(pts)})
     if FIELD.exists() and time.time() - FIELD.stat().st_mtime < BUSY_S:   # another process's walk is live: refuse, never interleave
         raise RuntimeError(f"a walk is already running ({FIELD.name} written {round(time.time() - FIELD.stat().st_mtime, 1)} s ago)")
