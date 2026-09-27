@@ -17,8 +17,8 @@ else = "ok, standing down"; no answer = stood down quietly. Goal 00: a message t
 (default "resume"; case and surrounding spaces forgiven) from an allowed sender ends a person halt through POST
 /dog/resume {by: the sender, via: "imessage"}; it is matched before verdict() and its regex, also while holding for a
 verdict and while the chat's own round holds on the halt (read_resume, field.walk's on_hold; other messages read
-there are counted on a WARN line and not acted on), and nothing else in the chat resumes the body. A housemate's reply that starts like a
-correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
+there are counted on a WARN line and not acted on), and nothing else in the chat resumes the body. A housemate's
+reply that starts like a correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
 it (the vision model is told what the housemates said it got wrong). WTDD_ROUND=dog makes the round the
 real dog's: the wake starts the API's path follower (the dog must be calibrated on the remote first) and the field
