@@ -37,9 +37,15 @@ zone.confirmed row before anything is written. A zone confirmed from a stub prop
 entry (04 ignores the key), so the remote still says stub on the solid zone after the tap.
 
 UNVERIFIED on the real dog (the first live run must confirm): everything 07 lists (the camera's field of view, the
-bearing's sign, one odometry for the voxel frame and the pose); the cone uses the pose when the scout is fed, not when
-the detector's frame was shot (a dog that moves waits, above, and a dog that moved a little may get part of the thing's
-cells); the photo is the newest watch frame, which the detector may already have replaced since the window 07 placed;
+bearing's sign, one odometry for the voxel frame and the pose); the cone uses the pose when the scout is fed and 07's
+hit the pose when 07 placed the window, neither the one when the frame was shot. The objects thread feeds right after
+its own tick, so the two are milliseconds apart; a window a GET /dog/objects tick placed is up to TICK_S apart, more
+while the scout's previous model call held the thread. A turn or a sideways step in that gap SHIFTS the cone, it does
+not empty it: in the fixture world a 3 degree turn takes 9 of the chair's 11 cells plus 2 wall cells beside it, 7
+degrees 6 of 11 plus 5, 0.1 m sideways 9 of 11 plus 2 (0.3 m back: all 11 plus 2), and that zone is proposed and the
+thing is never asked again; a turn from about 8 degrees or a step toward it (0.06 m) empties the cone and the thing
+waits (above). On the dog, check that the red cells sit on the table after driving up to it, not beside it;
+the photo is the newest watch frame, which the detector may already have replaced since the window 07 placed;
 a table touching a wall brings the wall's cells inside the cone along (the person sees the cells
 and the photo, and decides); positive obstacles only: COCO has no hole or trench and the grid's z band has no floor, so
 an opening is always drawn by a person (04). The live Jev call has not been run with a key (02's own UNVERIFIED)."""
