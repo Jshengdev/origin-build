@@ -1,7 +1,7 @@
-"""Tests for wtdd/dog/scout_zones.py (roadmap item 19): the scout proposes red zones from its own cells; a person makes
-them rules. Every LiDAR blob the detector boxes and Jev labels a hazard becomes a PROPOSED zone made of its own counted
-cells, with the photo, the label and p; one named tap confirms it into 04's `nogo: true` schema or dismisses it;
-nothing is refused on a proposal alone, and every model call is its own row. Run:
+"""Tests for wtdd/dog/scout_zones.py (roadmap item 19): the scout adds red zones from its own cells. Every LiDAR blob the
+detector boxes and Jev labels a hazard at p >= the threshold is a no-go zone in 04's `nogo: true` schema on ui/map.json
+at once (by "auto", with its label and p), made of its own counted cells; one named tap dismisses it; below the
+threshold nothing is added; every model call is its own row (Johnny, 2026-09-27 04:14). Run:
 
     python -m unittest wtdd.dog.test_scout_zones
     python -m wtdd.evals --scenario scout          (the eval half; its graders are tested in class Eval below)
@@ -39,19 +39,26 @@ The contract under test (wtdd/dog/scout_zones.py):
     .feed(objs, frame, pose, grid, cal, fov_deg, threshold=occupancy.THRESHOLD, grid_lock=None)
         objs = 07's Store.to_list(); every placed object (pos_px set) not handled before is handled once: its blob and
         polygon under grid_lock, then (outside every lock) one zone.decided row from decide() with the words-only
-        state; when the label is not not_a_hazard and p >= WTDD_DECIDE_THRESHOLD (default 0.7), one zone.proposed row
-        and an open proposal "z<n>" whose photo is the detector frame copied once into photo_dir with its sha256. A
+        state; when the label is not not_a_hazard and p >= WTDD_DECIDE_THRESHOLD (default 0.7), the zone "z<n>" (its
+        photo the detector frame copied once into photo_dir with its sha256) is written to the map at once by confirm's
+        rules: the entry {name, label: <label>, p, poly, nogo: true, source: "scout", cells, proposal: "z<n>", by:
+        "auto"} (+ app "stub" from the stub), one zone.confirmed row {id, zone, by: "auto (jev <p>)" ("auto (stub <p>)"
+        from the stub)} whose response is the say "I added a no-go zone around the <kind>: Jev is <p> sure it's a
+        hazard."; a map that changed during the call is a failed zone.confirmed row (409), not retried. A
         thing whose cells overlap an open, a dismissed or a scout zone on the map is the same thing: logged, no row, no
-        model call. A failed call: zone.decided ok false, no proposal, listed in state()["failed"], never retried. An
+        model call. A failed call: zone.decided ok false, no zone, listed in state()["failed"], never retried. An
         unreadable frame: zone.proposed ok false naming the file, no call, never retried. One stderr line per call;
-        a WARN when placed objects were handled and nothing was proposed.
-    .confirm(id, by, version=None) -> {ok, zone, _version}: blank by -> Refused 400, no open id -> 404, a version not
+        a WARN when placed objects were handled and nothing was added.
+    .confirm(id, by, version=None) (kept for an open proposal; the feed opens none now) -> {ok, zone, _version}: blank by -> Refused 400, no open id -> 404, a version not
         the map file's int(mtime) -> 409, each with a zone.confirmed row ok false and the map untouched; else the entry
         {name: next free nogo-<n>, label: "<label> · <p:.2f> · scout", poly, nogo: true, source: "scout", cells,
         proposal: id, by} is checked by nogo.zones(), appended to the map's zones, the previous map kept as
         map.prev.json, one zone.confirmed row {id, zone, by}, and the proposal closed
-    .dismiss(id, by) -> one zone.dismissed row {id, by}; blank by 400, no open id 404 (a failed row each)
-    .state() -> {n, proposals: [PROPOSAL_KEYS...], failed: [{object_id, kind, error, ts}], why?}  why whenever n is 0
+    .dismiss(id, by, version=None) -> one zone.dismissed row {id, by} and a say; an auto zone (by "auto") leaves the map by
+        confirm's rules (409 stale, map.prev.json kept) and nothing else on it moves; a zone a person drew (04) or
+        confirmed is never touched; blank by 400, neither an open proposal nor an auto zone 404 (a failed row each)
+    .state() -> {n, proposals: [PROPOSAL_KEYS...], zones: [the auto zones on the map], _version, failed: [{object_id,
+        kind, error, ts}], why?}  why whenever n is 0
   rows: agent "scout"; tools zone.decided (never "decided": 11's grade_decide owns that name), zone.proposed,
         zone.confirmed, zone.dismissed; every args has shift_id; the stub's rows say cached true, source "stub"; no row
         carries a base64 thumbnail
@@ -64,8 +71,9 @@ The contract under test (wtdd/dog/scout_zones.py):
   GET /dog/scout (WTDD_SCOUT=<file>: # DEMO_CACHE, serves that file, source names it) · POST /dog/scout {id, action,
         by, _version} -> 200 | 400 | 404 | 409, the refusals before anything is written
   python -m wtdd.dog.scout_zones --replay <npz> --watch <watch json> --pose x,y,yaw --fov DEG --png <out> [--threshold N]
-        the stub only, no ledger row; the occupancy PNG with every proposed cell a PNG_SCALE square in CELL_RGB; exit 2
-        (WARN) when nothing is proposed
+        the stub only, no ledger row, a scratch map; the occupancy PNG with every added zone's cell a PNG_SCALE square in
+        CELL_RGB; exit 2 (WARN) when nothing is added
+  ui/index.html: an auto zone drawn solid, labelled "auto · <label> · <p>", with a dismiss control
   wtdd.evals: grade_scout(rows, m) -> (ok, why, detail), unsafe_scout(rows, m) -> [why], run_scout(fixture=None) ->
         [one dry trial]; `--scenario scout` grades wtdd/fixtures/evals/scout.jsonl against scout-map.json; --write
         refuses a dry trial and leaves README.md alone
@@ -426,6 +434,20 @@ class Base(unittest.TestCase):
     def chair_cells(self) -> set:
         return wall_a_expected(CHAIR["xyxy"], chair_hit(self.g))
 
+    def jev(self, p: float):
+        """A Jev double (no network): the stub's label, answered live-shaped at p."""
+        return lambda q: {**scout_zones.decide_stub(q), "p": p, "probabilities": {scout_zones.decide_stub(q)["label"]: p},
+                          "model": "typesafe/jev-1.13", "raw": "{\"test\": \"jev double\"}", "app": "openrouter", "cached": False}
+
+    def auto(self) -> list:
+        return [z for z in json.loads(self.map.read_text())["zones"] if z.get("by") == "auto"]
+
+    def open_fixture_proposal(self, p) -> dict:
+        """The feed opens no proposal now; the person's confirm path is kept, so its tests open make_scout_fixture's z1."""
+        z = json.loads(sfx.SCOUT_JSON.read_text())["proposals"][0]
+        p.open[z["id"]] = z
+        return z
+
 
 class Feed(Base):
     def test_one_zone_decided_per_placed_object_with_latency_and_probabilities(self):
@@ -452,18 +474,73 @@ class Feed(Base):
         for r in by.values():
             self.assertEqual((r.get("cached"), r.get("source")), (True, "stub"), "a DEMO_CACHE row never claims to be live")
 
-    def test_a_hazard_at_the_threshold_is_one_proposal_with_its_cells_photo_label_and_p(self):
+    def test_a_hazard_at_p_0_84_is_on_the_map_at_once_by_auto_with_its_label_and_p(self):
+        # Johnny, 2026-09-27 04:14: "it should add the obstacles that it identifies as nogo zones ... auto classified with
+        # a jev confidence level". No proposal and no tap: the zone is on ui/map.json when the feed returns.
+        before = self.map.read_text()
+        p = self.props(decide=self.jev(0.84))
+        self.feed(p)
+        (z,) = self.auto()   # the backpack is not_a_hazard at 0.84: only a hazard label becomes a zone, never every object
+        self.assertEqual((z["name"], z["label"], z["p"], z["by"], z["nogo"], z["source"]), ("nogo-1", "table", 0.84, "auto", True, "scout"))
+        self.assertEqual(as_set(z["cells"]), self.chair_cells())
+        self.assertEqual(z["poly"], scout_zones.polygon(z["cells"], CAL, RES))
+        self.assertNotIn("app", z, "a live-shaped answer carries no stub mark")
+        m = json.loads(self.map.read_text())
+        self.assertEqual(nogo.zones(m), [z], "04's zones() accepts the entry")
+        self.assertEqual(m["zones"][:-1], json.loads(before)["zones"], "the lighting zones stay as they were")
+        self.assertEqual(self.map.with_name("map.prev.json").read_text(), before, "the previous map survives one overwrite")
+        self.assertFalse(self.tool("zone.proposed"), "no proposal state for a hazard")
+        (r,) = self.tool("zone.confirmed")
+        self.assertTrue(r["ok"])
+        self.assertEqual((r["agent"], r["args"]["id"], r["args"]["zone"], r["args"]["by"]), ("scout", "z1", "nogo-1", "auto (jev 0.84)"))
+        self.assertEqual(r["response_or_error"], "I added a no-go zone around the chair: Jev is 0.84 sure it's a hazard.")
+        self.assertEqual(r["state_after"]["zone"], z)
+        self.assertIsNot(r.get("cached"), True)
+        st = p.state()
+        self.assertEqual((st["n"], st["zones"], st["_version"]), (0, [z], int(self.map.stat().st_mtime)))
+
+    def test_a_hazard_at_p_0_5_adds_nothing(self):
+        before = self.map.read_text()
+        p = self.props(decide=self.jev(0.5))
+        self.feed(p)
+        self.assertEqual(len(self.tool("zone.decided")), 2, "still asked")
+        self.assertFalse([r for r in self.rows if r["tool"] in ("zone.confirmed", "zone.proposed")], "0.5 < 0.7: the chair stays a 07 pin")
+        self.assertEqual(self.map.read_text(), before)
+        self.assertFalse(self.map.with_name("map.prev.json").exists())
+        self.assertEqual((p.state()["n"], p.state()["zones"]), (0, []))
+
+    def test_a_map_changed_during_the_call_is_a_failed_zone_confirmed_row_not_retried(self):
+        def page_saves_meanwhile(q):   # POST /map from the page while Jev answers: the scout's read is stale
+            t = self.map.stat().st_mtime + 10
+            os.utime(self.map, (t, t))
+            return self.jev(0.84)(q)
+        before = self.map.read_text()
+        p = self.props(decide=page_saves_meanwhile)
+        self.feed(p)
+        (r,) = self.tool("zone.confirmed")
+        self.assertFalse(r["ok"])
+        self.assertIn("changed on the server", r["response_or_error"])
+        self.assertEqual(self.map.read_text(), before, "a stale write never lands")
+        self.assertEqual([(f["object_id"], f["stage"]) for f in p.state()["failed"]], [("o1", "map write")])
+        n = len(self.rows)
+        self.feed(p)
+        self.assertEqual(len(self.rows), n, "not retried")
+
+    def test_a_stub_hazard_is_the_same_zone_marked_stub_with_its_cells_and_photo(self):
         p = self.props()
         self.feed(p)
-        (r,) = self.tool("zone.proposed")
-        a = r["args"]
-        self.assertTrue(r["ok"])
-        self.assertEqual((r["agent"], a["id"], a["object_id"], a["kind"], a["label"], a["p"]), ("scout", "z1", "o1", "chair", "table", 0.71))
+        (z,) = self.auto()
+        self.assertEqual((z["label"], z["p"], z["by"], z["app"]), ("table", 0.71, "auto", "stub"), "DEMO_CACHE provenance on the map")
+        (r,) = self.tool("zone.confirmed")
+        self.assertEqual((r["args"]["by"], r.get("cached"), r.get("source")), ("auto (stub 0.71)", True, "stub"))
+        self.assertEqual(r["response_or_error"], "I added a no-go zone around the chair: the stub (DEMO_CACHE, not Jev) is 0.71 sure it's a hazard.")
+        a = r["state_before"]
+        self.assertEqual((a["id"], a["object_id"], a["kind"], a["label"], a["p"]), ("z1", "o1", "chair", "table", 0.71))
         self.assertEqual(as_set(a["cells"]), self.chair_cells())
-        self.assertEqual(a["cells_n"], 11)
+        self.assertEqual(len(a["cells"]), 11)
         self.assertAlmostEqual(a["area_m2"], round(11 * RES * RES, 4))
         self.assertAlmostEqual(a["dist_m"], 2.0, places=3)
-        self.assertEqual(a["poly"], scout_zones.polygon(a["cells"], CAL, RES))
+        self.assertEqual(a["poly"], z["poly"])
         photo = Path(a["photo"]["path"])
         self.assertTrue(photo.is_file(), "the detector frame is copied once, beside the dog's other pictures")
         self.assertEqual(photo.parent, self.pics)
@@ -472,19 +549,7 @@ class Feed(Base):
         self.assertEqual(a["photo"]["sha256"], hashlib.sha256(data).hexdigest())
         self.assertEqual(a["photo"]["sha256"], hashlib.sha256(ofx.FRAME.read_bytes()).hexdigest())
         self.assertEqual(a["photo"]["bytes"], len(data))
-        self.assertEqual((r.get("cached"), r.get("source")), (True, "stub"))
         self.assertNotIn("base64,", json.dumps(r), "a row never carries the thumbnail")
-
-    def test_not_a_hazard_or_below_the_threshold_is_no_proposal(self):
-        self.feed(self.props())
-        self.assertEqual([r["args"]["object_id"] for r in self.tool("zone.proposed")], ["o1"], "the backpack is not a hazard")
-        self.rows.clear()
-        with mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "0.8"}):
-            p = self.props()
-            self.feed(p)
-        self.assertEqual(len(self.tool("zone.decided")), 2, "still asked")
-        self.assertFalse(self.tool("zone.proposed"), "0.71 < 0.8: the chair stays a 07 pin")
-        self.assertEqual(p.state()["n"], 0)
 
     def test_one_row_per_thing_never_per_window(self):
         p = self.props()
@@ -493,22 +558,21 @@ class Feed(Base):
         for t in (2.0, 3.0):
             self.store.observe({**frame(), "t": t}, POSE, self.g, CAL, FOV, threshold=THR)
             self.feed(p)
-        self.assertEqual(len(self.rows), n, "the same objects again are no new ask and no new proposal")
-        self.assertEqual(p.state()["n"], 1)
+        self.assertEqual(len(self.rows), n, "the same objects again are no new ask and no new zone")
+        self.assertEqual(len(self.auto()), 1)
 
     def test_the_same_cells_again_are_the_same_thing(self):
         p = self.props(decide=lambda q: {**scout_zones.decide_stub(q), "label": "table", "p": 0.9, "probabilities": {"table": 0.9}})
         self.feed(p)
-        self.assertEqual([r["args"]["id"] for r in self.tool("zone.proposed")], ["z1", "z2"])
+        self.assertEqual([(r["args"]["id"], r["args"]["zone"]) for r in self.tool("zone.confirmed")], [("z1", "nogo-1"), ("z2", "nogo-2")])
         n = len(self.rows)
         respawn = [{**o, "id": o["id"] + "b"} for o in self.store.to_list()]   # 07 re-spawned both things under new ids
         self.feed(p, objs=respawn)
-        self.assertEqual(len(self.rows), n, "cells that overlap an open proposal: logged, no call, no row")
-        p.dismiss("z2", NAME)
+        self.assertEqual(len(self.rows), n, "cells that overlap a scout zone on the map: logged, no call, no row")
+        p.dismiss("nogo-2", NAME, int(self.map.stat().st_mtime))
         n = len(self.rows)
         self.feed(p, objs=[{**o, "id": o["id"] + "c"} for o in self.store.to_list()])
-        self.assertEqual(len(self.rows), n, "cells that overlap a dismissed proposal: the person already said no")
-        p.confirm("z1", NAME, int(self.map.stat().st_mtime))
+        self.assertEqual(len(self.rows), n, "cells that overlap a dismissed zone: the person already said no")
         self.rows.clear()
         fresh = self.props()                                                    # a new session, the map remembers
         self.feed(fresh)
@@ -589,30 +653,28 @@ class Feed(Base):
 
     def test_state_is_the_get_body(self):
         empty = self.props().state()
-        self.assertEqual((empty["n"], empty["proposals"], empty["failed"]), (0, [], []))
+        self.assertEqual((empty["n"], empty["proposals"], empty["zones"], empty["failed"]), (0, [], [], []))
         self.assertTrue(empty["why"])
         p = self.props()
         self.feed(p)
         st = p.state()
         json.dumps(st)
-        self.assertEqual(st["n"], 1)
-        (z,) = st["proposals"]
-        self.assertEqual(set(z), set(scout_zones.PROPOSAL_KEYS))
-        self.assertEqual((z["id"], z["label"], z["p"], z["app"], z["kind"]), ("z1", "table", 0.71, "stub", "chair"))
-        self.assertEqual(z["cells_px"], px_of(z["cells"]))
-        self.assertTrue(z["thumb"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual((st["n"], st["proposals"]), (0, []), "a hazard opens no proposal")
+        self.assertEqual(st["zones"], self.auto(), "the auto zones as the map holds them")
+        self.assertEqual(st["_version"], int(self.map.stat().st_mtime), "the version a dismiss sends back")
+        self.assertIn("1 added to the map", st["why"])
 
-    def test_one_stderr_line_per_call_and_a_warn_when_nothing_is_proposed(self):
+    def test_one_stderr_line_per_call_and_a_warn_when_nothing_is_added(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.feed(self.props())
         self.assertIn("[wtdd:scout]", err.getvalue())
-        self.assertIn("proposed=1", err.getvalue())
+        self.assertIn("added=1", err.getvalue())
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.feed(self.props(decide=lambda q: {**scout_zones.decide_stub(q), "label": "not_a_hazard", "probabilities": {"not_a_hazard": q["conf"]}}))
         self.assertIn("WARN", err.getvalue())
-        self.assertIn("proposed=0", err.getvalue())
+        self.assertIn("added=0", err.getvalue())
 
     def test_a_feed_that_raises_is_named_on_the_get_not_an_absence(self):
         # fix round 1: a mistyped WTDD_DECIDE_THRESHOLD stopped every proposal while state() said "no placed object yet";
@@ -627,7 +689,7 @@ class Feed(Base):
         self.feed(p)
         st = p.state()
         self.assertNotIn("error", st, "a feed past the threshold and the map clears it")
-        self.assertEqual(st["n"], 1, "the placed objects were not taken by the failed feed: asked now")
+        self.assertEqual(len(st["zones"]), 1, "the placed objects were not taken by the failed feed: asked now")
 
     def test_a_ledger_write_that_raises_mid_feed_leaves_the_untaken_things_for_the_next_feed(self):
         # fix round 3: every candidate went into `handled` before the loop, so a raise on o1's row left o2 handled, never
@@ -681,15 +743,15 @@ class Feed(Base):
             self.assertAlmostEqual(o1["dist_m"], 1.9, places=3)
             p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
         self.assertEqual(sorted(r["args"]["object_id"] for r in self.tool("zone.decided")), ["o1", "o2"])
-        (r,) = self.tool("zone.proposed")
-        self.assertEqual((r["ok"], r["args"]["id"], r["args"]["object_id"], r["args"]["label"]), (True, "z1", "o1", "table"))
+        (r,) = self.tool("zone.confirmed")
+        self.assertEqual((r["ok"], r["args"]["id"], r["state_before"]["object_id"], r["state_before"]["label"]), (True, "z1", "o1", "table"))
         x = fx.WALL_A["x"][0] * RES
         hit = {"xy": o1["hit_m"], "dist_m": o1["dist_m"]}
         want = {(round(x, 3), round(k * RES, 3)) for k in range(*fx.WALL_A["y"]) if in_bound((x, k * RES), CHAIR["xyxy"], hit, pose=moved)}
         self.assertTrue(want)
-        self.assertEqual(as_set(r["args"]["cells"]), want, "the cells the bound gives from where the dog stands, with 07's new hit")
+        self.assertEqual(as_set(r["state_before"]["cells"]), want, "the cells the bound gives from where the dog stands, with 07's new hit")
         st = p.state()
-        self.assertEqual((st["n"], st["failed"]), (1, []))
+        self.assertEqual((len(st["zones"]), st["failed"]), (1, []))
 
     def test_a_waiting_thing_07_no_longer_sees_stops_waiting(self):
         moved = {"position": [0.10, 0.0], "yaw": 0.0}
@@ -726,10 +788,12 @@ class Feed(Base):
 
 
 class Confirm(Base):
+    """A person's confirm of an open proposal: kept, though the feed opens none now (a hazard goes to the map at once)."""
+
     def setUp(self):
         super().setUp()
         self.p = self.props()
-        self.feed(self.p)
+        self.open_fixture_proposal(self.p)
         self.before = self.map.read_text()
         self.version = int(self.map.stat().st_mtime)
         self.prop = self.p.state()["proposals"][0]
@@ -812,29 +876,84 @@ class Confirm(Base):
 
 
 class Dismiss(Base):
-    def test_dismiss_writes_its_row_and_drops_the_proposal(self):
-        p = self.props()
+    def test_dismissing_the_auto_zone_removes_exactly_that_entry_with_one_row(self):
+        p = self.props(decide=self.jev(0.84))
         self.feed(p)
         before = self.map.read_text()
         self.rows.clear()
+        out = p.dismiss("nogo-1", NAME, int(self.map.stat().st_mtime))
+        m, old = json.loads(self.map.read_text()), json.loads(before)
+        self.assertEqual(m, {**old, "zones": [z for z in old["zones"] if z["name"] != "nogo-1"]}, "that one entry, nothing else")
+        self.assertEqual(self.auto(), [])
+        self.assertEqual(self.map.with_name("map.prev.json").read_text(), before, "the previous map survives one overwrite")
+        self.assertTrue(out["ok"])
+        (r,) = self.tool("zone.dismissed")
+        self.assertTrue(r["ok"])
+        self.assertEqual((r["agent"], r["args"]["id"], r["args"]["by"]), ("scout", "nogo-1", NAME))
+        self.assertIn("shift_id", r["args"])
+        self.assertEqual(r["state_before"]["by"], "auto")
+        self.assertEqual(r["response_or_error"], f"I took nogo-1 (auto · table · 0.84) off the map: {NAME} dismissed it.")
+        self.assertEqual(len(self.rows), 1)
+
+    def test_a_drawn_zone_survives_a_dismiss_of_another(self):
+        m = json.loads(self.map.read_text())
+        drawn = {"name": "nogo-1", "label": "no-go 1", "poly": [[450, 1040], [510, 1040], [510, 1250], [450, 1250]], "nogo": True}
+        m["zones"].append(drawn)   # 04: a person drew it on the map
+        self.map.write_text(json.dumps(m, indent=2) + "\n")
+        p = self.props(decide=self.jev(0.84))
+        self.feed(p)
+        (z,) = self.auto()
+        self.assertEqual(z["name"], "nogo-2")
+        p.dismiss("nogo-2", NAME, int(self.map.stat().st_mtime))
+        after = self.map.read_text()
+        self.assertEqual(json.loads(after), m, "the drawn zone and everything else as they were")
+        self.rows.clear()
+        with self.assertRaises(scout_zones.Refused) as cm:
+            p.dismiss("nogo-1", NAME, int(self.map.stat().st_mtime))
+        self.assertEqual(cm.exception.code, 404, "a drawn zone is never the scout's to dismiss")
+        self.assertEqual(self.map.read_text(), after)
+        self.assertEqual([r["ok"] for r in self.tool("zone.dismissed")], [False])
+
+    def test_a_stale_page_cannot_dismiss(self):
+        p = self.props(decide=self.jev(0.84))
+        self.feed(p)
+        before = self.map.read_text()
+        with self.assertRaises(scout_zones.Refused) as cm:
+            p.dismiss("nogo-1", NAME, int(self.map.stat().st_mtime) - 7)
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(self.map.read_text(), before)
+
+    def test_dismiss_writes_its_row_and_drops_an_open_proposal(self):
+        p = self.props()
+        self.open_fixture_proposal(p)
+        before = self.map.read_text()
         p.dismiss("z1", NAME)
         (r,) = self.tool("zone.dismissed")
         self.assertTrue(r["ok"])
         self.assertEqual((r["agent"], r["args"]["id"], r["args"]["by"]), ("scout", "z1", NAME))
         self.assertIn("shift_id", r["args"])
         self.assertEqual(p.state()["n"], 0)
-        self.assertEqual(self.map.read_text(), before, "a dismiss writes no zone")
+        self.assertEqual(self.map.read_text(), before, "a proposal is not on the map: its dismiss writes nothing")
 
     def test_dismiss_needs_a_name_and_an_open_id(self):
         p = self.props()
         self.feed(p)
         self.rows.clear()
-        for by, oid, code in (("", "z1", 400), (NAME, "z9", 404)):
+        for by, oid, code in (("", "nogo-1", 400), (NAME, "z9", 404)):
             with self.assertRaises(scout_zones.Refused) as cm:
                 p.dismiss(oid, by)
             self.assertEqual(cm.exception.code, code)
         self.assertEqual([r["ok"] for r in self.tool("zone.dismissed")], [False, False])
-        self.assertEqual(p.state()["n"], 1)
+        self.assertEqual(len(self.auto()), 1)
+
+
+class Page(unittest.TestCase):
+    def test_the_remote_draws_an_auto_zone_labelled_auto_with_a_dismiss_control(self):
+        s = (ROOT / "ui" / "index.html").read_text()
+        block = s[s.index("// 19 · scout-zones · start"):s.index("// 19 · scout-zones · end")]
+        self.assertIn("auto · ${z.label} · ${(+z.p).toFixed(2)}", block, "the auto zone's label: auto · <label> · <p>")
+        self.assertIn('tap(z.name, "dismiss"', block, "the dismiss control posts the zone's name")
+        self.assertIn("s?.zones", block, "drawn from GET /dog/scout's zones, so it shows without a page reload")
 
 
 class Session(unittest.TestCase):
