@@ -388,10 +388,12 @@ function GridLayer() {
 // 01 · occupancy · end
 // 14 · scout-spin · start
 // The scout (POST /dog/scout, wtdd/dog/scout.py): one button turns the dog 360 in place while its LiDAR fills the grid
-// around it, and reads "stop" while it spins (POST /dog/stop cancels it). The line beside it is formatted, never
-// computed: GET /dog/state .scout while it spins, else the newest dog.scout receipt from the ledger rows App already
-// polls (a fixture row says so). A failure is red and named. NoPlanChip: "no plan · site" under the grid label when
-// GET /map carries no_plan (WTDD_NO_PLAN=1: house.svg is not drawn, the house's rooms do not refuse routes).
+// around it, and reads "stop" while it spins (POST /dog/stop cancels it). It waits only for GET /dog/state to answer:
+// the press connects itself, like the drive keys, and a connect failure is its FAILED row. The line beside it is
+// formatted, never computed: GET /dog/state .scout while it spins, else the newest dog.scout receipt from the ledger
+// rows App already polls (a fixture row says so). A failure is red and named. NoPlanChip: "no plan · site" under the
+// grid label when GET /map carries no_plan (WTDD_NO_PLAN=1: house.svg is not drawn, the house's rooms do not refuse
+// routes).
 function Scout({ dog, ledger, post, setLast }) {
   const s = dog?.scout, r = [...(ledger || [])].reverse().find(x => x.tool === "dog.scout"), a = r?.state_after || {};
   const n = v => (+v || 0).toLocaleString("en-US"), m = v => (v || []).map(x => (+x).toFixed(1)).join("/");
@@ -399,7 +401,7 @@ function Scout({ dog, ledger, post, setLast }) {
     : !r ? null : !r.ok ? `scout FAILED: ${r.response_or_error}`
     : `scouted · ${a.closed ? `${r.args?.target_deg}° closed at ${Math.round(a.turned_deg)}°` : r.args?.z_rad_s ? `${r.args?.target_deg}° not closed, at ${Math.round(a.turned_deg)}°` : "control, z 0"} · ${a.frames} frames · +${n(a.cells_added)} cells · ${a.seconds} s`;
   return html`<${React.Fragment}>
-    <button class=${"small" + (s?.active ? " on" : "")} disabled=${!s?.active && (!dog?.connected || !!dog?.follow?.active || !!dog?.rec)} title="turns 360 in place while the LiDAR fills the grid around it; the LiDAR sees 360 already, this fills the shadow behind it and closes the heading" onClick=${() => post(s?.active ? "/dog/stop" : "/dog/scout", {}).then(x => x.json()).then(o => setLast({ ...o, tool: s?.active ? "dog stop" : "dog.scout" }))}>${s?.active ? "stop" : "scout: spin and draw"}</button>
+    <button class=${"small" + (s?.active ? " on" : "")} disabled=${!s?.active && (!dog || !!dog?.follow?.active || !!dog?.rec)} title="turns 360 in place while the LiDAR fills the grid around it; the LiDAR sees 360 already, this fills the shadow behind it and closes the heading" onClick=${() => post(s?.active ? "/dog/stop" : "/dog/scout", {}).then(x => x.json()).then(o => setLast({ ...o, tool: s?.active ? "dog stop" : "dog.scout" }))}>${s?.active ? "stop" : "scout: spin and draw"}</button>
     ${text && html`<span class=${"mono" + (!s?.active && !r.ok ? " bad" : "")}>${text}${!s?.active && r.source === "stub" ? " · fixture" : ""}</span>`}</${React.Fragment}>`;
 }
 function NoPlanChip({ on }) {
