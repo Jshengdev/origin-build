@@ -38,7 +38,12 @@ confirmed chat.db time to the reply's chat.db time, UTC, whole seconds; None + a
 confirmed post), shift_id and chat. No person configured, or the send to them failed: one WARN at boot for the first,
 and either is posted to the group as its error under escalate-fail:<key> (never alarm:<key>, which a failed send has
 already claimed), no question opened, no hold, the round goes on. UNVERIFIED until the first live run: a reply landing
-in the 1:1 chat as read here, and the send to it (send.py)."""
+in the 1:1 chat as read here, and the send to it (send.py).
+
+The channel (item 12): each chat is read and posted through its adapter (chat/adapters/): the group and the 1:1 are
+iMessage; with WTDD_ON_CALL_CHANNEL=sms the on-call chat is sms:<handle> (Twilio, or its labeled DEMO_CACHE stub), its
+watermark is unix seconds of date_sent, and the verdict and correction rows carry the adapter's app and, for the stub,
+cached: true, source: "stub". self.last (the heartbeat's last_rowid) stays a chat.db ROWID."""
 from __future__ import annotations
 import json
 import re
@@ -48,7 +53,7 @@ from typing import Any, Callable
 from .. import commands as cmds
 from .. import config
 from ..ledger import append, log, rows as ledger_rows
-from . import db, memory, oncall
+from . import adapters, db, memory, oncall
 from .housemates import HOUSEMATES, name as hname
 from .triggers import commands as command_list, is_chat, is_wake, match_command, normalize, wake_phrases
 
@@ -81,7 +86,7 @@ class Listener:
         self._warned = False
         self.oncall_handle = config.maybe("WTDD_ON_CALL_HANDLE")
         self.oncall = oncall.guid(self.oncall_handle) if self.oncall_handle else None   # the on-call 1:1 (item 03)
-        self.marks = {g: self.last for g in (guid, self.oncall) if g}   # one watermark per chat read (ROWIDs are global)
+        self.marks = {g: adapters.for_target(g).mark() for g in (guid, self.oncall) if g}   # one watermark per chat, in its adapter's unit
         if not self.oncall:
             log("chat", "WARN no on-call person (WTDD_ON_CALL_HANDLE unset): a flag will be posted to the group as its error")
 
@@ -242,10 +247,11 @@ class Listener:
         state = json.loads(STATE.read_text()) if STATE.exists() else {}
         state.setdefault("corrections", []).append(entry)
         STATE.write_text(json.dumps(state, indent=1) + "\n")
-        append({"step": "chat.correction", "agent": "central", "tool": "chat.correction", "app": "imessage", "ok": True,
+        append({"step": "chat.correction", "agent": "central", "tool": "chat.correction", "app": adapters.for_target(chat).app, "ok": True,
                 "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "corrects": entry["corrects"],
                          **oncall.reply_fields(last, m.get("ts_utc")), "chat": chat},
-                "state_before": None, "state_after": {"corrections": len(state["corrections"])}, "response_or_error": None, "latency_ms": 0})
+                "state_before": None, "state_after": {"corrections": len(state["corrections"])}, "response_or_error": None, "latency_ms": 0,
+                **adapters.label(chat)})
         log("chat", "CORRECTION", by=entry["by"], text=m["text"][:60], corrects=entry["corrects"]["said"][:40] if entry["corrects"]["said"] else "")
         self.say(f"fix:{m['guid']}", f"noted: {m['text'][:120]}", guid=chat)
         return True
@@ -269,9 +275,10 @@ class Listener:
         stranger = pend.get("kind") != "decide" and bool(IDK.search(normalize(m["text"])))
         PENDING.unlink(missing_ok=True)
         acked = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
-        append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
+        append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": adapters.for_target(chat).app, "ok": True,
                 "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger"), **acked, "chat": chat},
-                "state_before": None, "state_after": {"verdict": "stranger" if stranger else "known"}, "response_or_error": None, "latency_ms": 0})
+                "state_before": None, "state_after": {"verdict": "stranger" if stranger else "known"}, "response_or_error": None, "latency_ms": 0,
+                **adapters.label(chat)})
         log("chat", "VERDICT", by=hname(m["sender"]), verdict="stranger" if stranger else "known", text=m["text"][:60], acked_ms=acked["acked_ms"])
         if not stranger:
             self.say(f"ok:{m['guid']}", "ok, standing down", guid=chat)
@@ -390,16 +397,18 @@ class Listener:
         One watermark per chat: ROWIDs are global, so a shared one could skip a row landing between the two reads."""
         out: list[dict[str, Any]] = []
         for guid, after in list(self.marks.items()):
-            msgs = db.new_messages(guid, after)
+            msgs = adapters.for_target(guid).replies_since(guid, after)
             if msgs:
                 memory.store(guid, msgs)
                 self.marks[guid] = msgs[-1]["rowid"]
                 out += [{**m, "chat": guid} for m in msgs]
-        self.last = max(self.marks.values())
+        self.last = max((v for g, v in self.marks.items() if adapters.for_target(g).app == "imessage"), default=self.last)
         return sorted(out, key=lambda m: m["rowid"])
 
     def run(self, every: float = 2.0, once: bool = False) -> None:
-        log("chat", f"listen guid={self.guid}", oncall=self.oncall or "none", from_rowid=self.last, listen_s=self.listen_s, dry=self.dry,
+        a = adapters.for_target(self.oncall) if self.oncall else None
+        log("chat", f"listen guid={self.guid}", oncall=self.oncall or "none", adapter=(a.app + ("/stub" if a.stub else "")) if a else "none",
+            from_rowid=self.last, listen_s=self.listen_s, dry=self.dry,
             wake_phrases=len(wake_phrases()), commands=len(command_list()))
         while True:
             self.poll()

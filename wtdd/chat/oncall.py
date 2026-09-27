@@ -10,6 +10,9 @@ its guid's suffix, 248 with an empty name). The send gate (send.py) admits it by
 until the first live send: that AppleScript `chat id "any;-;<handle>"` resolves it (the group's `any;+;` form was
 verified 2026-09-13).
 
+The channel (item 12): WTDD_ON_CALL_CHANNEL=sms makes the target sms:<handle> (chat/adapters/sms.py, Twilio) instead
+of the 1:1; unset or imessage = the 1:1 above; anything else is a RuntimeError naming the key.
+
 The shift: every row of this item and every chat.post row carries args.shift_id = env WTDD_SHIFT, else today's local
 date YYYY-MM-DD. record_sign closes a shift with one ok record.signed row; the ledger is the record.
 
@@ -30,7 +33,13 @@ UTC = "%Y-%m-%d %H:%M:%S"   # chat.db's datetime(... 'unixepoch') text
 
 
 def guid(handle: str) -> str:
-    """The 1:1 chat with a handle, as chat.db (and, UNVERIFIED, AppleScript's chat id) names it."""
+    """The on-call target: the 1:1 chat as chat.db (and, UNVERIFIED, AppleScript's chat id) names it, or sms:<handle>
+    when WTDD_ON_CALL_CHANNEL=sms (item 12, chat/adapters/sms.py). Any other channel is a RuntimeError naming the key."""
+    ch = config.maybe("WTDD_ON_CALL_CHANNEL") or "imessage"
+    if ch == "sms":
+        return f"sms:{handle}"
+    if ch != "imessage":
+        raise RuntimeError(f"[wtdd:config] WTDD_ON_CALL_CHANNEL={ch!r}: imessage or sms")
     return f"any;-;{handle}"
 
 
