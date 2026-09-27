@@ -98,8 +98,9 @@ class State(unittest.TestCase):
         self.assertIn("footprint: unknown", s)
 
     def test_stop_name_is_words(self):
-        self.assertTrue(decide.stop_name(22).startswith("stop two"), decide.stop_name(22))   # ui/map.json stops [10, 22, 23]
-        self.assertIsNone(DIGIT.search(decide.stop_name(22)))
+        route = ROOT / "wtdd" / "fixtures" / "map_route.json"   # the old shipped route (stops [10, 22, 23]); ui/map.json now ships none
+        self.assertTrue(decide.stop_name(22, route).startswith("stop two"), decide.stop_name(22, route))
+        self.assertIsNone(DIGIT.search(decide.stop_name(22, route)))
         self.assertIsNone(DIGIT.search(decide.stop_name(None)))
 
 
