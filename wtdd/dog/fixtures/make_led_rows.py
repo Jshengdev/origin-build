@@ -13,6 +13,7 @@ from pathlib import Path
 
 from wtdd.config import ROOT
 
+# DEMO_CACHE: two stub dog.led rows (acked, code 7) for the dry screenshot's receipts, because a worktree has no dog; live: from the checkout with the API up, python -m wtdd dog_led color=cyan seconds=5 writes the real row.
 _LEDGER = os.environ.get("WTDD_LEDGER")
 if not _LEDGER or Path(_LEDGER).resolve() == (ROOT / "ledger.jsonl").resolve():
     sys.exit("make_led_rows: set WTDD_LEDGER to a scratch file, never <repo>/ledger.jsonl: these are stub receipts")
