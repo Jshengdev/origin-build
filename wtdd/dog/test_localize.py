@@ -402,6 +402,16 @@ class Session(unittest.TestCase):
         got = [(r["tool"], r["args"].get("windows")) for r in self.ledger.rows()[self.n0:]]
         self.assertEqual(got, [("pose.corrected", 3), ("dog.grid_clear", None)])
 
+    def test_a_clear_counts_the_windows_no_pose_corrected_row_will(self):
+        """Unmatched windows since the last pose.corrected row have no applied window to ride on and their counters
+        reset with the grid: the dog.grid_clear row counts them, so every window is in a row."""
+        with mock.patch.object(localize, "MIN_SCORE", 1.01):   # nothing clears the gate: every window is unmatched
+            self.assertEqual(self.feed_drift(), [])
+        self.s.grid_clear("test: four unmatched windows")
+        row = [r for r in self.ledger.rows() if r["tool"] == "dog.grid_clear"][-1]
+        self.assertEqual(row["args"].get("windows_since_pose_corrected"),
+                         {"windows": 4, "applied": 0, "rejected": 0, "unmatched": 4, "skipped": 0})
+
 
 class Page(unittest.TestCase):
     """S7: the receipts panel (ui/index.html) shows the 25 newest rows that are not pose.corrected, plus one line for the
