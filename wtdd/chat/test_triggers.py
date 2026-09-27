@@ -93,6 +93,23 @@ class Machine(unittest.TestCase):
             self.l.handle(_m("wtdd")); self.l.handle(_m("look"))
             self.assertEqual(self.posts[-1], ("res:" + self.posts[-1][0].split(":")[1], "here's what i see", "/tmp/x.jpg"))
 
+    def test_round_reply_is_the_tools_result(self):
+        """B17: "do a round" runs the real commands.run -> the dog_round tool, which answers {"result": ...} and no "text".
+        The reply is that result: a None here reached post_step as send_text(guid, ""), an empty bubble in the group."""
+        from wtdd.tools import dog_round
+        with mock.patch.object(dog_round, "run", return_value={"result": "round done: 3 steps"}):
+            self.l.handle(_m("what the dog doin")); m = _m("do a round"); self.l.handle(m)
+        self.assertEqual(self.posts[-2:], [(f"ack:{m['guid']}", "on it: do a round", None),
+                                           (f"res:{m['guid']}", "round done: 3 steps", None)])
+
+    def test_look_reply_through_the_tool_keeps_text_and_file(self):
+        """The photo reply through the same real path (the dog_look tool's shape): its text and file, never the raw dict."""
+        from wtdd.tools import dog_look
+        shot = {"text": "here's what i see", "file": "/tmp/x.jpg", "kind": "tilt", "pitch_deg": 15.0, "fired": True}
+        with mock.patch.object(dog_look, "run", return_value=shot):
+            self.l.handle(_m("wtdd")); m = _m("look"); self.l.handle(m)
+        self.assertEqual(self.posts[-1], (f"res:{m['guid']}", "here's what i see", "/tmp/x.jpg"))
+
 
 class Scratch(unittest.TestCase):
     def test_an_exported_ledger_and_memory_are_never_written(self):
