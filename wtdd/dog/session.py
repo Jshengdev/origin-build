@@ -511,8 +511,8 @@ class DogSession:
 
     def person_watch(self) -> None:
         """Starts the 'person-watch' thread once (07's objects-thread pattern): person_tick at halt.HZ until the session
-        loop is closed; a raise is logged each time it changes and is state().person_watch's why, never silent, never
-        fatal."""
+        loop is closed; a raise is logged once per change in each stretch of movement and is state().person_watch's
+        why, never silent, never fatal."""
         with DogSession._lock:   # several HTTP threads may start it at once: one thread
             if self._person_thread is None:
                 self._person_thread = threading.Thread(target=self._person_loop, name="person-watch", daemon=True)
@@ -522,11 +522,11 @@ class DogSession:
         while not self.loop.is_closed():
             try:
                 self.person_tick()
-            except Exception as e:  # noqa: BLE001  (logged once per change and on the page; the next tick tries again)
+            except Exception as e:  # noqa: BLE001  (logged once per change in each stretch and on the page; the next tick tries again)
                 err = f"person watch tick FAILED: {type(e).__name__}: {str(e)[:120]}"
-                if err != self._pw_fail:
+                if err != self._pw_last:   # _pw_last, which an idle tick clears: each stretch of movement logs its own
                     log("halt", "WARN " + err)
-                self._pw_fail = err
+                self._pw_fail = self._pw_last = err
             time.sleep(1 / halt.HZ)
 
     def person_tick(self) -> dict[str, Any] | None:
