@@ -19,7 +19,8 @@ def run(**kw):
     src, dst, save = kw.get("from"), kw["to"], kw.get("save", False)
     if src is None:
         import requests
-        d = requests.get("http://127.0.0.1:7788/dog/state", timeout=5).json()
+        from ..config import API
+        d = requests.get(f"{API}/dog/state", timeout=5).json()
         if not d.get("map"):
             raise ValueError("no from= and the dog has no map position; give from=x,y")
         a = d["map"]["p"]

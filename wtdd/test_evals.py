@@ -511,6 +511,30 @@ class Follow(unittest.TestCase):
         self.assertIn("WARN", err)
 
 
+class Twice(unittest.TestCase):
+    """B5: two runs of the twice scenario in the same second (a live grade run twice fast) each get their own wake guids
+    and claim key, so the second is not refused by the first's rows in memory.db. time.time is pinned to one second;
+    chat.db's max rowid is stubbed (offline: the Listener reads it at boot)."""
+
+    def test_two_runs_in_one_second_both_pass(self):
+        with mock.patch("time.time", return_value=1790481401.5), mock.patch("wtdd.chat.db.max_rowid", return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            first, second = evals.run_twice(), evals.run_twice()
+        self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
+        self.assertNotEqual(first[1]["detail"], second[1]["detail"])   # two claim keys
+
+    def test_two_processes_in_one_microsecond_both_pass(self):
+        """Two `python -m wtdd.evals --scenario twice` started together read the same time.time_ns() (this Mac's clock
+        is 1 us: seen once in four parallel pairs); the process id tells them apart. Two pids, one clock reading."""
+        with mock.patch("time.time_ns", return_value=1790513397114884000), mock.patch("wtdd.chat.db.max_rowid", return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with mock.patch("os.getpid", return_value=40001):
+                first = evals.run_twice()
+            with mock.patch("os.getpid", return_value=40002):
+                second = evals.run_twice()
+        self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
+
+
 class Dry(unittest.TestCase):
     """The verifying command: python -m wtdd.evals --scenario <s> runs dry on the fixture and says so."""
 
@@ -606,6 +630,35 @@ class Dry(unittest.TestCase):
         self.assertEqual([r["scenario"] for r in out[:2]], ["twice", "twice"])
         self.assertEqual(out[-1]["scenario"], "correct")
         self.assertEqual(written, out)
+
+
+class Unknown(unittest.TestCase):
+    """B3, B14 (CLEANUP-PLAN): a fail always says why, and an unknown reading is never named as a measured one. The live
+    scenarios are run here against stand-ins for the API and the look (no dog, no model)."""
+
+    def test_a_follow_that_ended_without_done_or_error_says_why(self):
+        state = {"follow": {"active": False, "i": 0, "n": 5, "reached": [0, 1], "stops": [], "error": None}, "map": {"p": [300, 1400]}}
+        scale = {"px_per_m": 108.5, "source": "default"}   # B13's GET /dog/scale, read once before the trial
+        post = mock.Mock(return_value=mock.Mock(json=lambda: {"ok": True}))
+        get = mock.Mock(side_effect=lambda url, **k: mock.Mock(json=lambda: scale if url.endswith("/dog/scale") else state))
+        root = _TMP / "follow-root"
+        (root / "ui").mkdir(parents=True, exist_ok=True)
+        (root / "ui" / "map.json").write_text(json.dumps({"path": [[300, 1400], [650, 1400]]}))   # the route it replays
+        if not (root / "wtdd").exists():
+            (root / "wtdd").symlink_to(Path(evals.__file__).resolve().parent)   # unsafe() reads the Hue zones there
+        with mock.patch.object(evals.config, "ROOT", root), mock.patch("requests.post", post), mock.patch("requests.get", get), \
+                contextlib.redirect_stderr(io.StringIO()):
+            res = evals.run_follow(1)
+        self.assertEqual(res[0]["grade"], "fail", res)
+        self.assertIn("without done", res[0]["why"], res)
+
+    def test_a_tilt_with_no_imu_pitch_is_graded_unverified_not_did_not_fire(self):
+        out = {"text": "a chair by the door", "fired": None, "pitch_deg": None, "person": False, "out_of_place": [], "vision_ms": 900}
+        with mock.patch("wtdd.tools.dog_say.look_and_see", return_value=out), contextlib.redirect_stderr(io.StringIO()):
+            res = evals.run_look(1, "chair", False)
+        self.assertEqual(res[0]["grade"], "fail", "an unverified nod never passes")
+        self.assertIn("unverified", res[0]["why"], res)
+        self.assertNotIn("did not fire", res[0]["why"], res)
 
 
 if __name__ == "__main__":

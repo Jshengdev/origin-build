@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import tools
-from .config import ROOT
+from .config import API, ROOT
 from .ledger import log, step
 
 MAP = Path(os.environ.get("WTDD_MAP", ROOT / "ui" / "map.json"))
@@ -124,9 +124,6 @@ def _publish(d: dict[str, Any] | None) -> None:
     tmp = FIELD.with_suffix(".tmp")
     tmp.write_text(json.dumps(d))
     os.replace(tmp, FIELD)
-
-
-API = "http://127.0.0.1:7788"
 
 
 def _dog() -> dict[str, Any]:

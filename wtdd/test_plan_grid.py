@@ -341,7 +341,8 @@ class _Harness(unittest.TestCase):
         self.enterContext(mock.patch.object(session, "GRID_FILE", self.grid_file))   # S13: memory, the saved map; none unless a test saves one
         s = self.s = session.DogSession()
         s.cal = dict(CAL)
-        s.body = types.SimpleNamespace(_avoid=True)
+        off = {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "age_ms": None, "frame": None, "points": None, "utlidar_pose": None}
+        s.body = types.SimpleNamespace(_avoid=True, lidar_points=lambda: off, state=lambda: None)   # Body's answers with the LiDAR off, before any state
         s._ensure = mock.AsyncMock(return_value=s.body)
         s._halt = mock.AsyncMock(return_value={})
         s.map_pose = lambda st=None: {"p": [round(self.believed[0]), round(self.believed[1])], "heading_deg": 0.0}

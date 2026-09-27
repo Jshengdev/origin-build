@@ -303,7 +303,7 @@ def choose(name: str, state: str, criteria: dict, instructions: str,
 
 def _jev(state: str, choices: list[str], describe: dict[str, str] | None = None, instructions: str | None = None) -> tuple[str, float, str, str]:
     """One System One Choice request over the labels; the reply's chosen label and the probability it gives that label.
-    describe/instructions default to a stop's (DESCRIBE, INSTRUCTIONS); wtdd/dispatch.py passes its own three choices.
+    describe/instructions default to a stop's (DESCRIBE, INSTRUCTIONS); 16's wtdd/dog/blobs.py passes its own over its LABELS.
     A thin wrapper over choose() with one `stop` question, kept for its callers (16's blobs, S6b's follower): (label, p,
     model, raw); a choice that was not offered is choose()'s ValueError."""
     got, model, raw = choose("stop", state, {c: (describe or DESCRIBE).get(c, c.replace("_", " ")) for c in choices},

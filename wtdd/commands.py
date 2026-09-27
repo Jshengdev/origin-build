@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+from .config import API
 from .ledger import step
 
 LOOK = Path("~/Pictures/wtdd/look.jpg").expanduser()
@@ -43,9 +44,8 @@ def _via_api(tool: str, **args: Any) -> Any | None:
     if os.environ.get("WTDD_API_PROCESS"):
         return None
     import requests
-    port = os.environ.get("WTDD_API_PORT", "7788")
     try:
-        r = requests.post(f"http://127.0.0.1:{port}/tools/{tool}", json=args, timeout=600)
+        r = requests.post(f"{API}/tools/{tool}", json=args, timeout=600)
     except requests.exceptions.ConnectionError:
         return None
     out = r.json()
