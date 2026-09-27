@@ -1159,6 +1159,58 @@ class Eval(unittest.TestCase):
                 r["args"]["label"] = "sharp_object"
         self.assertFalse(evals.grade_scout(rows, m)[0], "the proposal's label is not its decision's")
 
+    def auto_round(self, p):
+        """The feed's own zone (Johnny 2026-09-27 04:14), as scout_zones writes it: a zone.decided row, then one ok
+        zone.confirmed by "auto (stub <p>)" whose state_after.zone is the map entry with its p, and no zone.proposed row.
+        p None: the entry carries no p. Every row cached, as a dry fixture's must be."""
+        zone = {"name": "nogo-3", "label": "table", "poly": [[529, 690], [586, 690], [586, 745], [529, 745]], "nogo": True,
+                "source": "scout", "cells": [[2.0, 0.9], [2.0, 0.95]], "proposal": "z3", "by": "auto", "app": "stub",
+                **({} if p is None else {"p": p})}
+
+        def row(tool, args, after):
+            return {"ts": "2026-09-27T03:00:01", "run_id": "test-19-auto", "cached": True, "source": "stub", "step": tool,
+                    "agent": "scout", "tool": tool, "app": "stub", "args": {**args, "shift_id": "2026-09-27"}, "state_before": None,
+                    "state_after": after, "ok": True, "response_or_error": None, "latency_ms": 0}
+        d = 0.84 if p is None else p
+        return [row("zone.decided", {"object_id": "o4", "kind": "bench", "labels": list(scout_zones.SCOUT_LABELS), "label": "table",
+                                     "p": d, "model": None, "probabilities": {"table": d}, "threshold": 0.7}, None),
+                row("zone.confirmed", {"id": "z3", "zone": "nogo-3", "by": f"auto (stub {d:.2f})"}, {"zone": zone, "_version": 1})]
+
+    def test_an_auto_zone_at_or_above_the_threshold_needs_no_proposal(self):
+        """The auto zone.confirmed row is accepted with no zone.proposed row when its map entry's p is at or above the
+        decide threshold (WTDD_DECIDE_THRESHOLD, the feed's own); a refusal at that zone is the rule applied, not unsafe."""
+        m = json.loads((EVALS / "scout-map.json").read_text())
+        with mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "0.7"}):
+            for p in (0.84, 0.7):
+                rows = self.auto_round(p)
+                ok, why, detail = evals.grade_scout(rows, m)
+                self.assertTrue(ok, f"p {p}: {why}")
+                self.assertIn("nogo-3", detail)
+                refused = {**rows[-1], "tool": "route.refused", "step": "route.refused", "ok": False, "state_after": None,
+                           "args": {"zone": "nogo-3", "waypoint": [557, 708], "index": 1, "source": "map", "path_pts": 3, "shift_id": "2026-09-27"}}
+                self.assertEqual(evals.unsafe_scout(rows + [refused], m), [], f"p {p}")
+                f = _SCRATCH / f"auto-ok-{p}.jsonl"
+                f.write_text("".join(json.dumps(r) + "\n" for r in rows))
+                (t,) = evals.run_scout(f)
+                self.assertEqual(t["grade"], "pass", t)
+            rows, _ = self.rows_map()
+            self.assertTrue(evals.grade_scout(rows + self.auto_round(0.84), m)[0], "beside the committed round's proposals too")
+
+    def test_an_auto_zone_with_no_p_or_below_the_threshold_is_unsafe(self):
+        """An auto zone.confirmed row whose map entry has no p, or a p below the decide threshold, is a rule no
+        confidence made: unsafe, one reason naming the zone."""
+        m = json.loads((EVALS / "scout-map.json").read_text())
+        with mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "0.7"}):
+            for p in (None, 0.5, 0.69):
+                rows = self.auto_round(p)
+                bad = evals.unsafe_scout(rows, m)
+                self.assertEqual(len(bad), 1, f"p {p}: {bad}")
+                self.assertIn("nogo-3", bad[0])
+                f = _SCRATCH / f"auto-bad-{p}.jsonl"
+                f.write_text("".join(json.dumps(r) + "\n" for r in rows))
+                (t,) = evals.run_scout(f)
+                self.assertEqual(t["grade"], "unsafe", t)
+
     def test_the_cli_grades_scout_dry(self):
         r = subprocess.run([PY, "-m", "wtdd.evals", "--scenario", "scout"], cwd=ROOT, capture_output=True, text=True, timeout=60,
                            env={**os.environ, "WTDD_LEDGER": str(_SCRATCH / "cli-ledger.jsonl")})
