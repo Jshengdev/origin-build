@@ -9,20 +9,26 @@ cached true / source stub) and the table wtdd/livecheck/steps.json:
   Table    --list shows an `unchecked` step; --step on it exits 1 and says so; every entry is well formed; the items the
            goal names (01 02 03 04 06 07 09 14 15) each have at least one checked step.
   Verdict  livecheck.json is written per verdict with the goal's keys and rewritten by the next run.
-  Live     a row landing after the command started is graded within a second (a thread appends rows to a temp ledger;
-           rows written before the start are history and do not count: the tail starts at the end); a stub row never
-           passes a live (non-replay) step.
-  Draft    needs_the_dog_lines() on the two PR-body shapes (`**Needs the dog**` and `## Needs the dog`, fixtures trimmed from
-           PRs #5 and #4) yields the numbered lines of that section only; draft() makes steps with empty rows; the table's
-           titles for 01 and 04 are those lines verbatim; `--from-prs` (gh stubbed at open_prs) writes the draft, WARNs on
-           a PR with no section, and fails loud when gh fails.
+  Live     a row landing after the command started is graded within a second (a thread appends rows to a temp ledger and
+           the API's log lines to a temp log; rows written before the start are history and do not count: the tail starts
+           at the end); a stub row never passes a live (non-replay) step; a step with fatal_warns cannot PASS while the API
+           log stays silent (its regexes were never tried), a log line trailing the last row by a poll still passes, and a
+           step with no fatal_warns needs no API log at all.
+  Draft    needs_the_dog_lines() on the four PR-body shapes (`**Needs the dog**` and `## Needs the dog` with `1.` lines,
+           fixtures trimmed from PRs #5 and #4; steps numbered inside bold, `**<k> · text**` and `- **<item>.<k>** text`,
+           trimmed from PRs #14 and #15) yields the numbered lines of that section only; draft() makes steps with empty
+           rows; the table's titles for 01 and 04 are those lines verbatim; `--from-prs` (gh stubbed at open_prs) writes
+           the draft, WARNs on a PR with no section, and fails loud when gh fails; a usage error exits 1 (FAIL), never 2
+           (UNSAFE's code).
   Api      GET /livecheck serves livecheck.json with age_s (the remote's mono line), a stale waiting state is flagged,
            and with no file it says how to make one.
   Where    match() handles a plain value, gte/lte/in/re, and a missing path, and says which field failed.
   Rows     the table against the rows and log lines the branches write, each check seen failing on what it claims: 01.1
            grades frame_id from a dog.grid_save row and fails on a first lidar frame that is not odom (feat/01 refuses
-           only a frame_id that changes); 02.4 is UNSAFE when the first stop's decided lands before its watch.boxes;
-           14.3 passes a closed clockwise spin (feat/14 closes on the magnitude); a replay row with no readable ts WARNs.
+           only a frame_id that changes); 02.4 is UNSAFE when the first stop's decided lands before its watch.boxes, and
+           a FAIL, never an UNSAFE, when stop 1's watch.boxes or decided failed or its decided is a stub (the order was
+           right; stop 2's watch.boxes must not read as a misorder); 14.3 passes a closed clockwise spin (feat/14 closes on
+           the magnitude); a replay row with no readable ts WARNs.
 Nothing here touches a dog, the real ledger or the real livecheck.json: every path is a fixture or a temp file."""
 from __future__ import annotations
 import io
@@ -205,6 +211,11 @@ class Live(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def api_says(self, tool: str, path: str) -> None:
+        """The two stderr lines the API tees for one tool call: ledger.step's line, then log_message's request line."""
+        with self.log.open("a") as f:
+            f.write(f"[wtdd:dog] {tool} ok=True app=map ms=3 err=\n[wtdd:api] \"POST {path} HTTP/1.1\" 200 -\n")
+
     @staticmethod
     def live_row(ts: str, tool: str, args: dict, after) -> str:
         return json.dumps({"ts": ts, "run_id": "test", "cached": False, "source": "live", "step": tool, "agent": "dog", "tool": tool,
@@ -220,13 +231,16 @@ class Live(unittest.TestCase):
             time.sleep(0.4)
             with self.ledger.open("a") as f:
                 f.write(self.live_row("2026-09-27T21:00:00", "dog.calibrate", {"p": [1, 2], "heading_deg": 0.0}, {"map": {"p": [1, 2]}})); f.flush()
+                self.api_says("dog.calibrate", "/dog/calibrate")
                 time.sleep(0.3)
                 f.write(self.live_row("2026-09-27T21:00:03", "dog.grid_save", {"file": "ui/grid.json", "frames": 5, "frame_id": "odom", "resolution": 0.05, "cal_at": "x"},
                                       {"cells": 50, "frames": 5, "extent_m": {"x": [-3.2, 3.2], "y": [-3.2, 3.2]}})); f.flush()
+                self.api_says("dog.grid_save", "/dog/grid")
                 time.sleep(0.3)
                 f.write(self.live_row("2026-09-27T21:00:09", "dog.grid_save", {"file": "ui/grid.json", "frames": 60, "frame_id": "odom", "resolution": 0.05, "cal_at": "x"},
                                       {"cells": 900, "frames": 60, "extent_m": {"x": [-3.2, 6.4], "y": [-3.2, 3.2]}})); f.flush()
                 t_row.append(time.monotonic())
+                self.api_says("dog.grid_save", "/dog/grid")
 
         threading.Thread(target=land, daemon=True).start()
         t0 = time.monotonic()
@@ -250,6 +264,60 @@ class Live(unittest.TestCase):
         v, out, _ = run(step="01.3", ledger=self.ledger, log=self.log, timeout_s=3, out=self.out)
         self.assertEqual(v["verdict"], "FAIL")
         self.assertIn("tee -a logs/api.log", out, "the FAIL line says how to start the API so the log exists")
+
+    def test_a_silent_api_log_cannot_pass_a_step_that_reads_it(self):
+        """The API started without the tee: logs/api.log is yesterday's file and nothing new lands in it. 01.3's rows land,
+        its four fatal_warns are never tried, and a PASS here would be a green nobody checked."""
+        self.ledger.write_text("")
+
+        def land():
+            time.sleep(0.4)
+            with self.ledger.open("a") as f:
+                f.write(self.live_row("2026-09-27T21:00:00", "dog.calibrate", {"p": [1, 2]}, {})); f.flush()
+                f.write(self.live_row("2026-09-27T21:00:03", "dog.grid_save", {"frames": 5, "frame_id": "odom"}, {"cells": 50})); f.flush()
+                f.write(self.live_row("2026-09-27T21:00:09", "dog.grid_save", {"frames": 60, "frame_id": "odom"}, {"cells": 900})); f.flush()
+
+        threading.Thread(target=land, daemon=True).start()
+        v, out, _ = run(step="01.3", ledger=self.ledger, log=self.log, timeout_s=8, out=self.out)
+        self.assertEqual(v["verdict"], "FAIL", out)
+        last = out.strip().splitlines()[-1]
+        self.assertTrue(last.startswith(f"FAIL 01.3 · the API log {self.log} was silent while 3 rows landed: fatal_warns never read"), last)
+        self.assertIn("tee -a logs/api.log", last, "the FAIL line says how to start the API so the log is written")
+
+    def test_a_log_line_trailing_the_last_row_still_passes(self):
+        """ledger.step appends the row, then logs its line: the check may read the row a poll before the line lands."""
+        self.ledger.write_text("")
+
+        def land():
+            time.sleep(0.4)
+            with self.ledger.open("a") as f:
+                f.write(self.live_row("2026-09-27T21:00:30", "dog.scout", {"z_rad_s": 0.5},
+                                      {"frames": 40, "cells_added": 300, "cb_errors_during": 0, "closed": True})); f.flush()
+            time.sleep(0.5)
+            self.api_says("dog.scout", "/dog/scout")
+
+        threading.Thread(target=land, daemon=True).start()
+        v, out, _ = run(step="14.1", ledger=self.ledger, log=self.log, timeout_s=8, out=self.out)
+        self.assertEqual(v["verdict"], "PASS", out)
+
+    def test_a_step_without_fatal_warns_needs_no_api_log(self):
+        """02.2 runs the decide CLI outside the API: its row is the whole check, and no API log is read."""
+        self.log.unlink()
+        self.ledger.write_text("")
+        row = {"ts": "2026-09-27T21:01:00", "run_id": "test", "cached": False, "source": "live", "step": "decided", "agent": "decide",
+               "tool": "decided", "app": "openrouter", "args": {"stop": None, "threshold": 0.7}, "state_before": {"labels": ["clear"]},
+               "state_after": {"label": "clear", "p": 0.62, "needs_person": True, "model": "typesafe/jev-1.13-2026-09-01"},
+               "ok": True, "response_or_error": "{}", "latency_ms": 900}
+
+        def land():
+            time.sleep(0.4)
+            with self.ledger.open("a") as f:
+                f.write(json.dumps(row) + "\n")
+
+        threading.Thread(target=land, daemon=True).start()
+        v, out, _ = run(step="02.2", ledger=self.ledger, log=self.log, timeout_s=5, out=self.out)
+        self.assertEqual(v["verdict"], "PASS", out)
+        self.assertFalse(self.log.exists())
 
 
 class Draft(unittest.TestCase):
@@ -290,6 +358,35 @@ class Draft(unittest.TestCase):
         self.assertTrue(all(s["rows"] == [] for s in steps))
         self.assertEqual([s["pr"] for s in steps[::8]], [5, 4])
         self.assertTrue(any("WARN" in l and "#99" in l for l in err.splitlines()), "a PR with no Needs-the-dog lines is a WARN, not a silence")
+
+    def test_steps_numbered_inside_bold(self):
+        """PR #14 (item 20) numbers its steps as bold lines, `**1 · Start the API ...**`; PR #15 (item 26) as `- **26.1** text`;
+        PR #16 (item 24) as `- **24.1 · text.**`. A bold line that starts with a step number is a step, not the section's end."""
+        lines = livecheck.needs_the_dog_lines((FIX / "pr-body-20.md").read_text())
+        self.assertEqual([k for k, _ in lines], ["0", "1", "2", "3", "4", "5"])
+        self.assertEqual(lines[0][1], "First, add `WTDD_MODE=house` to `.env` (the two lines under `# 20 · mode-vocabulary` in `.env.example`).")
+        self.assertEqual(lines[1][1], "Start the API with `python -m wtdd.api`.")
+        self.assertEqual(lines[4][1], "20.1 on Sunday.")
+        lines = livecheck.needs_the_dog_lines((FIX / "pr-body-26.md").read_text())
+        self.assertEqual([k for k, _ in lines], ["1", "2", "3", "4", "5"], "the indented 1. 2. 3. under 26.1 are not steps")
+        self.assertTrue(lines[0][1].startswith("After the first live `dog.calibrate`, open the remote"), lines[0])
+        self.assertTrue(lines[3][1].startswith("(a known limit) On the tablet, check whether"), lines[3])
+        for name in ("pr-body-20.md", "pr-body-26.md"):
+            self.assertFalse(any("cut from this fixture" in t for _, t in livecheck.needs_the_dog_lines((FIX / name).read_text())), name)
+        body = "**Needs the dog**\n\n- **0 · before every step:**\n  - a sub-bullet\n- **24.1 · the six keys and the state line.**\n- **Extra · not a step.**\n"
+        self.assertEqual(livecheck.needs_the_dog_lines(body), [("0", "before every step:"), ("1", "the six keys and the state line.")])
+        steps = livecheck.draft([{"number": 15, "title": "26 · Every row has a tick ...", "body": (FIX / "pr-body-26.md").read_text()}])
+        self.assertEqual([s["step"] for s in steps], [f"26.{k}" for k in range(1, 6)])
+
+    def test_a_usage_error_is_a_fail_not_an_unsafe(self):
+        """argparse exits 2 on a usage error, UNSAFE's code: a typo must read as a FAIL (1)."""
+        from wtdd.livecheck import __main__ as m
+        for argv in (["--stp", "01.3"], []):
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err), self.assertRaises(SystemExit) as e:
+                m.main(argv)
+            self.assertEqual(e.exception.code, 1, f"{argv}: {out.getvalue()} {err.getvalue()}")
+            self.assertTrue(out.getvalue().startswith("FAIL usage · "), f"{argv}: {out.getvalue()!r}")
 
     def test_cli_from_prs_fails_loud_when_gh_fails(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(livecheck, "open_prs", side_effect=RuntimeError("gh pr list failed: not logged in")):
@@ -419,6 +516,44 @@ class Rows(unittest.TestCase):
         self.assertEqual(v["verdict"], "UNSAFE", "the same rows with the stop's decided before its watch.boxes: " + out)
         self.assertTrue(out.strip().splitlines()[-1].startswith("UNSAFE 02.4 · watch.boxes after decided · "), out)
         self.assertEqual(v["deciding_row"]["ts"], "2026-09-27T21:00:02")
+
+    def live(self, step: str, rows: list[dict], log: str = "", **kw):
+        """The rows as a live ledger read from its first line (--from-start): the stub rule is on, as on the dog."""
+        self.ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        self.log.write_text(log)
+        return run(step=step, ledger=self.ledger, log=self.log, from_start=True, timeout_s=5, out=self.out, **kw)
+
+    def stop_rows(self):
+        """feat/02-decide's rows at a stop (dog_say.look_and_see): watch.boxes on the floor frame, then decided; a picked room
+        frame is boxed again after decided. A failed step is its own row with ok false (ledger.step)."""
+        boxes = lambda s, ok=True: self.r(s, "watch.boxes", "watch", {"file": "look-down.jpg"}, {"n": 1} if ok else None, app="yolo", ok=ok,
+                                          response_or_error=None if ok else "RuntimeError: detector rc=1: ")
+        dec = lambda s, stop, ok=True: self.r(s, "decided", "decide", {"stop": stop},
+                                              {"label": "clear", "p": 0.91, "model": "typesafe/jev-1.13-2026-09-01"} if ok else None,
+                                              app="openrouter", ok=ok, response_or_error=None if ok else "HTTPError: HTTP Error 404: Not Found")
+        stub = lambda s, stop: self.r(s, "decided", "decide", {"stop": stop}, {"label": "clear", "p": 0.8, "model": "stub"},
+                                      app="stub", cached=True, source="stub")
+        return boxes, dec, stub
+
+    def test_02_4_a_stub_decided_at_stop_1_is_a_fail_not_an_unsafe(self):
+        boxes, _, stub = self.stop_rows()
+        v, out, _ = self.live("02.4", [boxes(0), stub(2, 1), boxes(10), stub(12, 2)])
+        self.assertEqual(v["verdict"], "FAIL", "no JEV_API_KEY: the order was right, the decision was the stub's: " + out)
+        self.assertTrue(out.strip().splitlines()[-1].startswith("FAIL 02.4 · stub row cannot pass a live step · "), out)
+        self.assertEqual(v["deciding_row"]["ts"], "2026-09-27T21:00:02", "stop 1's stub decided decides, not stop 2's watch.boxes")
+
+    def test_02_4_a_failed_stop_1_is_a_fail_not_an_unsafe(self):
+        boxes, dec, _ = self.stop_rows()
+        v, out, _ = self.live("02.4", [boxes(0, ok=False), dec(2, 1), boxes(10), dec(12, 2)])
+        self.assertEqual(v["verdict"], "FAIL", "stop 1's detector failed, its order was right: " + out)
+        self.assertTrue(out.strip().splitlines()[-1].startswith("FAIL 02.4 · watch.boxes failed: row 1/2 wants watch.boxes ok · "), out)
+        self.assertEqual(v["deciding_row"]["ts"], "2026-09-27T21:00:00")
+        v, out, _ = self.live("02.4", [boxes(0), dec(2, 1, ok=False), boxes(3), boxes(10)])
+        self.assertEqual(v["verdict"], "FAIL", "stop 1's Jev call failed (a 404), then the picked frame was boxed: " + out)
+        self.assertTrue(out.strip().splitlines()[-1].startswith("FAIL 02.4 · decided failed: row 2/2 wants decided ok · "), out)
+        self.assertEqual(v["deciding_row"]["ts"], "2026-09-27T21:00:02")
+        v, out, _ = self.live("02.4", [dec(0, 1), boxes(2), dec(10, 2), boxes(12)])
+        self.assertEqual(v["verdict"], "UNSAFE", "the misorder itself, live, is still UNSAFE: " + out)
 
     def test_14_3_a_clockwise_spin_that_closed_passes(self):
         want = livecheck.load_steps()["14.3"]["rows"][0]
