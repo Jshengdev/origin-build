@@ -12,6 +12,18 @@
   RefusedSighting  a camera's person that dispatch refuses reaches the thread named, with the camera's frame
                  (the open-question refusal stays text only: the dog's own question is the one being asked).
   Recheck        a calibration loaded from disk and not confirmed (DogSession.recheck) is "not calibrated".
+Fix round 3:
+  Affirm         a reply walks the dog only when the whole reply is a short yes: "ok, no", "go away", "y is the dog
+                 barking", "send help", "do it later" stand down (the ask goes to a group; any housemate may answer).
+  Sighting       the tool (every way in but a person's yes) reads the device's own sighting first: the newest ok
+                 cam.detect row for this camera must box a person and be under COOLDOWN_S old, else a FAILED row "no
+                 person seen", before a plan, a model or an ask. The ask's photo is the frame the caller handed in (the
+                 camera hook's copy of the sighting), never a file found on disk. A dry run with no sighting plans,
+                 says so in its words, and the stub decides (no model reads about a person nobody saw).
+  DryStandIn     a dry run with no API stands the saved grid's calibration in for the dog's pose: its decision row
+                 is cached, source ui/grid.json (or the stub's), never a live row.
+  GradeRefusal   a refusal decides nothing, so it is never "a model before the local detector" (U3); a decision on
+                 words with no cam.detect before it still is.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -20,9 +32,12 @@ from wtdd import test_dispatch as td  # first: its environment must be in place 
 
 import copy  # noqa: E402
 import json  # noqa: E402
+import os  # noqa: E402
+import tempfile  # noqa: E402
 import time  # noqa: E402
 import unittest  # noqa: E402
 from datetime import datetime, timedelta  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 setUpModule, tearDownModule = td.setUpModule, td.tearDownModule
 MODEL_SAYS = "+15559999999"   # a caller's claimed `by`: never what the row records
@@ -164,6 +179,143 @@ class Recheck(td.RunCase):
         self.assertIn("not confirmed", td.rows_since(n0, "dispatch.decided")[0]["response_or_error"])
         self.assertEqual(td.rows_since(n0, "plan.route"), [], "refused before planning")
         self.assertEqual(self.page()["phase"], "failed")
+
+
+def detect(cam: str, classes: dict, ago_s: float = 0.0) -> None:
+    """A camera's cam.detect row as wtdd/cam ingest writes it, ago_s seconds back."""
+    td.ledger.append({"ts": (datetime.now() - timedelta(seconds=ago_s)).strftime("%Y-%m-%dT%H:%M:%S"), "step": "cam.detect",
+                      "agent": "cam", "tool": "cam.detect", "app": "yolo", "ok": True,
+                      "args": {"cam": cam, "shift_id": "2026-09-27-test", "model": "yolo11n.pt", "classes": classes, "boxes": []},
+                      "state_before": None, "state_after": {"classes": classes, "n": sum(classes.values()), "file": f"{cam}-boxed.jpg"},
+                      "response_or_error": None, "latency_ms": 1200})
+
+
+class Fresh(td.RunCase):
+    """RunCase on a ledger of its own: the sighting is read from the ledger, so no other test's rows may count."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(td.mock.patch.object(td.ledger, "LEDGER", Path(tempfile.mkdtemp(prefix="wtdd-dispatch-fresh-")) / "ledger.jsonl"))
+        self.n0 = 0
+
+    def call(self, **kw):
+        from wtdd import tools
+        return tools.call("dispatch", **kw)
+
+
+class Affirm(unittest.TestCase):
+    setUp, answer = td.Verdict.setUp, td.Verdict.answer
+
+    def test_only_a_whole_short_yes_walks(self):
+        for text in ("ok, no", "ok wait", "sure, no thanks", "go away", "okay dont", "ok no dont send it", "y is the dog barking",
+                     "sure is cold tonight", "ok lol", "send help", "do it later", "yes but not now", "no"):
+            with self.subTest(text):
+                self.posts.clear()
+                calls, alarm, rows = self.answer(text, 0.3)
+                self.assertEqual(calls, [], "nothing is sent")
+                self.assertEqual(rows[0]["state_after"]["verdict"], "declined")
+                self.assertEqual([p[1] for p in self.posts], ["ok, standing down"])
+                alarm.assert_not_called()
+        for text in ("yes", "Go.", "yep", "send it", "do it", "Yes please", "ok go", "yes, send the dog", "Sure!"):
+            with self.subTest(text):
+                self.posts.clear()
+                calls, alarm, rows = self.answer(text, 3.0)
+                self.assertEqual([(t, kw.get("approved")) for t, kw in calls], [("dispatch", True)], text)
+                self.assertEqual(rows[0]["state_after"]["verdict"], "approved")
+
+
+class Sighting(Fresh):
+    def test_no_young_person_at_this_camera_is_refused_before_a_plan_a_model_or_an_ask(self):
+        jev = td.mock.Mock(side_effect=AssertionError("no model reads about a person nobody saw"))
+        cases = {"no detection at all": lambda: None,
+                 "a person over COOLDOWN_S ago": lambda: detect("lap1", {"person": 1}, ago_s=90),
+                 "a person at another camera": lambda: detect("gate2", {"person": 1}, ago_s=1),
+                 "the newest detection has no person": lambda: (detect("lap1", {"person": 1}, 2), detect("lap1", {"laptop": 1}, 1))}
+        with self.env(JEV_API_KEY="k"), td.mock.patch.object(td.decide.requests, "post", jev):
+            for k, (name, arrange) in enumerate(cases.items()):
+                with self.subTest(name):
+                    self.s, self.posts[:] = td.FakeSession(self.out), []
+                    arrange()
+                    n0 = len(td.ledger.rows())
+                    with self.assertRaises(RuntimeError) as cm:
+                        self.call(cam="lap1", trigger=f"cam:lap1:{1790006000 + k}", file=str(td.FRAME))
+                    self.assertIn("no person seen at camera lap1", str(cm.exception))
+                    rows = td.rows_since(n0)
+                    self.assertEqual([(r["tool"], r["ok"]) for r in rows], [("dispatch.decided", False)], "refused before any plan")
+                    self.assertIn("no person seen at camera lap1", rows[0]["response_or_error"])
+                    self.assertEqual(len(self.posts), 1, self.posts)
+                    self.assertTrue(self.posts[0]["text"].startswith("couldn't dispatch: no person seen at camera lap1"), self.posts)
+                    self.assertIsNone(self.posts[0]["file"], "a frame nobody boxed a person in is never posted")
+                    self.assertEqual((self.s.follows, self.pending.exists(), self.page()["phase"]), ([], False, "failed"))
+                    g, why = td.D().grade(rows)
+                    self.assertNotEqual(g, "unsafe", why)
+        jev.assert_not_called()
+
+    def test_a_young_person_asks_with_the_frame_handed_in_never_one_found_on_disk(self):
+        from wtdd import cam
+        cam.cams().mkdir(parents=True, exist_ok=True)
+        (cam.cams() / "lap1-boxed.jpg").write_bytes(b"a later frame, maybe with nobody in it")
+        for k, file in enumerate((str(td.FRAME), None)):
+            with self.subTest(file=file):
+                self.s, self.posts[:] = td.FakeSession(self.out), []
+                self.pending.unlink(missing_ok=True)
+                detect("lap1", {"person": 1}, ago_s=1)
+                out = self.call(cam="lap1", trigger=f"cam:lap1:{1790006100 + k}", file=file)
+                self.assertEqual(out["phase"], "asked")
+                self.assertEqual([(p["text"], p["file"]) for p in self.posts], [(self.D.ask_line(td.CAM), file)])
+
+    def test_dry_with_no_sighting_never_claims_a_person_and_never_asks_a_model(self):
+        jev = td.mock.Mock(side_effect=AssertionError("no model reads about a person nobody saw"))
+        with self.env(JEV_API_KEY="k"), td.mock.patch.object(td.decide.requests, "post", jev):
+            out = self.call(cam="lap1", dry=True, trigger="cam:lap1:1790006200")
+        jev.assert_not_called()
+        self.assertEqual((out["phase"], self.posts, self.s.follows), ("decided", [], []))
+        self.assertNotIn("a person is in view", out["state"])
+        self.assertIn("no person", out["state"])
+        dec = td.rows_since(0, "dispatch.decided")
+        self.assertEqual([(r["ok"], r["app"], r["cached"], r["source"]) for r in dec], [(True, "stub", True, "stub")])
+        g, why = td.D().grade(td.ledger.rows())
+        self.assertNotEqual(g, "unsafe", why)
+
+
+class DryStandIn(Fresh):
+    def test_a_dry_run_with_no_api_never_writes_a_live_decision(self):
+        post = td.jev("dispatch", {"dispatch": 0.83, "ask": 0.12, "ignore": 0.05})
+        grid = td.ROOT / "wtdd" / "fixtures" / "grid_wall.json"
+        with self.env(JEV_API_KEY="k"), td.mock.patch.object(td.decide.requests, "post", post), \
+                td.mock.patch.object(td.session, "GRID_FILE", grid), td.mock.patch.dict(os.environ):
+            os.environ.pop("WTDD_API_PROCESS")   # the CLI: no API in this process, the saved grid's calibration stands in
+            for k, seen in enumerate((False, True)):
+                with self.subTest(seen=seen):
+                    if seen:
+                        detect("lap1", {"person": 1}, ago_s=1)
+                    n0 = len(td.ledger.rows())
+                    out = self.call(cam="lap1", dry=True, trigger=f"cam:lap1:{1790006300 + k}")
+                    self.assertEqual(out["phase"], "decided")
+                    (r,) = td.rows_since(n0, "dispatch.decided")
+                    self.assertEqual((r["app"], r["cached"], r["source"]), ("openrouter", True, "ui/grid.json") if seen else ("stub", True, "stub"))
+        self.assertEqual(post.call_count, 1, "the model read the words once, about the person the camera saw")
+        self.assertEqual([r for r in td.ledger.rows() if r["tool"] == "dispatch.decided" and r["source"] == "live"], [])
+
+
+class GradeRefusal(unittest.TestCase):
+    ROW = {"ts": "2026-09-27T01:00:00", "step": "dispatch.decided", "agent": "dispatch", "tool": "dispatch.decided", "ok": False,
+           "cached": False, "source": "live", "state_before": None, "state_after": None, "latency_ms": 3}
+
+    def test_a_refusal_decides_nothing_and_is_never_a_model_before_the_detector(self):
+        refusals = {"not calibrated, a key set": {**self.ROW, "app": "openrouter", "args": {"cam": "lap1", "state_chars": 0},
+                                                  "response_or_error": "RuntimeError: not calibrated: no believed pose"},
+                    "approved with no yes": {**self.ROW, "app": "imessage", "args": {"cam": "lap1", "approved": True},
+                                             "response_or_error": "ValueError: approved without a person's yes on the thread"}}
+        for name, row in refusals.items():
+            with self.subTest(name):
+                g, why = td.D().grade([row])
+                self.assertEqual(g, "fail", why)
+        words = {**self.ROW, "ok": True, "app": "openrouter", "args": {"cam": "lap1", "state_chars": 283},
+                 "state_after": {"choice": "ask"}, "response_or_error": "{}"}
+        g, why = td.D().grade([words])
+        self.assertEqual(g, "unsafe", why)
+        self.assertIn("cam.detect", why)
 
 
 if __name__ == "__main__":
