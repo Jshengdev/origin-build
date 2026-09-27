@@ -11,8 +11,10 @@ process that holds the dog it schedules hold() on the session loop and returns; 
 one WARN and no row (in this process a light never triggers a connect; the listener's hook reaches the API's dog_led
 tool, which connects like any tool call and, on an unreachable dog, writes its dog.probe row); in any other process (the
 listener, intruder_alarm by hand) it posts the dog_led tool to the API on a daemon thread (_post_api); a process that
-exits right after its hook waits up to POST_WAIT_S for that post, then says it went unconfirmed (one WARN), so a
-light is never dropped silently and an exit never hangs on it. hold() sends one request of time_s()
+exits right after its hook waits up to POST_WAIT_S for that post, or, outside the API, for the first request of a hold()
+on its own session loop (`python -m wtdd walk_path` with no API up: the follow's end hooks green, then the process
+exits), then says it went unconfirmed (one WARN naming the unwritten dog.led row), so a light is never dropped
+silently and an exit never hangs on it. hold() sends one request of time_s()
 seconds (Body.led: one dog.led row each) and a keeper task resends it every time_s() until the state's HOLD_S is
 covered, the k-th at first send + k*time_s() (a request that waits on a slow 1006 read-back never stretches the period);
 a newer state cancels the keeper, and a refused request is never resent. Imports stdlib, config and the ledger only: the
@@ -25,6 +27,7 @@ bounds, whether 1006 answers.
 from __future__ import annotations
 import asyncio
 import atexit
+import concurrent.futures as futures
 import math
 import os
 import sys
@@ -37,8 +40,8 @@ from ..ledger import log
 
 COLOURS = {"scanning": "cyan", "asking": "red", "halted": "red", "clear": "green"}   # the head's table
 HOLD_S = {"scanning": 120.0, "asking": 120.0, "halted": 30.0, "clear": 5.0}         # asking = intruder_alarm.PENDING_WINDOW_S; clear is one request
-POST_WAIT_S = 10.0   # at exit, the hook's posts still out get this long: a connected dog answers 1007 and 1006 within 2 x REQ_TIMEOUT_S (6 s)
-_POSTS: dict[threading.Thread, tuple[str, str]] = {}   # the hook's posts in flight: thread -> (state, colour)
+POST_WAIT_S = 10.0   # at exit, the hook's posts and holds still out get this long: a connected dog answers 1007 and 1006 within 2 x REQ_TIMEOUT_S (6 s)
+_POSTS: dict[Any, tuple[str, str]] = {}   # the hook's work in flight: a post's thread, or (outside the API) a hold()'s future -> (state, colour)
 
 
 def time_s() -> float:
@@ -83,6 +86,8 @@ def hook(state: str) -> None:
         s = sess.DogSession._inst if sess else None
         if s is not None and s.body is not None:
             fut = asyncio.run_coroutine_threadsafe(hold(s.body, color, seconds), s.loop)
+            if not os.environ.get("WTDD_API_PROCESS"):   # a CLI holding the dog may exit first; its loop is a daemon thread
+                _POSTS[fut] = (state, color)
             fut.add_done_callback(lambda f: _done(f, state, color))
         elif os.environ.get("WTDD_API_PROCESS"):
             log("dog", f"WARN led {state} ({color}) skipped: the dog is not connected")
@@ -95,6 +100,7 @@ def hook(state: str) -> None:
 
 
 def _done(fut: Any, state: str, color: str) -> None:
+    _POSTS.pop(fut, None)
     if not fut.cancelled() and fut.exception() is not None:
         e = fut.exception()
         log("dog", f"WARN led {state} ({color}) not shown (its dog.led row says why)", err=f"{type(e).__name__}: {str(e)[:100]}")
@@ -112,14 +118,20 @@ def _via(state: str, color: str, seconds: float) -> None:
 
 @atexit.register
 def _drain() -> None:
-    """At exit, waits up to POST_WAIT_S for the hook's posts still out: a daemon thread dies with the process, and a
-    process that exits right after its hook (intruder_alarm by hand, `wtdd.chat simulate`) would drop the light with no
-    row and no word. One still out after the wait is a WARN; its row, if the API gets there, is in the API's ledger."""
+    """At exit, waits up to POST_WAIT_S for the hook's posts and holds still out: a daemon thread (a post's, or the
+    session loop's) dies with the process, and a process that exits right after its hook (intruder_alarm by hand,
+    `wtdd.chat simulate`, walk_path with no API up) would drop the light, or leave the dog's ack with no row, and say
+    nothing. One still out after the wait is a WARN: a post's row, if the API gets there, is in the API's ledger; a
+    hold's row is never written."""
     end = time.monotonic() + POST_WAIT_S
-    for th, (state, color) in list(_POSTS.items()):
-        th.join(max(0.0, end - time.monotonic()))
-        if th.is_alive():
-            log("dog", f"WARN led {state} ({color}) unconfirmed: this process exited before the API answered", waited_s=POST_WAIT_S)
+    for w, (state, color) in list(_POSTS.items()):
+        left = max(0.0, end - time.monotonic())
+        if isinstance(w, threading.Thread):
+            w.join(left)
+            if w.is_alive():
+                log("dog", f"WARN led {state} ({color}) unconfirmed: this process exited before the API answered", waited_s=POST_WAIT_S)
+        elif futures.wait([w], left).not_done:
+            log("dog", f"WARN led {state} ({color}) unconfirmed: this process exited before the dog answered, its dog.led row unwritten", waited_s=POST_WAIT_S)
 
 
 def _post_api(color: str, seconds: float) -> Any:
