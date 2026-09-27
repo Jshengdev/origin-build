@@ -16,6 +16,8 @@ What it checks, each against the goal's words:
     and the sport state when the topic is silent; a non-zero code is a FAILED row and .say.error; stub rows are labeled;
   - the speaker never blocks the ask: a fake ask that posts then says returns its post while the say fails on its own
     thread; the two hooks (intruder_alarm's ask, the listener's stand-down) speak after the post, and not in dry mode;
+    a first say's render never stalls the body's loop; with the speaker unimportable, the stranger alarm still sounds
+    and the ask is still posted and armed (neither waits on the speaker's import);
   - the uuid cache round-trips; a cached line plays without a list or an upload; a listed line is never re-uploaded;
   - GET /dog/state .say carries age_s; WTDD_STATE_FIXTURE serves a planted state marked source "stub";
   - `say` is a tool (python -m wtdd list) and dog_say is untouched.
@@ -23,6 +25,7 @@ What it checks, each against the goal's words:
 from __future__ import annotations
 import asyncio
 import base64
+import contextlib
 import hashlib
 import importlib
 import importlib.util
@@ -387,6 +390,76 @@ class NeverBlocks(Base):
                  mock.patch("wtdd.dog.audio.after", side_effect=lambda text, *a_, **k: calls.append(("say", text))):
                 self.assertTrue(listener(dry).verdict({"sender": "+15550000000", "text": "that's my roommate", "guid": f"g-{dry}"}))
             self.assertEqual(calls, want, f"dry={dry}")
+
+    def test_a_first_say_never_stalls_the_body_loop(self):
+        """The render (say + ffmpeg, about a second on this Mac) runs off the loop that also carries the drive's
+        10 Hz Move and its StopMove: a ticker on the same loop never waits more than 0.3 s during a first say."""
+        a, b = self.a, stub_body()
+
+        def slow(text, out):
+            time.sleep(1.0)
+            return copy_fixture(text, out)
+
+        async def go() -> float:
+            gaps: list[float] = []
+
+            async def tick():
+                last = time.monotonic()
+                while True:
+                    await asyncio.sleep(0.02)
+                    gaps.append(time.monotonic() - last)
+                    last = time.monotonic()
+            t = asyncio.create_task(tick())
+            await asyncio.sleep(0.05)
+            try:
+                await b.say(ASK, cache=self.cache)
+            finally:
+                t.cancel()
+            return max(gaps)
+        with mock.patch.object(a, "render", side_effect=slow) as render:
+            worst = asyncio.run(go())
+            render.assert_called_once()
+        self.assertLess(worst, 0.3, f"the render held the body's loop for {worst:.2f} s")
+
+    def unimportable_speaker(self):
+        """wtdd.dog.audio cannot be imported (a broken SDK install): the paths below must not need it before the post."""
+        import wtdd.dog as pkg
+        import wtdd.tools.light_alarm  # noqa: F401  (imported before sys.modules is snapshotted and restored)
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.dict(sys.modules, {"wtdd.dog.audio": None}))
+        stack.enter_context(mock.patch.object(pkg, "audio"))   # restored on exit
+        del pkg.audio
+        return stack
+
+    def test_the_stranger_alarm_never_waits_on_the_speaker(self):
+        from wtdd.chat import listen
+        calls: list[tuple[str, str]] = []
+        pend = self.tmp / "pending.json"
+        pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "trigger": "intruder-1", "seconds": 5}))
+        L = listen.Listener.__new__(listen.Listener)   # no chat.db: only what verdict() reads
+        L.guid, L.dry, L.armed_until, L.armed_by = "any;+;test", False, 0.0, None
+        L.post = lambda guid, key, kind, text, file: calls.append(("post", text))
+        with mock.patch.object(listen, "PENDING", pend), \
+             mock.patch("wtdd.tools.call", side_effect=lambda name, **kw: calls.append(("tool", name)) or {"signaled": [], "errors": []}), \
+             self.unimportable_speaker():
+            self.assertTrue(L.verdict({"sender": "+15550000000", "text": "idk", "guid": "g-idk"}))
+        self.assertEqual([c[0] for c in calls], ["post", "tool"])
+        self.assertIn("STRANGER DANGER", calls[0][1])
+        self.assertEqual(calls[1], ("tool", "light_alarm"))
+
+    def test_the_ask_is_posted_and_armed_before_the_speaker_is_imported(self):
+        calls: list[tuple[str, str]] = []
+        frame = self.tmp / "frame.jpg"
+        frame.write_bytes(b"\xff\xd8\xff\xd9")
+        from wtdd.tools import intruder_alarm
+        with mock.patch("wtdd.commands.look", return_value={"file": str(frame), "pitch_deg": 0.0}), \
+             mock.patch("wtdd.tools.dog_say.boxed", return_value={"file": str(frame), "classes": ["person"]}), \
+             mock.patch("wtdd.tools.chat_post.run", side_effect=lambda **kw: calls.append(("post", kw.get("text"))) or {"rowid": 42}), \
+             mock.patch("wtdd.config.ROOT", self.tmp), self.unimportable_speaker():
+            with self.assertRaises(ImportError):   # loud, on the intruder.alarm row, after the ask is in the thread
+                intruder_alarm.run(ask=True)
+        self.assertEqual(calls, [("post", ASK)])
+        self.assertEqual(json.loads((self.tmp / "pending.json").read_text())["kind"], "who_dis")
 
 
 class Served(Base):
