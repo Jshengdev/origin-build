@@ -29,7 +29,7 @@
                                   per new frame number; the response ends when the newest frame is older than FRAME_STALE_S,
                                   503 {error} before any part. It and /dog/frame.jpg carry X-Frame-Sha (sha256 of the JPEG)
                                   and X-Frame-N, one shared encode per frame (Body.jpeg_cached); /dog/state gains video {fps,
-                                  age_ms, bytes, w, h, frames, n, sha, stale, source}; /watch gains frames_behind (29).
+                                  age_ms, bytes, w, h, frames, n, sha, stale, gaps, source}; /watch gains frames_behind (29).
                                   Each stream adds one stderr line when it ends, "stream ended why=<stale|viewer left|
                                   error> parts=N s=T" (WARN at parts=0); a refused one logs "WARN stream refused err=..."
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
