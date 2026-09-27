@@ -607,7 +607,7 @@ class Body:
 
     async def jpeg(self, quality: int = 70) -> tuple[bytes, Any, float]:
         """The newest frame as JPEG bytes (PIL via av; never cv2), plus the frame and its age. No ledger row: this is
-        the read behind the remote's live view (GET /dog/frame.jpg); frame() is the receipted capture."""
+        the encode behind the receipted frame(); the live view reads jpeg_cached()."""
         await self._video_on()
         age = time.monotonic() - self._fr_at
         if age > FRAME_STALE_S:

@@ -21,7 +21,8 @@
   POST /dog/mark {look?, say?, ask?}   a stop with its action (the look kind, post or not, ask = the intruder check) at the current believed position, while recording
   GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, why?} (polled every 500 ms while
                                   connected); POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
-  GET  /dog/frame.jpg             the newest camera frame (no ledger row; the page's live view), 503 without a dog
+  GET  /dog/frame.jpg             the newest frame's shared encode with X-Frame-Sha/X-Frame-N (no ledger row; watch.py's source,
+                                  the page's error probe), 503 without a dog
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
