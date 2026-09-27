@@ -44,3 +44,7 @@ field.stop
 
 # sources of truth (the origin folder), read locally, never committed
 context/
+
+# 30 · dog-says-the-ask: the rendered lines and the dog's uuids for them (runtime, per dog)
+/say/
+/say.json

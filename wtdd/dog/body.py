@@ -37,6 +37,8 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
               `unitree-fetch-aes-key --email <unitree account> --password '...' --device-type Go2`.
   discovery:  discover_ip_sn() is multicast 231.1.1.1:10131; a dog in STA mode on another subnet does not answer.
   signaling:  the dog listens on TCP 9991 (con_notify) or 8081 (legacy /offer).
+  speaker:    wtdd/dog/audio.py (say): AudioHub on rt/api/audiohub/request through _request, the player state on
+              rt/audiohub/player/state (_on_player). UNVERIFIED on this dog: not yet run.
   navigation: the driver names LiDAR mapping and navigation topics but implements no example for them; there is
               no waypoint navigation here. A route is a scripted list of moves with avoidance on
               (TrajectoryFollow 1018 exists for short trajectories if ever needed).
@@ -73,7 +75,7 @@ from unitree_webrtc_connect.unitree_auth import _probe_tcp_port
 
 from .. import config
 from ..ledger import log, step
-from . import lidar
+from . import audio, lidar
 
 try:
     from unitree_webrtc_connect.constants import OBSTACLES_AVOID_API
@@ -251,6 +253,9 @@ class Body:
         self._lidar_at = 0.0
         self._lidar_on = False
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
+        self.say_state: dict | None = None   # the speaker's last play (wtdd/dog/audio.py), GET /dog/state .say
+        self._player: Any = None          # newest rt/audiohub/player/state data, raw (shape UNVERIFIED until 30.3)
+        self._player_n = 0
 
     # ---- connection
 
@@ -271,6 +276,7 @@ class Body:
             # Registered before the channel is ever switched on, so the first frame is handed to us.
             conn.video.add_track_callback(self._drain)
             conn.datachannel.pub_sub.subscribe(RTC_TOPIC["LF_SPORT_MOD_STATE"], self._on_state)
+            conn.datachannel.pub_sub.subscribe(RTC_TOPIC["AUDIO_HUB_PLAY_STATE"], self._on_player)   # 30: the speaker's read-back, shape UNVERIFIED
             r["state_after"] = await self.fresh_state()
             r["response_or_error"] = {"peer": conn.pc.connectionState, "ice": conn.pc.iceConnectionState,
                                       "state_n": self._st_n}
@@ -563,6 +569,16 @@ class Body:
                 "frame": {"id": d["frame"], "stamp": d["stamp"], "origin": d["origin"], "resolution": d["resolution"],
                           "width": d["width"], "center": d["center"], "voxels": d["n"]} if d else None,
                 "points": d["points"] if d else None, "utlidar_pose": self._utpose}
+
+    # ---- speaker (wtdd/dog/audio.py)
+
+    def _on_player(self, message: Any) -> None:
+        self._player = message.get("data", message) if isinstance(message, dict) else message
+        self._player_n += 1
+
+    async def say(self, text: str, cache: Path | None = None) -> dict:
+        """One of the two fixed lines on the dog's own speaker: one dog.say row with the code and the player state."""
+        return await audio.say(self, text, cache)
 
     # ---- camera
 
