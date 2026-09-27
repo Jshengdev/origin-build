@@ -1,0 +1,308 @@
+{
+ "note": "Fixture for wtdd/test_nogo.py (built by wtdd/fixtures/make_map_nogo.py from ui/map.json). Same space as the shipped map (house.svg viewBox 0 0 1060 1540). zones[].nogo: true marks a no-go zone: the planner blocks its cells, the walk and the follower refuse a route that touches it and write route.refused {zone, waypoint, source: map}. Zones without nogo (a, b, c) are the lighting zones and mean nothing to the planner.",
+ "path": [
+  [
+   300,
+   1100
+  ],
+  [
+   480,
+   1100
+  ],
+  [
+   650,
+   1100
+  ]
+ ],
+ "zones": [
+  {
+   "name": "a",
+   "label": "zone a",
+   "poly": [
+    [
+     255,
+     1040
+    ],
+    [
+     400,
+     1040
+    ],
+    [
+     400,
+     1470
+    ],
+    [
+     300,
+     1470
+    ],
+    [
+     255,
+     1400
+    ]
+   ],
+   "strip": false
+  },
+  {
+   "name": "b",
+   "label": "zone b",
+   "poly": [
+    [
+     400,
+     1040
+    ],
+    [
+     560,
+     1040
+    ],
+    [
+     560,
+     1470
+    ],
+    [
+     400,
+     1470
+    ]
+   ],
+   "strip": false
+  },
+  {
+   "name": "c",
+   "label": "zone c",
+   "poly": [
+    [
+     560,
+     1040
+    ],
+    [
+     700,
+     1040
+    ],
+    [
+     700,
+     1440
+    ],
+    [
+     560,
+     1440
+    ]
+   ],
+   "strip": true
+  },
+  {
+   "name": "nogo-1",
+   "label": "no-go 1",
+   "poly": [
+    [
+     450,
+     1040
+    ],
+    [
+     510,
+     1040
+    ],
+    [
+     510,
+     1250
+    ],
+    [
+     450,
+     1250
+    ]
+   ],
+   "nogo": true
+  }
+ ],
+ "lights": [],
+ "rooms": [
+  {
+   "name": "living room",
+   "poly": [
+    [
+     255,
+     1040
+    ],
+    [
+     700,
+     1040
+    ],
+    [
+     700,
+     1440
+    ],
+    [
+     430,
+     1440
+    ],
+    [
+     400,
+     1470
+    ],
+    [
+     300,
+     1470
+    ],
+    [
+     255,
+     1400
+    ]
+   ]
+  },
+  {
+   "name": "living room left",
+   "poly": [
+    [
+     30,
+     545
+    ],
+    [
+     255,
+     545
+    ],
+    [
+     255,
+     1040
+    ],
+    [
+     30,
+     1040
+    ]
+   ]
+  },
+  {
+   "name": "dining room",
+   "poly": [
+    [
+     255,
+     545
+    ],
+    [
+     620,
+     545
+    ],
+    [
+     620,
+     1040
+    ],
+    [
+     255,
+     1040
+    ]
+   ]
+  },
+  {
+   "name": "kitchen",
+   "poly": [
+    [
+     620,
+     620
+    ],
+    [
+     960,
+     620
+    ],
+    [
+     960,
+     940
+    ],
+    [
+     620,
+     940
+    ]
+   ]
+  },
+  {
+   "name": "entry porch",
+   "poly": [
+    [
+     700,
+     1240
+    ],
+    [
+     960,
+     1240
+    ],
+    [
+     960,
+     1400
+    ],
+    [
+     700,
+     1400
+    ]
+   ]
+  },
+  {
+   "name": "bedroom 1",
+   "poly": [
+    [
+     30,
+     200
+    ],
+    [
+     255,
+     200
+    ],
+    [
+     255,
+     545
+    ],
+    [
+     30,
+     545
+    ]
+   ]
+  },
+  {
+   "name": "bedroom 2",
+   "poly": [
+    [
+     255,
+     50
+    ],
+    [
+     600,
+     50
+    ],
+    [
+     600,
+     545
+    ],
+    [
+     255,
+     545
+    ]
+   ]
+  },
+  {
+   "name": "bedroom 3",
+   "poly": [
+    [
+     600,
+     50
+    ],
+    [
+     870,
+     50
+    ],
+    [
+     870,
+     320
+    ],
+    [
+     600,
+     320
+    ]
+   ]
+  }
+ ],
+ "entity": {
+  "radius_px": 350,
+  "speed_px_s": 60,
+  "falloff": 1.6,
+  "other_room_factor": 0.3,
+  "samples": 12,
+  "gain": 2.1
+ },
+ "stops": [],
+ "actions": {}
+}
