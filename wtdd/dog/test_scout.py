@@ -20,8 +20,11 @@ The contract under test:
   scout.TICK_S 0.1, NO_TURN_S 3.0, NO_TURN_DEG 10.0, CLOSE_TOL_DEG 10.0, CANVAS_CENTRE (530, 770), DROPOFF_HEADING_DEG -90:
                             module constants read at call time (patched here to keep the suite fast)
   DogSession.scout(z=0.5, target_deg=360, timeout_s=30)   refuses while following or recording (RuntimeError) and a |z|
-                            over session.DRIVE_MAX["z"] (ValueError, never a silent clamp), each one FAILED dog.scout
-                            row with nothing moved; else a task: connect, calibrate as "dropoff" when not
+                            over session.DRIVE_MAX["z"] (ValueError, never a silent clamp), and a z, target_deg or
+                            timeout_s that is not finite (or a target or timeout not over 0: the timeout is the
+                            spin's one end guard, and inf never passes it), each one FAILED dog.scout row with nothing
+                            moved, its args strict JSON (a bare Infinity/NaN in the ledger breaks the page's
+                            JSON.parse of GET /ledger); else a task: connect, calibrate as "dropoff" when not
                             calibrated (canvas centre facing up, one dog.calibrate row with args.source), LiDAR on,
                             snapshot, hold (0, 0, z) refreshed every TICK_S until the integrated IMU yaw passes
                             target_deg (on its magnitude: a negative z turns clockwise and closes too), then one _halt;
@@ -38,7 +41,8 @@ The contract under test:
                             no dog_cal.json too (GET /dog/state 200: night-1 contracts F patch 3, nothing preset here)
   stderr                    one `[wtdd:dog] scout <turned> of <target> ...` line per second of spin, with frames and cells
   DogSession.calibrate(p, heading, source="tap")   the page's tie carries args.source "tap"; the scout's "dropoff"
-  DogSession.stop()         cancels a running scout like the follower; its row says stopped
+  DogSession.stop()         cancels a running scout like the follower; its row says stopped, with state_after
+                            complete, when the stop lands inside the scout's own halt too
   dog.scout row            args {z_rad_s, target_deg, timeout_s, shift_id, source}
                             state_before {map, heading0_deg, grid_frames, cells, lidar_n, range_obstacle, localize, utlidar}
                             state_after {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed,
@@ -416,6 +420,28 @@ class Spin(Harness):
         self.assertEqual(self.rows("dog.calibrate"), [])
         self.assertFalse(s.state()["scout"]["active"])
 
+    def test_a_z_target_or_timeout_that_is_not_finite_is_refused(self):
+        """json.loads takes Infinity and NaN, float() takes "inf": a target or timeout of inf would never end the spin
+        (the timeout is its one end guard), a nan z holds nothing and reads as "did not turn". Each is refused by name
+        before anything moves, one FAILED row per press whose args stay strict JSON for the page."""
+        body = FakeBody(yaw_rate=6.0, frames=self.frames)
+        s = self.session(body)
+        bad = [("target_deg", math.inf), ("target_deg", math.nan), ("target_deg", 0.0), ("target_deg", -360.0),
+               ("timeout_s", math.inf), ("timeout_s", math.nan), ("timeout_s", 0.0), ("timeout_s", -1.0), ("z", math.nan)]
+        for k, v in bad:
+            with self.subTest(k=k, v=v):
+                with self.assertRaises(ValueError) as cm:
+                    s.scout(**{k: v})
+                self.assertIn(f"{v:g}", str(cm.exception), "the refusal names the value")
+                self.assertFalse(s.state()["scout"]["active"])
+        self.assertEqual((body.ticks, body.cmds), ([], []), "refused before anything moves: no tick, no halt")
+        rows = self.rows("dog.scout")
+        self.assertEqual(len(rows), len(bad), "a refusal is a FAILED row too, one per press")
+        self.assertTrue(all(not r["ok"] for r in rows))
+        for r in rows:
+            json.dumps(r, allow_nan=False)   # raises on a bare inf/nan: GET /ledger must stay parseable by the page
+        self.assertEqual(self.rows("dog.calibrate"), [])
+
     def test_a_clockwise_spin_closes_on_its_magnitude(self):
         body = FakeBody(yaw_rate=-3.0, frames=self.frames)   # the main spin's rate: loop jitter stays inside the 10 deg tolerance
         s = self.session(body)
@@ -564,6 +590,40 @@ class FailLoud(Harness):
         r = self.rows("dog.scout")[0]
         self.assertFalse(r["ok"])
         self.assertIn("stopped", str(r["response_or_error"]))
+
+    def test_a_stop_during_the_scouts_own_halt_is_named_and_complete(self):
+        """POST /dog/stop lands while the scout awaits its own StopMove (the page's button still reads "stop" then).
+        CancelledError is not an Exception: caught only around the spin, it went past the halt's except and ledger.step,
+        leaving a row with no error and no state_after, and the page saying "scout FAILED: null"."""
+        class SlowStop(FakeBody):   # a StopMove ack that takes 0.4 s
+            stopping = False
+
+            async def cmd(self, name, parameter=None):
+                if name == "StopMove":
+                    self.stopping = True
+                    await asyncio.sleep(0.4)
+                return await super().cmd(name, parameter)
+
+        body = SlowStop(yaw_rate=6.0, frames=self.frames)   # closes in about 1 s, then halts
+        s = self.session(body)
+        s.scout(z=0.5, target_deg=360, timeout_s=10)
+        t0 = time.monotonic()
+        while not body.stopping:
+            self.assertLess(time.monotonic() - t0, 10, "the scout never reached its halt")
+            time.sleep(0.005)
+        time.sleep(0.1)   # inside the scout's own _halt now
+        s.stop()          # cancels the task, then sends its own halt: the body is still halted
+        st = self.wait(s)
+        self.assertIn("stopped", st["error"] or "", "the page names the stop")
+        rows = self.rows("dog.scout")
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertFalse(r["ok"])
+        self.assertIn("stopped", str(r["response_or_error"]))
+        self.assertEqual(set(r["state_after"] or {}), AFTER, "state_after is complete on this FAILED row too")
+        self.assertIn("stopped", r["state_after"]["why"])
+        self.assertGreaterEqual(body.cmds.count("StopMove"), 1)
+        self.assertEqual(tuple(s.vel), (0.0, 0.0, 0.0))
 
 
 class Api(Harness):
