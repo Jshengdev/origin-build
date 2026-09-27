@@ -214,8 +214,10 @@ class Listener:
     def resume_word(self, m: dict[str, Any]) -> bool:
         """Goal 00: a message that is exactly the one resume word (WTDD_RESUME_WORD, default "resume"; case and spaces
         forgiven, nothing else) ends a person halt: POST /dog/resume {by: the sender, via: "imessage"}, one stop.resumed
-        row on the API. No model and no regex reads it. A refused or unreachable resume is posted as "couldn't resume: ...".
-        When 03's on-call 1:1 lands, the word is also required to come from that chat (one condition here)."""
+        row on the API. No model and no regex reads it. A refused or unreachable resume is posted as "couldn't resume:
+        ..."; typed from the dog's own account (WTDD_ALLOW_SELF, sender '' in chat.db) it is still sent and refused as
+        nameless, and the reply names the missing handle. When 03's on-call 1:1 lands, the word is also required to come
+        from that chat (one condition here)."""
         from ..dog.halt import is_word
         if not is_word(m.get("text") or ""):
             return False
@@ -225,8 +227,12 @@ class Listener:
         except Exception as e:  # noqa: BLE001  (the API is down: said in the chat and logged, the halt stands)
             out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         if not out.get("ok"):
-            log("chat", "WARN resume word refused", by=hname(m["sender"]), err=str(out.get("error"))[:120])
-            self.say(f"halt-fail:{m['guid']}", f"couldn't resume: {str(out.get('error'))[:160]}")
+            why = str(out.get("error"))[:160]
+            if not str(m.get("sender") or "").strip():   # is_from_me: chat/db.py gives sender ''; "no name" is not the cause
+                why = ("this message has no sender handle in chat.db (the dog's own account); resume from the page with your "
+                       "name, or type it from another phone")
+            log("chat", f"WARN resume word refused: {why}", by=hname(m["sender"]), err=str(out.get("error"))[:120])
+            self.say(f"halt-fail:{m['guid']}", f"couldn't resume: {why}")
             return True
         log("chat", "RESUME", by=hname(m["sender"]))
         self.say(f"halt:{m['guid']}", f"resumed by {hname(m['sender'])}")
