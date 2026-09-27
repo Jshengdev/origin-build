@@ -13,7 +13,8 @@ own posts are refused by confirmed guid and by the opening words of its replies.
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" from intruder_alarm opens a question (pending.json):
 the next answer within PENDING_WINDOW_S decides, "idk" and its kin = "STRANGER DANGER!!!" x3 + light_alarm, anything
-else = "ok, standing down"; no answer = stood down quietly. A housemate's reply that starts like a
+else = "ok, standing down" (posted, then said on the dog's own speaker by wtdd/dog/audio.py; not on a dry run); no
+answer = stood down quietly. A housemate's reply that starts like a
 correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
 it (the vision model is told what the housemates said it got wrong). WTDD_ROUND=dog makes the round the
@@ -223,6 +224,9 @@ class Listener:
         log("chat", "VERDICT", by=hname(m["sender"]), verdict="stranger" if stranger else "known", text=m["text"][:60])
         if not stranger:
             self.say(f"ok:{m['guid']}", "ok, standing down")
+            if not self.dry:   # 30: the dog says it too, after the post; its own thread and row; imported here so the stranger path never waits on the SDK
+                from ..dog import audio
+                audio.after("ok, standing down")
             return True
         self.say(f"danger:{m['guid']}", "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!")
         try:

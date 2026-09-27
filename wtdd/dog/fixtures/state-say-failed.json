@@ -1,0 +1,16 @@
+{
+  "connected": true,
+  "moving": false,
+  "vel": [0.0, 0.0, 0.0],
+  "state": {"mode": 0, "gait_type": 0, "progress": 0, "position": [0.0, 0.0, 0.31], "velocity": [0.0, 0.0, 0.0],
+            "yaw_speed": 0.0, "body_height": 0.31, "range_obstacle": [0.0, 0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0],
+            "n": 1200, "hz": 20.0, "age_ms": 40},
+  "map": null,
+  "calibrated": false,
+  "follow": {},
+  "avoid": false,
+  "recheck": false,
+  "rec": null,
+  "say": {"text": "who dis?!", "code": 7, "at": 1790478000.0, "age_s": 2.1, "seconds": 1.0, "speaking": false,
+          "error": "RuntimeError: SELECT_START_PLAY refused by the dog: code=7", "source": "stub"}
+}
