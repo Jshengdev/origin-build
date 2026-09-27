@@ -86,7 +86,7 @@ from .. import commands as cmds
 from .. import config
 from ..ledger import append, log, rows as ledger_rows
 from . import db, memory, oncall
-from .housemates import HOUSEMATES, name as hname
+from .housemates import HOUSEMATES, PRIVATE, name as hname
 from .triggers import commands as command_list, is_chat, is_wake, match_command, normalize, wake_phrases
 
 CORRECTION = re.compile(r"^(its|it s|thats|that s|those are|these are|that is|no|nope|wrong|actually|not)\b")
@@ -99,7 +99,6 @@ ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("o
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
 IDK = re.compile(r"\b(idk|dunno|no idea|dont know|don t know|no clue|not me|nope|who|never seen|stranger)\b")
 GATHER_S = 6.0                # after "yo dog ...", the same sender's next messages within this long join the request
-PRIVATE = re.compile(r"\+\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")   # a phone handle or an email: ui/index.html's redact() pattern
 DID_SAY = {"alarm": "I'm sounding the alarm.", "stand_down": "I'm standing down.", "close": "I'm closing it.",
            "hold": "I'm holding it open until it's handled."}   # args.say's ending, by what the listener did (17's actions)
 

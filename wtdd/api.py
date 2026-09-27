@@ -49,6 +49,9 @@
   POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes a proposal as 04's nogo zone into ui/map.json,
                                   dismiss takes an auto zone (id = its name) off it (map.prev.json kept); 400 no name, 404 no open proposal or auto zone, 409 a stale page, each with its failed row
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
+GET /chat, /evals, /record, /record/shifts and /ledger never answer a phone number or an email (B10): every string value
+in their JSON, errors included, has the housemates' handles read "a member" (redact(); keys and numbers untouched). The
+ledger file and the CLIs keep the raw values.
 An exception no route catches is answered 500 in the method's envelope (GET {error}, POST {ok: false, error}, each
 "<Type>: <msg>") with one `<METHOD> <path> FAILED` stderr line, never a connection dropped with no reply (B9).
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
@@ -70,8 +73,20 @@ from pathlib import Path
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
 from .ledger import log, rows
+from .chat.housemates import PRIVATE
 
 UI = ROOT / "ui"
+PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger")   # B10: what they answer passes through redact()
+
+
+def redact(x):
+    """x with every phone handle or email in a string value read "a member" (PRIVATE, the listener's pattern). It walks
+    the parsed JSON, never its text: keys and numbers are left alone, and ids with epoch seconds pass byte for byte."""
+    if isinstance(x, dict):
+        return {k: redact(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [redact(v) for v in x]
+    return PRIVATE.sub("a member", x) if isinstance(x, str) else x
 
 
 class H(BaseHTTPRequestHandler):
@@ -84,6 +99,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, code: int, obj) -> None:
+        if self.command == "GET" and urlparse(self.path).path in PRIVATE_ROUTES:
+            obj = redact(obj)
         self._send(code, "application/json", json.dumps(obj, default=str).encode())
 
     def _body(self) -> dict:
