@@ -227,6 +227,33 @@ class Play(Base):
         self.assertIsNotNone(r["state_after"]["sport"])
         self.assertEqual(b.say_state["player_state"], "no read-back")
 
+    def test_a_play_mode_that_is_not_json_is_kept_raw_and_the_accepted_play_stays_ok(self):
+        """GET_PLAY_MODE's payload shape is UNVERIFIED: a 1010 answering code 0 with a plain string (not JSON) is kept
+        raw on state_after, and the dog's code-0 answer to 1002 stays the row's response: never a FAILED row, never red."""
+        a, b = self.a, stub_body(player=False)
+        self.plant()
+        ps, raw = b.conn.datachannel.pub_sub, {}
+        orig = ps.publish_request_new
+
+        async def plain(topic, options):
+            out = await orig(topic, options)
+            if (topic, options["api_id"]) == (a.TOPIC, a.PLAY_MODE):
+                out["data"]["data"] = "single_cycle"
+                raw["play_mode"] = out["data"]
+            elif (topic, options["api_id"]) == (a.TOPIC, a.PLAY):
+                raw["play"] = out["data"]
+            return out
+        ps.publish_request_new = plain
+        n0 = n_rows()
+        asyncio.run(b.say(ASK, cache=self.cache))
+        r = self.one(new_rows(n0, "dog.say"))
+        self.assertTrue(r["ok"], r["response_or_error"])
+        self.assertEqual(r["state_after"]["play_mode"], {"code": 0, "data": raw["play_mode"]})
+        self.assertEqual(r["response_or_error"], raw["play"])
+        self.assertEqual(r["response_or_error"]["header"]["status"]["code"], 0)
+        self.assertEqual(b.say_state["player_state"], "no read-back")
+        self.assertNotIn("error", b.say_state)
+
     def test_speaking_is_served_from_the_ack_while_a_silent_topic_is_still_awaited(self):
         """The badge is green while the line plays: .say is published at the ack (code 0), not after the read-back wait,
         GET_PLAY_MODE and the fresh sport state, which on a silent topic outlast a 1 s line."""
