@@ -581,8 +581,12 @@ class DogSession:
                     h = self.run(self._halt(), timeout=10)
                     r["state_after"] = {"latency_ms": round((h["t"] - d["t"]) * 1000), "range_obstacle": h["range_obstacle"],
                                         "velocity": h["velocity"], "stop_code": h["stop_code"], "map": self.map_pose()}
-                    copy.parent.mkdir(parents=True, exist_ok=True)
-                    copy.write_bytes(data)   # the page's thumbnail: the frame the halt was decided on
+                    try:   # the page's thumbnail: the frame the halt was decided on; ok stays what the read-back said
+                        copy.parent.mkdir(parents=True, exist_ok=True)
+                        copy.write_bytes(data)
+                    except Exception as e:  # noqa: BLE001  (the body is stopped, only the picture failed: on the row, the log line and the page)
+                        r["state_after"]["file_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+                        log("halt", "WARN thumbnail not written", err=r["state_after"]["file_error"])
             except Exception as e:  # noqa: BLE001  (the row has it; the halt stays set, the page shows it FAILED)
                 log("halt", "stop.person FAILED: the halt stays set", err=f"{type(e).__name__}: {str(e)[:120]}")
             self.halted = halt.summary(r)

@@ -390,12 +390,13 @@ function HaltPanel() {
   const h = st?.halted, pw = st?.person_watch;
   return html`<div class="halt">
     ${h && html`<div class="halt-line">
-      ${h.file && html`<img class="halt-thumb" src=${`/pictures/${h.file.split("/").pop()}`} alt="the frame the halt was decided on"/>`}
+      ${h.file && !h.file_error && html`<img class="halt-thumb" src=${`/pictures/${h.file.split("/").pop()}`} alt="the frame the halt was decided on"/>`}
       <div>
         <div class="halt-stop">STOPPED · person in frame · <input class="halt-name" placeholder="your name" value=${by} onInput=${e => setBy(e.target.value)}/> to resume
           <button class="small key" disabled=${!by.trim()} onClick=${resume}>resume</button></div>
         <div class="mono">latency_ms ${h.pending ? "(halting now)" : h.latency_ms} · was ${h.was}${h.band ? ` · box ${h.band.h_frac} of the frame (band ≥ ${h.band.near_frac})` : ""}${h.at ? ` · ${h.at}` : ""}</div>
         ${h.ok === false && html`<div class="mono bad">halt FAILED: ${h.error}</div>`}
+        ${h.file_error && html`<div class="mono bad">thumbnail FAILED: ${h.file_error}</div>`}
         ${said && html`<div class="mono bad">resume refused: ${said}</div>`}
       </div></div>`}
     ${pw && !pw.fresh && html`<span class="halt-chip">no person watch: ${pw.why}${pw.age_ms != null ? ` · ${(pw.age_ms / 1000).toFixed(1)} s old` : ""}</span>`}

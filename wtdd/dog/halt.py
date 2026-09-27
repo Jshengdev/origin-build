@@ -101,7 +101,7 @@ def summary(row: dict) -> dict[str, Any]:
     """A stop.person row as the page's `halted` (state().halted): what it was doing, how fast, the frame, the spot."""
     a, sa = row.get("args") or {}, row.get("state_after") or {}
     return {"was": a.get("was"), "latency_ms": sa.get("latency_ms"), "frame_sha": a.get("frame_sha"), "box": a.get("box"),
-            "file": a.get("file"), "t_watch": a.get("t_watch"), "band": a.get("band"), "map": sa.get("map"),
+            "file": a.get("file"), "file_error": sa.get("file_error"), "t_watch": a.get("t_watch"), "band": a.get("band"), "map": sa.get("map"),
             "at": row.get("ts") or time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": bool(row.get("ok")),
             "error": None if row.get("ok") else row.get("response_or_error")}
 
