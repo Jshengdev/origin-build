@@ -96,6 +96,9 @@ Review round 4 (the classes after StillMs, RED before their fixes):
 Review round 5 (the classes after WarnPerStretch, RED before their fixes):
   "person watch tick FAILED"         once per stretch of movement, not once per process: a tick that keeps raising
                                      through a second hand-drive says so again, as the no-person-watch WARN does
+  a watch.json `t` in the future     is not fresh ("detector clock ahead", age_ms negative): a detector whose clock is
+                                     ahead would otherwise read fresh until the clock caught up, even after it died;
+                                     while moving it is one WARN line and the page's chip, and no halt
 """
 from __future__ import annotations
 import asyncio
@@ -1406,6 +1409,34 @@ class TickFailPerStretch(Dry):
             fails.append([l for l in buf.getvalue().splitlines() if "person watch tick FAILED" in l])
         self.assertEqual([len(f) for f in fails], [1, 1], fails)
         self.assertEqual(of("stop.person"), [])
+
+
+class ClockAhead(Dry):
+    """watch.json timed in the future is not a person watch: the age is negative, so FRESH_S alone would call it fresh
+    for as long as the detector's clock is ahead, dead detector or not."""
+
+    def test_a_t_in_the_future_is_not_fresh_and_says_the_clock_is_ahead(self):
+        f = self.tmp / "ahead.json"
+        now = time.time()
+        f.write_text(json.dumps({"t": now + 5.0, "boxes": []}))
+        d = halt.freshness(f, now=now)
+        self.assertIs(d["fresh"], False, d)
+        self.assertAlmostEqual(d["age_ms"], -5000, delta=5)
+        self.assertIn("clock ahead", d["why"])
+
+    def test_while_moving_it_is_one_warn_line_the_chip_and_no_halt(self):
+        self.plant([person(near_h() + 10)], t=time.time() + 60)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            for _ in range(3):
+                self.s.drive(0.3, 0.0, 0.0)
+                self.s.person_tick()
+        warns = [l for l in buf.getvalue().splitlines() if "WARN no person watch" in l and "clock ahead" in l]
+        self.assertEqual(len(warns), 1, buf.getvalue()[-600:])
+        self.assertEqual(of("stop.person"), [])
+        pw = self.s.state()["person_watch"]
+        self.assertIs(pw["fresh"], False, pw)
+        self.assertIn("clock ahead", pw["why"])
 
 
 if __name__ == "__main__":
