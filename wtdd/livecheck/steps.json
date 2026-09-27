@@ -621,7 +621,7 @@
       "do": "After 01's LIVE steps 1-3, press the scout button (POST /dog/scout) at the drop point. Eyes: the origin stays put and the walls do not rotate on the page while the cone turns; rotating walls or a rosette = STOP.",
       "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.frames": {"gte": 1}, "state_after.cells_added": {"gte": 1}, "state_after.cb_errors_during": 0}}],
       "fatal_warns": ["WARN lidar frame callback failed", "WARN lidar frame rejected"], "unsafe": [], "timeout_s": 120, "settle_s": 0,
-      "note": "Row keys as pinned by feat/14-scout-spin's RED test (wtdd/dog/test_scout.py: agent dog, app map; state_after {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed, avoid, cb_errors_during, ...} plus heading0, closed_deg, velocity_path, why); UNVERIFIED until that branch is green. frames gte 1 and cells_added gte 1 are UNVERIFIED guesses (nonzero). The walls standing still is the eye's."
+      "note": "Row keys from the green code on origin/feat/14-scout-spin at 9e156fd: wtdd/dog/session.py DogSession._scout writes step('dog', 'dog.scout', 'map', args) (agent dog, app map), its state_after the keys wtdd/dog/scout.py AFTER names {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed, avoid, cb_errors_during, ..., heading0, closed_deg, velocity_path, why, band_hits}, complete on a FAILED row too (0 frames, cb_errors rising or 0 band cells is ok false). UNVERIFIED on the dog: no dog has written this row yet. frames gte 1 and cells_added gte 1 are UNVERIFIED guesses (nonzero). The walls standing still is the eye's."
     },
     {
       "item": "14", "step": "14.2", "pr": null,
@@ -629,7 +629,7 @@
       "do": "The same press as 14.1. Eyes: the dog turned; the row names the velocity path that carried the turn.",
       "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.velocity_path": {"re": "."}, "state_after.avoid": {"in": [true, false]}}}],
       "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
-      "note": "Which path turned it (velocity_path, avoid on the row) is the finding, read off the PASS row. A press with no turn is the FAILED row naming avoid on or off, its state_after complete (feat/14-scout-spin session._scout): FAIL at once, that row deciding, its why and velocity_path the finding."
+      "note": "Which path turned it (velocity_path, avoid on the row) is the finding, read off the PASS row. A press with no turn is the FAILED row naming avoid on or off, its state_after complete (origin/feat/14-scout-spin at 9e156fd, wtdd/dog/session.py DogSession._scout: 'did not turn: ... with avoid on|off: the velocity path did not move the body' after scout.NO_TURN_S, raised after the row is filled by scout.row): FAIL at once, that row deciding, its why and velocity_path the finding. UNVERIFIED on the dog: whether avoidance carries a yaw-only move is what this step finds."
     },
     {
       "item": "14", "step": "14.3", "pr": null,
@@ -637,7 +637,7 @@
       "do": "The same press as 14.1. Eyes: the dog's nose is back where it started.",
       "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.closed": true}}],
       "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
-      "note": "closed is the device's own verdict, ||turned| - 360| <= 10 on the IMU in either direction: feat/14-scout-spin's RED test closes a clockwise spin (negative z) on its magnitude, with closed_deg == turned_deg near -360, so closed_deg carries no bounds here. A turn that did not close is ok true, closed false: a WARN here. The comparison with 05a's utlidar yaw and 05b's summed dtheta (or absent) is read off the same row by a person."
+      "note": "closed is the device's own verdict, ||turned| - 360| <= 10 on the IMU in either direction: on origin/feat/14-scout-spin at 9e156fd, wtdd/dog/scout.py closed() compares the turn's magnitude with the target (CLOSE_TOL_DEG 10) and wtdd/dog/session.py DogSession._scout writes closed_deg == turned_deg, the signed turn (near -360 for a clockwise spin), so closed_deg carries no bounds here. UNVERIFIED on the dog. A turn that did not close is ok true, closed false: a WARN here. The comparison with 05a's utlidar yaw and 05b's summed dtheta (or absent) is read off the same row by a person."
     },
     {
       "item": "14", "step": "14.4", "pr": null,
@@ -657,7 +657,7 @@
       "do": "WTDD_NO_PLAN=1 in .env, no session grid: record a route on the empty canvas and save a zone (both accepted with the WARN), then `python -m wtdd plan_path from=<a> to=<b>`.",
       "rows": [{"tool": "plan.route", "agent": "plan", "ok": false, "where": {"response_or_error": {"re": "no session grid under WTDD_NO_PLAN"}}}],
       "fatal_warns": [], "unsafe": [], "timeout_s": 300, "settle_s": 0,
-      "note": "feat/14-scout-spin's RED test (wtdd/test_noplan.py): one plan.route row ok false naming 'no session grid under WTDD_NO_PLAN'; agent plan is main's plan.route agent. The WARN 'rooms off under WTDD_NO_PLAN' is expected here, not fatal; the accepted route and zone are the eye's."
+      "note": "origin/feat/14-scout-spin at 9e156fd, wtdd/plan.py plan(): under WTDD_NO_PLAN=1 its step('plan', 'plan.route', 'map', ...) raises 'no session grid under WTDD_NO_PLAN: ...', one plan.route row ok false with that text in response_or_error; agent plan is main's plan.route agent. The WARN 'rooms off under WTDD_NO_PLAN' (wtdd/field.py check_path) is expected here, not fatal; the accepted route and zone are the eye's. UNVERIFIED on the dog."
     },
     {
       "item": "15", "step": "15.1", "pr": null,
@@ -675,9 +675,9 @@
       "item": "15", "step": "15.3", "pr": null,
       "title": "one 3 m drive along a wall past a table or desk: the table grey, the wall a line, the legend's numbers read off the `dog.floorplan` row, screenshot in `docs/evidence/night-2/`; one shelf photographed for goal 16. STOP if 01's LIVE step 3 streaks: nothing here survives a body-relative origin.",
       "do": "One 3 m drive along a wall past a table or desk, LiDAR on. Eyes: the table grey, the wall a line; screenshot the page into docs/evidence/night-2/; photograph one shelf for goal 16.",
-      "rows": [{"tool": "dog.floorplan", "ok": true, "where": {"args.grid_source": "session", "args.threshold": {"gte": 1}, "state_after.classes.wall": {"gte": 1}}}],
+      "rows": [{"tool": "dog.floorplan", "agent": "dog", "ok": true, "where": {"args.grid_source": "session", "args.threshold": {"gte": 1}, "state_after.classes.wall": {"gte": 1}}}],
       "fatal_warns": ["WARN lidar frame callback failed", "WARN lidar frame rejected"], "unsafe": [], "timeout_s": 300, "settle_s": 0,
-      "note": "Row keys as pinned by feat/15-floorplan's RED test (wtdd/dog/test_floorplan.py: args {threshold, constants, grid_source}, state_before {cells, frames}, state_after {classes {wall, tall, slab, low}, segments, ms}; ok false when no wall); its agent is not pinned there, so it is not checked. wall gte 1 is an UNVERIFIED guess; the table's class is the eye's. A floor plan run on ui/grid.json is cached true, which a live check refuses."
+      "note": "Row keys from the green code on origin/feat/15-floorplan at 8cb1274: wtdd/dog/floorplan.py run() writes ledger.step('dog', 'dog.floorplan', 'map', args {threshold, constants, grid_source}, state_before {cells, frames}) with state_after {classes {wall, tall, slab, low}, segments, ms}; ok false (NoWall) when no wall. Agent dog is pinned (run() and DogSession.floorplan's no-grid row both write it). UNVERIFIED on the dog. wall gte 1 is an UNVERIFIED guess; the table's class is the eye's. A floor plan run on ui/grid.json is cached true, which a live check refuses."
     },
     {
       "item": "16", "step": "16.1", "pr": null,
