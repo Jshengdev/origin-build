@@ -168,7 +168,7 @@
         {"tool": "chat.post", "agent": "central", "ok": true, "where": {"args.guid": {"re": "^any;-;"}, "state_after.rowid": {"gte": 1}}}
       ],
       "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
-      "note": "feat/03-named-person chat/__main__.py: chat.gate, chat.claim, then chat.post (agent central); chat.post's state_after is the confirmed from-me row {guid, rowid, ts}. A refused gate is the chat.gate row ok false: a WARN here."
+      "note": "feat/03-named-person chat/__main__.py: chat.gate, chat.claim, then chat.post (agent central); chat.post's state_after is the confirmed from-me row {guid, rowid, ts}. A refused gate is the chat.gate row ok false with the same args.guid: FAIL at once, that row deciding."
     },
     {
       "item": "03", "step": "03.c", "pr": 7,
@@ -629,7 +629,7 @@
       "do": "The same press as 14.1. Eyes: the dog turned; the row names the velocity path that carried the turn.",
       "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.velocity_path": {"re": "."}, "state_after.avoid": {"in": [true, false]}}}],
       "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
-      "note": "Which path turned it (velocity_path, avoid on the row) is the finding, read off the PASS row. A press with no turn is the FAILED row naming avoid on or off (feat/14-scout-spin RED test): a WARN here, then the timeout."
+      "note": "Which path turned it (velocity_path, avoid on the row) is the finding, read off the PASS row. A press with no turn is the FAILED row naming avoid on or off, its state_after complete (feat/14-scout-spin session._scout): FAIL at once, that row deciding, its why and velocity_path the finding."
     },
     {
       "item": "14", "step": "14.3", "pr": null,

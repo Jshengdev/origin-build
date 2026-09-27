@@ -22,6 +22,9 @@ Verdicts, in the order they are decided while the files are tailed:
   FAIL   <step> · <the fatal WARN line, verbatim>              a `fatal_warns` regex matched a log line; exit 1
   FAIL   <step> · stub row cannot pass a live step · <row>     a matched row with cached true or source "stub" outside
                                                               --replay (a fixture row never grades a live step); exit 1
+  FAIL   <step> · <tool> failed: row i/n wants <tool> ok · <row>    the expected row in every field but `ok`: the device
+                                                              said the step went the other way (a failed stop is a FAIL,
+                                                              never read later as a misorder); exit 1
   FAIL   <step> · timeout after N s: missing <tool> where <field op value>    N s since the check started (timeout_s,
                                                               or --timeout) and the next expected row never landed; exit 1
   FAIL   <step> · the API log <path> was silent while k rows landed: fatal_warns never read · <the tee line>
@@ -43,7 +46,8 @@ Tailing: both files are opened and seeked to their end when the command starts (
 are matched by `tool` (and `agent` when given) and by `ok`, then by every `where` field (a dotted path over the row:
 args.zone, state_after.cells, source; a plain value is equality, {gte, lte, in, re} are operators). Rows that match
 nothing are traffic and skipped; a row with the expected tool that misses a field is a WARN naming the field and the
-value seen; a complete ledger line that is not JSON is a WARN naming it, never dropped in silence. Log lines carry no
+value seen, but one that holds every field except `ok` is that step's own row and FAILs; a complete ledger line that is
+not JSON is a WARN naming it, never dropped in silence. Log lines carry no
 timestamp, so in --replay every log line is read before the first tick and the clock is the rows' ts; a row with no
 readable ts is a WARN naming it and is clocked with the row before it.
 
@@ -206,6 +210,8 @@ class _Check:
             self.i, self.matched = self.i + 1, r
             if self.i == self.n:
                 self.settle_until = self.elapsed + self.spec.get("settle_s", 0)
+        elif r.get("ok") != want["ok"] and match({**r, "ok": want["ok"]}, want) is None:   # the step's own row, gone the other way
+            return self.done("FAIL", f"{tool} {_okw(r)}: row {self.i + 1}/{self.n} wants {tool} {_okw(want)} · {raw}", r, f"{tool} {_okw(r)}")
         elif tool == want["tool"]:
             say(f"WARN {self.step} · a {tool} row landed but is not row {self.i + 1}/{self.n}: {why}")
 
