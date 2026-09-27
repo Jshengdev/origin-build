@@ -464,6 +464,19 @@ class Correct(unittest.TestCase):
         self.assertIn("jev 500", why)
 
 
+class Twice(unittest.TestCase):
+    """B5: two runs of the twice scenario in the same second (a live grade run twice fast) each get their own wake guids
+    and claim key, so the second is not refused by the first's rows in memory.db. time.time is pinned to one second;
+    chat.db's max rowid is stubbed (offline: the Listener reads it at boot)."""
+
+    def test_two_runs_in_one_second_both_pass(self):
+        with mock.patch("time.time", return_value=1790481401.5), mock.patch("wtdd.chat.db.max_rowid", return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            first, second = evals.run_twice(), evals.run_twice()
+        self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
+        self.assertNotEqual(first[1]["detail"], second[1]["detail"])   # two claim keys
+
+
 class Dry(unittest.TestCase):
     """The verifying command: python -m wtdd.evals --scenario <s> runs dry on the fixture and says so."""
 
