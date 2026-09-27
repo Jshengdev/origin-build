@@ -41,6 +41,8 @@ Fix round 5 (the independent review's probes):
                  a yes that comes after the watch was switched off (probe 1), and a tool call with a person boxed
                  (probe 2), are each one FAILED dispatch.decided "not armed", the failed page and one text-only
                  "couldn't dispatch", with no plan.route, no model, no ask and no follow. A dry run is not refused.
+  WalkRecheck    a question that opens while an approved run plans and decides (the dog's own who-dis, probe 4) stops
+                 the walk before s.follow: one FAILED dispatch.decided naming it, no follow, its pending.json untouched.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -462,6 +464,30 @@ class Armed(Fresh):
         out = self.call(cam="lap1", dry=True, trigger="cam:lap1:1790010200")
         self.assertEqual(out["phase"], "decided")
         self.assertEqual((self.posts, self.s.follows), ([], []))
+
+
+class WalkRecheck(td.RunCase):
+    def test_a_question_that_opens_while_the_approved_run_plans_stops_the_walk(self):
+        from wtdd import tools
+        trig, who = "cam:lap1:1790011000", {"kind": "who_dis", "t": time.time(), "trigger": "alarm:watch:1790011001", "seconds": 5}
+        verdict(trig)
+        real = td.plan.plan
+
+        def plan_then_who_dis(*a, **kw):   # the dog's own watch opens who-dis while dispatch plans (review 5, probe 4)
+            out = real(*a, **kw)
+            self.pending.write_text(json.dumps(who))
+            return out
+        with td.mock.patch.object(td.plan, "plan", plan_then_who_dis), self.assertRaises(RuntimeError) as cm:
+            tools.call("dispatch", cam="lap1", approved=True, trigger=trig, by=MODEL_SAYS)
+        self.assertIn("question open: who_dis", str(cm.exception))
+        self.assertEqual(self.s.follows, [], "no follow began with the dog's own question open (grade U1)")
+        self.assertEqual(td.rows_since(self.n0, "dog.follow"), [])
+        dec = td.rows_since(self.n0, "dispatch.decided")
+        self.assertEqual([r["ok"] for r in dec], [True, False], "the yes decided; the walk was refused before it began")
+        self.assertIn("question open: who_dis", dec[1]["response_or_error"])
+        self.assertEqual([(p["text"], p["file"]) for p in self.posts], [("couldn't dispatch: the dog's own question is open", None)])
+        self.assertEqual(json.loads(self.pending.read_text()), who, "the dog's question is left as it wrote it")
+        self.assertEqual(self.page()["phase"], "failed")
 
 
 if __name__ == "__main__":
