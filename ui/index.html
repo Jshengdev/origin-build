@@ -452,7 +452,7 @@ function ObjectsLayer() {
       ${x.thumb && html`<image href=${x.thumb} x=${cx + 14} y=${cy - 52} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
       <text class="lbl objlbl" x=${cx + 14} y=${cy + 8}>${x.label} · ${(+x.p).toFixed(2)}${x.stale ? " · stale" : ""}</text>
       ${line && html`<text class="lbl objmsg" x=${cx + 14} y=${cy + 24}>${line}</text>`}</g>`; })}
-    <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
+    <text class="lbl objlbl" x="12" y="172">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
 }
 // 07 · objects · end
 // 16 · blob-labels · start
