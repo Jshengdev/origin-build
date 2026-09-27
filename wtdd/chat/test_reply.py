@@ -21,6 +21,8 @@ From the second review: the stub reads a yes or no against the re-ask itself ("n
 so a who_dis flag sounds the alarm; "yes" stands down), where 02's CORRECTION had read a bare "no" as standing_down.
 From the third review: a reply stamped before the open question's confirmed post is not its answer (the person typed it
 about an earlier flag): no reading, no verdict, the question stays open.
+From the final review (round 4, fixed by the head's grant): a re-ask nobody answers is one unclear / stand_down verdict
+row with the first reply's acked_ms and reading, when the hold times out or the window expires, never a silent unlink.
 
 Offline: the scratch ledger and memory.db are set through WTDD_LEDGER / WTDD_MEMORY before wtdd.ledger is imported. Run
 alone, they are this module's; after wtdd.test_decide in one process they are that module's (wtdd.ledger reads the
@@ -476,6 +478,48 @@ class Verdict(unittest.TestCase):
         call.assert_called_once_with("light_alarm", seconds=5)
         self.assertEqual(self._verdicts(), [("stranger", "alarm")])
         self.assertEqual(self._rows("intruder.verdict")[0]["args"]["acked_ms"], 10000)
+
+    # ---------- round 4 (the final review of 17, fixed by the head's grant): each check below was seen failing before its fix
+
+    def _poll(self, at: float | None = None) -> None:
+        """One poll() with no new messages, the clock at `at` when given (the window checks read time.time())."""
+        with mock.patch.object(L, "PENDING", self.pend), mock.patch.object(L, "HEARTBEAT", _TMP / "listen.json"), \
+                mock.patch.object(self.l, "read", return_value=[]), mock.patch("wtdd.tools.call") as call, \
+                mock.patch.object(L.time, "time", return_value=at if at is not None else time.time()):
+            self.l.poll()
+        call.assert_not_called()
+
+    def test_an_unanswered_reask_is_one_unclear_verdict_row(self):
+        """A heads_up answered "wait what" 9 s after its confirmed post, re-asked, then nothing more: the round's hold
+        times out. The person answered, so the flag gets exactly one intruder.verdict row: unclear / stand_down, the first
+        reply's acked_ms and reading, stub-labeled like its reply.decided row. Never a silent unlink, never the alarm."""
+        self._ask("heads_up")
+        self._flagged("2026-09-27 12:00:00")
+        batches = [[self._m("wait what", 1, "2026-09-27 12:00:09")]]
+        with mock.patch.object(self.l, "read", side_effect=lambda: batches.pop(0) if batches else []), \
+                mock.patch.object(self.l, "allowed", return_value=True), mock.patch.object(L, "PENDING", self.pend), \
+                mock.patch.object(L.time, "sleep"), mock.patch("wtdd.tools.call") as call:
+            self.assertFalse(self.l.await_verdict(0.2))
+        call.assert_not_called()
+        self.assertEqual(self._texts(), [REASK])
+        v = self._rows("intruder.verdict")
+        self.assertEqual(len(v), 1, v)
+        self.assertEqual({k: v[0]["state_after"].get(k) for k in ("verdict", "meaning", "p", "action")},
+                         {"verdict": "unclear", "meaning": "unclear", "p": 0.5, "action": "stand_down"})
+        self.assertEqual((v[0]["args"]["acked_ms"], v[0]["args"]["guid"], v[0]["args"]["text"], v[0]["args"]["chat"]),
+                         (9000, f"R-{self._testMethodName}-1", "wait what", ONCALL))
+        self.assertEqual((v[0]["cached"], v[0]["source"]), (True, "stub"))
+        self.assertFalse(self.pend.exists())
+
+    def test_an_unanswered_reask_past_the_window_is_the_same_row(self):
+        """The same re-ask left open until poll()'s PENDING_WINDOW_S expiry: the same one row, never a silent unlink."""
+        self._ask("heads_up")
+        self._flagged("2026-09-27 12:00:00")
+        self._say("wait what", 1, "2026-09-27 12:00:09")
+        self._poll(time.time() + L.PENDING_WINDOW_S + 1)
+        self.assertEqual(self._verdicts(), [("unclear", "stand_down")])
+        self.assertEqual(self._rows("intruder.verdict")[0]["args"]["acked_ms"], 9000)
+        self.assertFalse(self.pend.exists())
 
 
 class Fixture(unittest.TestCase):
