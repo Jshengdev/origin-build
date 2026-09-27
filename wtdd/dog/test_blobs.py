@@ -692,6 +692,9 @@ class Serve(Base):
             s.blobs_label(3)
         (row,) = rows()
         self.assertFalse(row["ok"])
+        # args.threshold on every blob.labelled row is WTDD_DECIDE_THRESHOLD (a p), never the LiDAR count the press was at
+        self.assertEqual(row["args"]["lidar_threshold"], 3)
+        self.assertIsNone(row["args"]["threshold"])
         got = s.blobs_px()
         self.assertEqual(got["labels"], [])
         self.assertIn("FAILED", got["why"])
