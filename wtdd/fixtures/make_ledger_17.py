@@ -89,7 +89,7 @@ def reading(ts, heads, text, guid, ok=True):
     before = {"meanings": decide.MEANINGS, "labels": decide.labels() + ["not_said"]}
     if not ok:
         return row(ts, "central", "reply.decided", "openrouter", args, None, before, ok=False, err=PLANTED, ms=1203)
-    meaning, p, named, p_named, raw = decide._reply_stub(text)
+    meaning, p, named, p_named, raw = decide._reply_stub(heads, text)
     action = "reask" if meaning == "unclear" or round(p, 3) < args["threshold"] else decide.ACTION[meaning]
     return row(ts, "central", "reply.decided", "stub", args,
                {"meaning": meaning, "p": round(p, 3), "named": named, "p_named": round(p_named, 3), "action": action}, before, err=raw, ms=2)

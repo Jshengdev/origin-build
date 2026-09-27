@@ -39,7 +39,8 @@ The reply: the state is "the dog asked: <question>\\nthey replied: <text>" and n
 request with two Choice questions: meaning over MEANINGS and named over the site labels + not_said; p and p_named are the
 probabilities of the chosen options. action = ACTION[meaning] (alarm, stand_down, close, hold), or reask when the
 meaning is unclear or p is below WTDD_REPLY_THRESHOLD (default 0.8, validated like the decide threshold). Without a key
-the shipped IDK / CORRECTION regexes (wtdd/chat/listen.py) plus two word lists read it (DEMO_CACHE, _reply_stub). Row:
+the shipped IDK / CORRECTION regexes (wtdd/chat/listen.py) plus two word lists read it (DEMO_CACHE, _reply_stub), and
+a yes or no to the re-ask is read against the re-ask first (no -> stranger, yes -> standing_down). Row:
 tool "reply.decided" (never "decided": 11's unsafe() counts that as a stop's model call), agent central, app stub |
 openrouter; args {question, text, shift_id, threshold, model, plus the listener's trigger, chat, guid, from};
 state_before {meanings, labels}; state_after the reading; a live failure is the row with ok=False, raised, never the regex.
@@ -100,6 +101,8 @@ PERSON = re.compile(r"\b(someone|person)\b")
 MATERIAL = re.compile(r"\b(pallet|pallets|stacked|boards|lumber|bundle|bundles|wrapped)\b")
 HANDLED = re.compile(r"\b(handled|done|fixed|back on|cleared|covered|taken care of)\b")
 ACK = re.compile(r"\b(on it|omw|on my way|looking|checking|coming)\b")
+REASK_NO = re.compile(r"^(no|nope|nah)\b")      # the answer to listen.REASK, "do you know them? yes or no", only
+REASK_YES = re.compile(r"^(yes|yeah|yep|yup)\b")
 
 
 def labels(map_path: Path | None = None) -> list[str]:
@@ -380,19 +383,26 @@ def rules() -> dict:
             "lines": [(" · ".join(esc) or "no label") + " → the person on call, any p", f"below {thr} → ask", "else continue"]}
 
 
-def _reply_stub(text: str) -> tuple[str, float, str, float, str]:
+def _reply_stub(asked: str, text: str) -> tuple[str, float, str, float, str]:
     # DEMO_CACHE: deterministic reply rules. What: the meaning and p come from the reply's words, first rule that hits,
-    # on triggers.normalize(text): the shipped IDK regex (wtdd/chat/listen.py: idk, dunno, no idea, not me, nope, who,
-    # stranger, ...) -> stranger 0.9; handled, done, fixed, back on, cleared, covered, taken care of -> handled 0.85; on
-    # it, omw, on my way, looking, checking, coming -> acknowledged 0.85; the shipped CORRECTION regex (its, thats, no,
-    # not, actually, ... at the start) -> standing_down 0.85; else unclear 0.5. named is always not_said at 0.5: the stub
-    # never names the thing. Why: no Jev key in a worktree, and the verdict beats (alarm, stand down, hold, close,
-    # re-ask) must run dry. Live: set JEV_API_KEY in .env (JEV_LIVE=1 on the CLI refuses the stub); read_reply() then
-    # asks Jev both questions in one request and the row says source=live. Never the fallback of a failed live call.
-    from .chat.listen import CORRECTION, IDK   # here, not at the top: listen imports this module inside its functions
+    # on triggers.normalize(text). When `asked` is the re-ask (listen.REASK, "do you know them? yes or no"), first: no,
+    # nope, nah at the start -> stranger 0.9 (rule "REASK no"); yes, yeah, yep, yup at the start -> standing_down 0.85
+    # (rule "REASK yes"), so a bare "no" is not 02's CORRECTION. Then, for any question: the shipped IDK regex
+    # (wtdd/chat/listen.py: idk, dunno, no idea, not me, nope, who, stranger, ...) -> stranger 0.9; handled, done,
+    # fixed, back on, cleared, covered, taken care of -> handled 0.85; on it, omw, on my way, looking, checking, coming
+    # -> acknowledged 0.85; the shipped CORRECTION regex (its, thats, no, not, actually, ... at the start) ->
+    # standing_down 0.85; else unclear 0.5. named is always not_said at 0.5: the stub never names the thing. Why: no Jev
+    # key in a worktree, and the verdict beats (alarm, stand down, hold, close, re-ask) must run dry. Live: set
+    # JEV_API_KEY in .env (JEV_LIVE=1 on the CLI refuses the stub); read_reply() then asks Jev both questions in one
+    # request and the row says source=live. Never the fallback of a failed live call.
+    from .chat.listen import CORRECTION, IDK, REASK   # here, not at the top: listen imports this module inside its functions
     from .chat.triggers import normalize
     t = normalize(text)
-    if IDK.search(t):
+    if asked == REASK and REASK_NO.match(t):
+        meaning, p, rule = "stranger", 0.9, "REASK no"
+    elif asked == REASK and REASK_YES.match(t):
+        meaning, p, rule = "standing_down", 0.85, "REASK yes"
+    elif IDK.search(t):
         meaning, p, rule = "stranger", 0.9, "IDK"
     elif HANDLED.search(t):
         meaning, p, rule = "handled", 0.85, "HANDLED"
@@ -423,7 +433,7 @@ def read_reply(asked: str, text: str, **row) -> dict:
                                      also={"named": ({**_criteria(site), "not_said": NOT_SAID}, NAMED_INSTRUCTIONS)})
             (meaning, p), (named, p_named) = got["meaning"], got["named"]
         else:
-            meaning, p, named, p_named, raw = _reply_stub(text)
+            meaning, p, named, p_named, raw = _reply_stub(asked, text)
             model = "stub"
         if meaning not in MEANINGS or named not in names or not (0.0 <= p <= 1.0 and 0.0 <= p_named <= 1.0):
             raise ValueError(f"reading out of contract: meaning={meaning!r} p={p!r} named={named!r} p_named={p_named!r}")
