@@ -1024,7 +1024,7 @@ class DogSession:
         if (h := nogo.hit(way, nogo.zones(json.loads(plan.MAP.read_text())))) is not None:
             try:
                 way = plan.leg(pose["p"], way[1], [], [fs["reached"][-1] + 1 if fs["reached"] else None, i + 1],
-                               f"I can't see live, and the line to dot {i + 1} crosses no-go zone {h['zone']}, so I'm going around the zones.")["path"]
+                               f"I can't see live, and the line to dot {i + 1} crosses no-go zone {h['zone']}, so I'm going around the zones.", live_view=False)["path"]
             except ValueError as e:
                 self._decided(i, "refused", f"no live view, the line to dot {i + 1} crosses no-go zone {h['zone']} and there is no way around it: {e}",
                               f"I can't see live, and I can't find a way to dot {i + 1} that keeps out of no-go zone {h['zone']}, so I'm stopping here.",
