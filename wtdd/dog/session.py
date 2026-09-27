@@ -34,7 +34,8 @@ the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.p
 
 The person halt (goal 00, wtdd/dog/halt.py): the first drive, follow or recording starts the 'person-watch' thread,
 which runs person_tick() at halt.HZ. While a task moves the body (activity(): follow, or drive for a held key or a
-recording; 14 and 18a add scout and dispatch there), a fresh <repo>/watch.json with a person box inside the band halts
+recording; 14 and 18a add scout and dispatch there; a follower paused at a stop is still, so the stop's own look is
+never inside a halt), a fresh <repo>/watch.json with a person box inside the band halts
 it on local code, no model: the follower cancelled as stop() cancels it and waited for (its dog.follow row lands
 first), _halt(), then one stop.person row. `halted` gates _set_vel and the drive loop, and drive, follow, look and
 any cmd outside halt.STILL_CMDS raise until resume_halt(by, via) (POST /dog/resume {by}, or the one word in the chat)
@@ -483,8 +484,10 @@ class DogSession:
     # ---- the person halt (goal 00, wtdd/dog/halt.py): local code, no model in or out
     def activity(self) -> str | None:
         """What moves the body now, for the person watch: follow, or drive (a held key, or a route being recorded by
-        driving). 14 adds scout and 18a adds dispatch here, one line each. None = idle: nothing to halt."""
-        if self._follower and not self._follower.done():
+        driving). 14 adds scout and 18a adds dispatch here, one line each. None = idle: nothing to halt. A follower
+        paused at a stop is not moving (vel 0 until the field's resume; a who-dis stop has a person in frame by design):
+        the tick after resume() halts it if the person is still in the band."""
+        if self._follower and not self._follower.done() and self.follow_state.get("stopped_at") is None:
             return "follow"
         if self.rec or (time.monotonic() - self.vel_t < DRIVE_HOLD_S and any(abs(v) > 0 for v in self.vel)):
             return "drive"
@@ -550,10 +553,11 @@ class DogSession:
             self.halted = {"was": was, "pending": True}   # first: from here no tick re-arms the drive loop
             sha = hashlib.sha256(data).hexdigest()
             fs = self.follow_state
-            if self._follower and not self._follower.done():   # exactly as stop() cancels it
+            cancelled = bool(self._follower and not self._follower.done())
+            if cancelled:   # exactly as stop() cancels it (a follower paused at a stop too, when a held key is the drive)
                 self._follower.cancel()
             self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
-            if was == "follow":   # its own finally halts and writes its dog.follow row; that row lands before stop.person
+            if cancelled:   # its own finally halts and writes its dog.follow row; that row lands before stop.person
                 t0 = time.monotonic()
                 while not (fs.get("error") or fs.get("done")) and time.monotonic() - t0 < 3.0:
                     time.sleep(0.01)
