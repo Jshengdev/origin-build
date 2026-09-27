@@ -15,8 +15,9 @@ the head cut for 27 (the headless screenshots 27-remote.png and 27-failed.png ar
     "camera" in the legend's Cams row (23), each on an element of class "slot", labelled with its item number;
   - the night-1 patches 1, 1b, 2 (ui/index.html) and 3 (wtdd/dog/session.py) byte for byte;
   - the shared DEMO_CACHE path: WTDD_STATE_FIXTURE=wtdd/fixtures/page/dog-state.json makes DogSession.state() that dict with
-    source "stub" (labelled `# DEMO_CACHE:` where it is read; a missing file raises, never a default dog) and the page
-    reads `source === "stub"`; unset, a fresh session's state() says connected false instead of raising (patch 3).
+    source "stub" (labelled `# DEMO_CACHE:` where it is read; a missing file raises, never a default dog; set while a
+    dog is connected it raises, never standing in for the real state) and the page reads `source === "stub"`; unset, a
+    fresh session's state() says connected false instead of raising (patch 3).
 """
 from __future__ import annotations
 import json
@@ -342,6 +343,14 @@ class StateFixture(unittest.TestCase):
         os.environ["WTDD_STATE_FIXTURE"] = str(FIXTURE.with_name("absent.json"))
         with self.assertRaises(FileNotFoundError):   # the fixture read itself raises: no default dog, no silent live fallback
             DogSession().state()
+
+    def test_fixture_with_a_real_dog_refuses(self):
+        from wtdd.dog.session import DogSession
+        os.environ["WTDD_STATE_FIXTURE"] = str(FIXTURE)
+        s = DogSession()
+        s.body = object()   # any connected body: the fixture must never stand in for a real dog's state
+        with self.assertRaises(RuntimeError):
+            s.state()
 
     def test_unset_is_a_disconnected_dog_not_an_error(self):
         from wtdd.dog.session import DogSession
