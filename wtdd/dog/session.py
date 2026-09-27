@@ -31,6 +31,9 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+say(text) is one of the two fixed lines on the dog's own speaker (wtdd/dog/audio.py); state().say is the last play with
+age_s and speaking. WTDD_STATE_FIXTURE=<json> (DEMO_CACHE, dry screenshots only) makes state() serve that file marked
+source "stub" without touching a dog.
 """
 from __future__ import annotations
 import asyncio
@@ -41,8 +44,9 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .. import config
 from ..ledger import log, step
-from . import lidar, nav
+from . import audio, lidar, nav
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -81,6 +85,7 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
             self.cal = json.loads(CAL_FILE.read_text())
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
@@ -129,10 +134,13 @@ class DogSession:
         return self.body is not None
 
     def state(self) -> dict[str, Any]:
+        if config.maybe("WTDD_STATE_FIXTURE"):   # DEMO_CACHE: a planted dog state for the dry screenshots (24, 25, 29, 30), marked source "stub"; unset it and this is the live session; never set in a live run
+            return {**json.loads(Path(config.maybe("WTDD_STATE_FIXTURE")).read_text()), "source": "stub"}
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
+                "say": audio.served(self.body.say_state) if self.body else None,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
 
@@ -334,6 +342,15 @@ class DogSession:
     def snapshot(self) -> bytes:
         """The newest camera frame as JPEG, no ledger row (the remote's live view)."""
         return self.run(self.with_body(lambda b: b.jpeg()))[0]
+
+    def say(self, text: str, volume: int | None = None) -> dict[str, Any]:
+        """One of the two fixed lines on the dog's own speaker (wtdd/dog/audio.py), the volume set and read back first
+        when given. One dog.say row (and a dog.volume row); state().say is the last play."""
+        async def go(b: Body) -> dict[str, Any]:
+            if volume is not None:
+                await audio.volume(b, volume)
+            return await b.say(text)
+        return self.run(self.with_body(go))
 
     # ---- hold-to-move
     def drive(self, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict[str, Any]:

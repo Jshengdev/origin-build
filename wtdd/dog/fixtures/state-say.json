@@ -11,6 +11,6 @@
   "avoid": false,
   "recheck": false,
   "rec": null,
-  "say": {"text": "who dis?!", "code": 0, "at": 1790478000.0, "age_s": 0.4, "seconds": 1.0, "speaking": true,
+  "say": {"text": "who dis?!", "code": 0, "at": 1790478000.0, "ms": 640, "age_s": 0.4, "seconds": 1.0, "speaking": true,
           "player_state": "stub", "source": "stub"}
 }
