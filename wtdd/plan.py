@@ -20,11 +20,27 @@ not occupied, on the grid cost map, one plan.replanned row (never a plan.route r
 so a waypoint the planner returns is never occupied to the follower. The route's end occupied fails loud (ValueError,
 the row ok false): the planner never picks another goal.
 
+route(points, grid, cal, zones): the stops a person taps (goal 21). points[0] is the start (the dog's believed pose,
+or the first tap), points[1:] the stops, in order. One plan() per leg (its plan.route row carries args.leg and
+args.legs), the legs' waypoints joined with the shared end kept once, every segment longer than field.MAX_STEP_PX cut
+into equal steps so the joined path passes check_path's jump rule, stops = the index of each leg's end, actions = the
+default a stop gets (DEFAULT_ACTION, what POST /dog/mark writes). zones given = the confirmed no-go set instead of
+the map's; either set is checked up front: a malformed zone fails the route's row by name, never as a leg. A leg with
+no route: a ValueError naming "leg k of n" and carrying .failed_leg {leg, of, from, to, error} for the page's red
+dashed line, the plan.multistop row ok false with args.failed_leg, and no partial route returned; a leg whose two ends
+share one lattice cell (a double tap) fails the same way, since its stop would repeat the last one (its plan.route row
+is ok: A* found the one cell). One plan.multistop row per call, after the legs' rows: args {points, legs, cell_px,
+shift_id, cost_map, why?, grid_source?, failed_leg?}, state_after {legs, stops, length_m, waypoints}, cached with that
+source when the grid is not the session's (plan()'s rule).
+route() writes no map; wtdd/tools/plan_route.py save=true does, through POST /map's rules.
+
     python -m wtdd plan_path from=448,455 to=436,586           the waypoints, nothing written
     python -m wtdd plan_path from=448,455 to=436,586 save=true  also written as the map's path (stops cleared)
     cp wtdd/fixtures/grid_wall.json ui/grid.json && python -m wtdd plan_path from=300,900 to=650,900
                                                                  a detour around the fixture's wall, cost_map grid
                                                                  (the saved-grid DEMO_CACHE, row cached; rm ui/grid.json after)
+    cp wtdd/fixtures/grid_wall.json ui/grid.json && python -m wtdd plan_route "stops=448,455;436,586;520,600"
+                                                                 two legs, two stops (quoted: ';' ends a shell command)
 The zone fixture (wtdd/fixtures/map_nogo.json) is exercised by wtdd/test_plan_grid.py through plan.MAP patched in the
 test; this branch has no WTDD_MAP (04's) to point the CLI at it.
 
@@ -37,7 +53,8 @@ lattice is CELL px (about 9 cm), so a wall thinner than a cell blocks the whole 
 dropped (WARN); field.check_path's "outside every room" rule is untouched, so a grid-planned route saved as the map's
 path with a point outside the drawn rooms is still refused at POST /map, POST /dog/follow and field.walk (loud, named);
 the follower's own detour never passes through check_path. UNVERIFIED on the dog: the grid cost map and replan() have
-run on synthetic grids only (wtdd/fixtures/make_grid_wall.py).
+run on synthetic grids only (wtdd/fixtures/make_grid_wall.py). route() too: planned on synthetic grids only; a
+believed pose inside a wall's inflation fails leg 1 loud with no snap (plan()'s rule; only replan() snaps).
 """
 from __future__ import annotations
 import contextlib
@@ -51,12 +68,13 @@ import numpy as np
 from . import config
 from . import nogo
 from .config import ROOT
-from .field import MAP, inside
+from .field import MAP, MAX_STEP_PX, inside
 from .ledger import log, step
 
 CELL = 10            # px per grid cell, about 9 cm
 HALF_WIDTH = 4       # cells the walkable area shrinks by (the dog is about 0.35 m wide)
 W, H = 1060, 1540    # the map's viewBox
+DEFAULT_ACTION = {"look": "tilt", "say": True, "ask": False}   # a routed stop's action: POST /dog/mark's default (nod, photo, sentence)
 
 
 def grid(rooms: list[dict[str, Any]], zones: list[dict[str, Any]] = ()):
@@ -181,11 +199,16 @@ def _route(matrix, a, b, info: dict[str, Any]) -> dict[str, Any]:
     return {"path": pts, "cells": len(path), "searched": runs, "length_px": round(length), "length_m": round(length / 108.5, 2)}
 
 
-def plan(a, b, grid=None, cal: dict | None = None, threshold: int | None = None, lock=None, grid_source: str = "session") -> dict[str, Any]:
+def plan(a, b, grid=None, cal: dict | None = None, threshold: int | None = None, lock=None, grid_source: str = "session",
+         zones: list[dict[str, Any]] | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """One plan.route row. `grid_source` names where the grid came from ("session", or "ui/grid.json" for the saved
-    file): anything but the session marks the row cached with that source, so a planted file never claims live."""
+    file): anything but the session marks the row cached with that source, so a planted file never claims live.
+    `zones` given replaces the map's zones (route()'s confirmed set; still validated inside this row); `extra` is
+    merged into the row's args (route()'s leg, legs, shift_id)."""
     m = json.loads(MAP.read_text())
-    with step("plan", "plan.route", "map", {"from": list(a), "to": list(b), "cell_px": CELL}) as r:
+    if zones is not None:
+        m = {**m, "zones": zones}
+    with step("plan", "plan.route", "map", {"from": list(a), "to": list(b), "cell_px": CELL, **(extra or {})}) as r:
         matrix, info, _ = cost_map(m, grid, cal, threshold, lock)   # inside the step: a malformed zone fails this row
         r["args"].update(info)
         if info["cost_map"] == "grid":
@@ -235,3 +258,59 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
     log("plan", "replanned", at=i, rejoin=j, skipped=skipped, walls=info["walls"], nogo=len(info["nogo"]), waypoints=len(out["path"]),
         length_m=out["length_m"])
     return out
+
+
+def _split(pts) -> list[list[int]]:
+    """The polyline with every segment longer than MAX_STEP_PX cut into equal integer steps (2 px spare for the
+    rounding, which moves a point at most 0.71 px), so a joined route passes check_path's jump rule."""
+    out = [[int(pts[0][0]), int(pts[0][1])]]
+    for a, b in zip(pts, pts[1:]):
+        n = max(1, math.ceil(math.dist(a, b) / (MAX_STEP_PX - 2)))
+        out += [[round(a[0] + (b[0] - a[0]) * k / n), round(a[1] + (b[1] - a[1]) * k / n)] for k in range(1, n + 1)]
+    return out
+
+
+def route(points, grid=None, cal: dict | None = None, zones: list[dict[str, Any]] | None = None, threshold: int | None = None,
+          lock=None, grid_source: str = "session") -> dict[str, Any]:
+    """points[0] the start, points[1:] the stops: one plan() per leg, then one plan.multistop row. Returns {path, stops,
+    actions, legs: [{leg, from, to, waypoints, length_m}], length_m, cost_map, why?, grid_source}; a leg with no route
+    raises ValueError("leg k of n ...") carrying .failed_leg, and nothing is returned. Writes no map."""
+    pts = [[int(p[0]), int(p[1])] for p in points]
+    n = len(pts) - 1
+    shift = config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    on_grid = grid is not None and cal is not None   # cost_map()'s own test, applied up front so a failed row is labeled too
+    path, stops, legs, info = [], [], [], {}
+    with step("plan", "plan.multistop", "map", {"points": pts, "legs": n, "cell_px": CELL, "shift_id": shift,
+                                                "cost_map": "grid" if on_grid else "rooms"}) as r:
+        if on_grid:
+            r["args"]["grid_source"] = grid_source
+            if grid_source != "session":
+                r["cached"], r["source"] = True, grid_source   # plan()'s rule: a planted grid never claims live
+        if n < 1:
+            raise ValueError(f"a route needs a start and at least one stop (got {len(pts)} point(s))")
+        # the zones every leg will use (the confirmed set given, else the map's), checked before any leg: a malformed
+        # zone fails this row by name and is never recorded as a leg with no route
+        nogo.zones({"zones": zones} if zones is not None else json.loads(MAP.read_text()))
+        for k in range(1, n + 1):
+            a, b = pts[k - 1], pts[k]
+            try:
+                out = plan(a, b, grid, cal, threshold, lock, grid_source, zones=zones, extra={"leg": k, "legs": n, "shift_id": shift})
+                if len(out["path"]) < 2:   # both ends in one lattice cell: the stop would repeat the last (or be index 0)
+                    raise ValueError(f"stop {k} is in the same {CELL} px cell as the point before it (a double tap?): nothing to route")
+            except ValueError as e:
+                r["args"]["failed_leg"] = {"leg": k, "of": n, "from": a, "to": b, "error": str(e)}
+                err = ValueError(f"leg {k} of {n} ({a[0]},{a[1]} -> {b[0]},{b[1]}): {e}")
+                err.failed_leg = r["args"]["failed_leg"]
+                raise err from e
+            seg = _split(out["path"])
+            path += seg[1:] if path else seg   # a leg starts where the last one ended: that point is kept once
+            stops.append(len(path) - 1)
+            legs.append({"leg": k, "from": a, "to": b, "waypoints": len(seg), "length_m": out["length_m"]})
+            info = {x: out[x] for x in ("cost_map", "why") if x in out}
+        r["args"].update(info)
+        length = round(sum(leg["length_m"] for leg in legs), 2)
+        r["state_after"] = {"legs": legs, "stops": stops, "length_m": length, "waypoints": len(path)}
+    log("plan", "multistop route planned", legs=n, stops=len(stops), waypoints=len(path), length_m=length,
+        cost_map=info["cost_map"], source=r.get("source", "live"))
+    return {"path": path, "stops": stops, "actions": {str(i): dict(DEFAULT_ACTION) for i in stops}, "legs": legs,
+            "length_m": length, "grid_source": grid_source if on_grid else None, **info}
