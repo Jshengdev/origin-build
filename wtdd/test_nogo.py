@@ -188,3 +188,16 @@ class Refusal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageSave(unittest.TestCase):
+    """The page's "save" while a no-go zone is still being drawn (corners clicked, "close zone" not pressed) is refused
+    with the reason on the page, never a save that silently leaves the drawing out (seen live 2026-09-27: two saves of
+    an open drawing wrote the map without it). Reads ui/index.html's source, as test_drive_keys does."""
+
+    def test_save_refuses_an_open_nogo_drawing(self):
+        page = (Path(__file__).resolve().parent.parent / "ui" / "index.html").read_text()
+        save = next(l for l in page.splitlines() if "const saveMap = async () =>" in l)
+        self.assertIn('mode === "nogo" && nogoDraft.length', save)
+        self.assertIn("not saved: a no-go zone is still being drawn", save)
+        self.assertLess(save.index("nogoDraft.length"), save.index("putMap("), "the refusal comes before any POST /map")
