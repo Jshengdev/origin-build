@@ -164,12 +164,16 @@ class Mask(Base):
     def test_zmask_is_the_truth_in_every_cell_including_the_rebased_frame(self):
         g, (cls, zmask, _, _) = accumulated(), truth()
         self.assertEqual(g.zmask.dtype, np.uint64)
+        self.assertEqual(g.shape, (ff.H, ff.W), "fixture: every object sits inside the first window (check()), so the grid has not grown yet")
+        far = (round(g.origin[0] / RES) - 20, 0)   # a cell 1 m past the first window's low-x edge
+        g.update(np.array([[far[0] * RES, far[1] * RES, 0.5]]))   # one voxel in the band there: the grid grows on that side
+        self.assertGreater(g.shape[1], ff.W, "one band voxel past the window: the grid grew")
         self.assertEqual(g.zmask.shape, g.counts.shape, "the mask grows with the counts")
-        self.assertGreater(g.shape[1], ff.W, "the fixture walks past the first window: the grid grew")
         self.assertAlmostEqual(g.z_ref, ff.ORIGINS[0][2], msg="z_ref is the first frame's origin[2]")
         for c, m in zmask.items():
-            self.assertEqual(at(g, g.zmask, c), m, f"cell {c}: bit k must be absolute layer k (frame 2 sits one layer up)")
-        self.assertEqual(int(np.count_nonzero(g.zmask)), len(zmask), "no bits outside the declared world")
+            self.assertEqual(at(g, g.zmask, c), m, f"cell {c}: bit k must be absolute layer k (frame 2 sits one layer up), moved with the grow")
+        self.assertEqual(at(g, g.zmask, far), 1 << round((0.5 - g.z_ref) / RES), "the new cell carries its own layer")
+        self.assertEqual(int(np.count_nonzero(g.zmask)), len(zmask) + 1, "no bits outside the declared world and the one voxel")
 
     def test_counts_and_walls_are_what_they_were_before_the_mask(self):
         g, world = accumulated(), ff.world_cells()
