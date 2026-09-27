@@ -93,7 +93,7 @@ python -m wtdd walk_path dry=true                      # the light levels along 
 python -m wtdd plan_path from=448,455 to=436,586       # A* between two map points
 python -m wtdd.evals --scenario twice                  # the never-twice gates, graded
 python -m wtdd.watch --source docs/media/frame-floor.jpg --once     # the detector on a real dog frame
-WTDD_WAKE_SHOW=0 python -m unittest wtdd.chat.test_triggers wtdd.chat.test_chat wtdd.hue.test_stub   # 29 tests
+WTDD_WAKE_SHOW=0 python -m unittest wtdd.chat.test_triggers wtdd.chat.test_chat wtdd.hue.test_stub   # 31 tests (the Hue stub's 34 checks run as one)
 ```
 
 **With the hardware:** a Go2 on its Wi-Fi hotspot, a Hue bridge through the cloud Remote API, a Tuya strip with its local key, Messages.app signed in with Full Disk Access. Keys are documented in `.env.example`. Then three processes:
