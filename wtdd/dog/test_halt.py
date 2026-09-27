@@ -89,6 +89,9 @@ Review round 4 (the classes after StillMs, RED before their fixes):
                                      false naming yaw_speed, the halt stands and the eval grades fail
   the "no person watch" WARN         once per stretch of movement, not once per process: an idle tick forgets the last
                                      one, so a second hand-drive with the detector still down logs it again
+  the committed fixture              compared with make_halt's output on stop.person's state_after keys too, so a
+                                     fixture written before still_ms (or yaw_speed) existed fails instead of grading
+                                     through the latency_ms fallback
 """
 from __future__ import annotations
 import asyncio
@@ -896,7 +899,8 @@ class Fixture(unittest.TestCase):
         out = Path(tempfile.mkdtemp(prefix="wtdd-halt-fx-")) / "halt.jsonl"
         p = subprocess.run([PY, "-m", "wtdd.fixtures.evals.make_halt", "--out", str(out)], cwd=ROOT, capture_output=True, text=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        key = lambda r: (r["tool"], r["ok"], (r.get("args") or {}).get("was"), (r.get("args") or {}).get("via"), (r.get("args") or {}).get("name"))  # noqa: E731
+        key = lambda r: (r["tool"], r["ok"], (r.get("args") or {}).get("was"), (r.get("args") or {}).get("via"), (r.get("args") or {}).get("name"),  # noqa: E731
+                         sorted(r.get("state_after") or {}) if r["tool"] == "stop.person" else None)   # the keys the eval reads
         self.assertEqual([key(r) for r in self.rows(out)], [key(r) for r in self.rows()])
 
     def test_the_committed_fixture_grades_pass(self):
