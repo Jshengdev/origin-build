@@ -80,6 +80,7 @@ def do_round() -> str:
         return via["result"]
     from .dog.body import ROUTES, validate_route
     from .dog.session import DogSession
+    DogSession.get()._refuse_if_halted("do a round")   # 00: the scripted route moves the body too
     steps = json.loads((ROUTES / "corridor.json").read_text())
     validate_route(steps)   # raises ValueError on a bad route, before any connection; returns the plan otherwise
     done = DogSession.get().run(DogSession.get().with_body(lambda b: b.route(steps, "corridor")), timeout=600)
