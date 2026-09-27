@@ -79,7 +79,8 @@ OUT = ROOT / "dispatch.json"       # the page's feed (GET /dispatch); read at ca
 PENDING = ROOT / "pending.json"    # the one open question (intruder_alarm's, decide's, this ask's); read at call time
 QUESTION_S = 120                   # an open question expires after this long (wtdd/chat/listen.py PENDING_WINDOW_S)
 AT_STOP_PX = 90                    # the dog within this of a stop is "at" it in the words, else "nearest to" it
-AFFIRM = re.compile(r"^(yes|yeah|yep|yup|y|go|send|send it|do it|ok|okay|sure)\b")   # on listen's normalize(text)
+# the WHOLE normalized reply (listen's normalize, fullmatch) is a short yes: "ok, no", "go away", "send help", "do it later" stand down
+AFFIRM = re.compile(r"(yes|yeah|yep|yup|y|go|send it|send the dog|do it|ok|okay|sure)( (please|now|go|send it|send the dog|do it))?")
 KEYS = ("cam", "label", "pt", "arrival", "path", "state", "choice", "p", "probabilities", "demoted", "auto", "phase", "error",
         "reached", "of", "end_pose", "t", "dry", "ask_to")
 AVOID = {True: "avoidance on", False: "avoidance off", None: "avoidance not read yet"}

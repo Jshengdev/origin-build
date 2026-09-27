@@ -232,7 +232,7 @@ class Listener:
             import threading
             from .. import dispatch
             PENDING.unlink(missing_ok=True)
-            yes = bool(dispatch.AFFIRM.match(normalize(m["text"])))
+            yes = bool(dispatch.AFFIRM.fullmatch(normalize(m["text"])))   # the whole reply, or "ok, no" walks the dog
             append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
                     "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger")},
                     "state_before": None, "state_after": {"verdict": "approved" if yes else "declined"}, "response_or_error": None, "latency_ms": 0})
