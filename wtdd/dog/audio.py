@@ -18,7 +18,8 @@ Each of its methods is one publish_request_new, so the same requests are sent he
 Topics and ids: constants.py:83 (VUI), :105-106 (AUDIO_HUB_REQ, AUDIO_HUB_PLAY_STATE), :352-384 (AUDIO_API). A dict
 parameter is json.dumps'd by msgs/pub_sub.py:87-118.
 
-A line is rendered once on this Mac (render: /usr/bin/say, then ffmpeg to a 44.1 kHz mono 16-bit WAV in <repo>/say/),
+A line is rendered once on this Mac (render: /usr/bin/say, then ffmpeg to a 44.1 kHz mono 16-bit WAV in <repo>/say/,
+on a worker thread so the body's loop keeps its drive ticks and StopMove),
 uploaded once, and its uuid cached in <repo>/say.json (both gitignored, per dog; delete say.json after a dog reset); a
 line the dog already lists is never uploaded again. say() plays by uuid: one dog.say {text, uuid, via: "audiohub"} row,
 response_or_error the raw 1002 response, state_after the next rt/audiohub/player/state message (Body._on_player,
@@ -200,8 +201,8 @@ async def ensure(body, text: str, known: dict) -> str:
         entry = {"name": name, "uuid": hit[-1]["UNIQUE_ID"]}
     else:
         wav = SAY_DIR / f"{name}.wav"
-        if not wav.exists():
-            render(text, wav)
+        if not wav.exists():   # off the loop: the render takes about a second and the loop carries the drive's StopMove
+            await asyncio.to_thread(render, text, wav)
         up = await upload(body, wav, name)
         entry = {"name": name, "uuid": up["uuid"], "md5": up["md5"]}
     known[text] = {**entry, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
