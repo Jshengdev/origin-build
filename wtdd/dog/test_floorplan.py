@@ -6,7 +6,9 @@ nothing here has seen the real dog). Run:
 
 RED until floorplan.py exists. Every expectation comes from the fixture's analytic truth (truth_cells, truth_zmask,
 wall_lines: plain sets over the declared boxes), never from the code's own output; the frames reach the grid through
-the driver's own decoder (decode_wire), the path a live frame takes. No model is called anywhere: shapes from points.
+the driver's own decoder (decode_wire), the path a live frame takes. ClosedRoom builds a second world the fixture cannot
+show (closed_room: walls that meet, 1 to 3 cells thick, turned), its truth the declared boxes rounded onto the lattice,
+through Grid.update. No model is called anywhere: shapes from points.
 
 The contract under test (odometry metres; a cell's position is its corner, index * resolution + origin, like walls()):
   Grid.zmask                np.uint64 [iy, ix], same shape as counts, grown with it: bit k = absolute layer k seen
@@ -126,6 +128,50 @@ def stop(s) -> None:
     while s.loop.is_running():
         time.sleep(0.01)
     s.loop.close()
+
+
+def closed_room(thick: int, angle: float):
+    """A 4 x 3 m room built from points through Grid.update, the way a live frame reaches the grid: four walls that
+    meet at the corners, `thick` cells thick (grown outward from the inner face, the corners filled), from the floor to
+    1.5 m, and a 1.0 x 0.6 m table in the middle (a top at 0.7 m on four 0.1 m legs), the whole room turned `angle`
+    degrees about its centre. Returns (grid, {wall: inner-face line (x0, y0, x1, y1) m}, wall cells, table cells), the
+    cells as absolute lattice (gx, gy): the declared geometry rounded onto the lattice, never the code's output."""
+    w, h, z0 = 4.0, 3.0, ff.ORIGINS[0][2]
+    a = np.radians(angle)
+    rot = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+    turn = lambda p: (np.asarray(p, dtype=np.float64) - (w / 2, h / 2)) @ rot.T + (w / 2, h / 2)
+    t, lines, wall, table = (thick - 1) * RES, {}, {}, {}
+
+    def fill(box, zlo, zhi, into):   # a box sampled every third of a cell, turned, rounded onto the lattice
+        xs, ys = np.meshgrid(np.arange(box[0], box[1] + 1e-9, RES / 3), np.arange(box[2], box[3] + 1e-9, RES / 3))
+        for c in set(map(tuple, np.rint(turn(np.column_stack([xs.ravel(), ys.ravel()])) / RES).astype(int).tolist())):
+            into.setdefault(c, set()).update(range(round((zlo - z0) / RES), round((zhi - z0) / RES) + 1))
+
+    for name, box, p, q in (("south", (-t, w + t, -t, 0), (0, 0), (w, 0)), ("east", (w, w + t, -t, h + t), (w, 0), (w, h)),
+                            ("north", (-t, w + t, h, h + t), (w, h), (0, h)), ("west", (-t, 0, -t, h + t), (0, h), (0, 0))):
+        fill(box, 0.0, 1.5, wall)
+        lines[name] = tuple(float(v) for v in (*turn(p), *turn(q)))
+    fill((1.5, 2.5, 1.2, 1.8), 0.7, 0.7, table)
+    for x in (1.5, 2.4):
+        for y in (1.2, 1.7):
+            fill((x, x + 0.1, y, y + 0.1), 0.0, 0.65, table)
+    pts = np.array([(gx * RES, gy * RES, z0 + k * RES) for (gx, gy), ks in {**table, **wall}.items() for k in ks])
+    g = occupancy.Grid(RES, (pts[:, 0].min(), pts[:, 1].min()), "odom", z0)
+    for _ in range(3):
+        g.update(pts)
+    return g, lines, set(wall), set(table) - set(wall)
+
+
+def ends_off(seg, line) -> float:
+    """How far, in cells, a segment's ends sit from a true line's ends, across and along the line (the worse of the
+    four), the ends matched either way round."""
+    p, q = np.array(line[:2]), np.array(line[2:4])
+    u = (q - p) / np.linalg.norm(q - p)
+    n = np.array([-u[1], u[0]])
+
+    def off(a, b):
+        return max(abs((a - p) @ u), abs((a - p) @ n), abs((b - q) @ u), abs((b - q) @ n)) / RES
+    return min(off(np.array(seg[:2]), np.array(seg[2:4])), off(np.array(seg[2:4]), np.array(seg[:2])))
 
 
 class Base(unittest.TestCase):
@@ -294,6 +340,46 @@ class Segments(Base):
                 "print(sorted({m.split('.')[0] for m in sys.modules} & {'cv2', 'scipy', 'skimage', 'shapely', 'sklearn'}))")
         r = subprocess.run([PY, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=60)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, "[]"), r.stderr[-400:])
+
+
+class ClosedRoom(Base):
+    """The fixture's walls are one cell thick, on the odometry axes, and never meet. A live room is none of those: the
+    axes are wherever the dog booted, walls meet at corners, and walls accumulated over frames are thicker than one
+    voxel. Here a closed room, walls 1 to 3 cells thick, square and turned: each wall is ONE segment on its own cells
+    (its ends within the wall's thickness of the true corners, one cell more when turned: a turned wall's cells are
+    rounded onto the lattice), every wall cell is a wall (none falls off into a tall or low blob), the table never is."""
+
+    def check(self, thick: int, angle: float) -> None:
+        g, lines, wall, table = closed_room(thick, angle)
+        segs = floorplan.segments(g)
+        tol = thick + (1 if angle % 90 else 0)
+        self.assertEqual(len(segs), 4, f"4 walls, {len(segs)} segments: {segs}")
+        for name, line in lines.items():
+            hits = [s for s in segs if ends_off(s, line) <= tol + 1e-6]
+            self.assertEqual(len(hits), 1, f"{name} {line}: {len(hits)} segments within {tol} cells, want 1; nearest "
+                                           f"{min(ends_off(s, line) for s in segs):.2f} cells; all: {segs}")
+        c = floorplan.classes(g)
+        off = {cell: at(g, c, cell) for cell in wall if at(g, c, cell) != 1}
+        self.assertEqual(off, {}, f"{len(off)} of {len(wall)} wall cells fell off every run (2 tall, 5 low)")
+        self.assertEqual(where(g, c, 1) & table, set(), "a table cell is a wall")
+        self.assertLessEqual(table, where(g, c, 3) | where(g, c, 5), "the table top floats, its legs are low")
+
+    def test_walls_1_2_and_3_cells_thick_on_the_axes(self):
+        for thick in (1, 2, 3):
+            with self.subTest(thick=thick):
+                self.check(thick, 0)
+
+    def test_walls_1_and_2_cells_thick_turned_30_degrees(self):
+        for thick in (1, 2):
+            with self.subTest(thick=thick):
+                self.check(thick, 30)
+
+    def test_walls_1_and_2_cells_thick_at_every_3_degrees(self):
+        """The dog boots facing anywhere: no turn of the room may double a wall or drop its cells."""
+        for thick in (1, 2):
+            for angle in range(3, 90, 3):
+                with self.subTest(thick=thick, angle=angle):
+                    self.check(thick, angle)
 
 
 class Run(Base):
