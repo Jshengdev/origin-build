@@ -82,6 +82,15 @@
   .obj.stale { opacity: .35; }
   .objmsg { font-size: 11px; opacity: .8; }
   /* 07 · objects · end */
+  /* 16 · blob-labels · start */
+  .bl .ring { fill: none; stroke: #262323; stroke-width: 2.5; pointer-events: stroke; cursor: help; }   /* an outline only (15-5): a lamp under it still shows; hover for both verdicts */
+  .bl.failed .ring { stroke: var(--bad); stroke-dasharray: 4 3; }
+  .bllbl { font-size: 15px; } .blgeo { font-size: 11px; opacity: .8; } .blwhy { font-size: 13px; }
+  .bl .bad, .blkey .bad { fill: var(--bad); } .blkey .bl-zero { fill: var(--warn); }
+  .bl-key { flood-color: #fbfaf7; flood-opacity: .9; }   /* each legend line on a box its own width, not a band (15-5) */
+  .blkey { filter: url(#bl-key); }
+  .blkey .bl-run { fill: var(--live, #0b0dc4); pointer-events: all; cursor: pointer; }
+  /* 16 · blob-labels · end */
 </style>
 </head>
 <body>
@@ -285,6 +294,7 @@ function App() {
             <${FloorPlanLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             <${ObjectsLayer}/>
+            <${BlobsLayer}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
               const a = [x + L * Math.cos(h - half), y + L * Math.sin(h - half)], b = [x + L * Math.cos(h + half), y + L * Math.sin(h + half)], tip = [x + L * Math.cos(h), y + L * Math.sin(h)];
@@ -445,6 +455,36 @@ function ObjectsLayer() {
     <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
 }
 // 07 · objects · end
+// 16 · blob-labels · start
+// Blob labels (GET /dog/blobs, wtdd/dog/blobs.py): one outline ring per label at its blob's centre, the model's word and
+// p beside it ("shelf · 0.91", plus "· stub" or "· fixture" when no model said it) and the geometry's own verdict under
+// it; both verdicts in the ring's title. A FAILED label is red with its error, never a word. The grey of a moved run is
+// GET /dog/floorplan's (15's layer draws it); this layer only names. Its own 2 s poll, with or without a dog. The legend
+// always draws, below 15's, on a text-sized box; a zero is yellow, a FAILED press or read is red with the reason. "▶ name
+// blobs" is the press (POST /dog/blobs: one blob.labelled row per blob in the camera's view, or one failed row). The
+// page computes nothing.
+function BlobsLayer() {
+  const [b, setB] = useState(null);
+  const get = () => fetch(`${API}/dog/blobs`).then(r => r.json()).then(setB).catch(e => setB({ labels: [], error: `GET /dog/blobs failed: ${e}` }));
+  useEffect(() => { get(); const t = setInterval(get, 2000); return () => clearInterval(t); }, []);
+  const press = e => { e.stopPropagation(); fetch(`${API}/dog/blobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threshold: 3 }) })
+    .then(r => r.json()).then(o => o.error ? setB(p => ({ ...(p || {}), error: `POST /dog/blobs failed: ${o.error}` })) : get())
+    .catch(err => setB(p => ({ ...(p || {}), error: `POST /dog/blobs failed: ${err}` }))); };
+  const all = b?.labels || [], failed = all.filter(x => x.label == null).length, greyed = all.filter(x => x.erase).length;
+  const tag = x => x.source && x.source !== "live" ? ` · ${x.source}` : "";
+  const why = b?.why || b?.error ? html`<text class="lbl blkey blwhy" x="12" y="148">${b.why ? (b.why.includes("FAILED") ? html`<tspan class="bad">${b.why}</tspan>` : b.why) : ""}${b.error ? html`${b.why ? " · " : ""}<tspan class="bad">FAILED ${b.error}</tspan>` : ""}</text>` : null;
+  return html`<g>
+    <defs><filter id="bl-key" x="0" y="0" width="1" height="1"><feFlood class="bl-key"/><feComposite in="SourceGraphic"/></filter></defs>
+    ${all.filter(x => x.pos_px).map(x => { const [cx, cy] = x.pos_px, bad = x.label == null, end = cx > 700, tx = end ? cx - 16 : cx + 16;
+      return html`<g key=${x.blob_id} class=${"bl" + (bad ? " failed" : "")} data-id=${x.blob_id} data-label=${bad ? "FAILED" : x.label}>
+      <title>geometry: ${x.geometry_verdict} · model: ${bad ? `FAILED ${x.error}` : `${x.label} ${(+x.p).toFixed(2)}`}${tag(x)}</title>
+      <circle class="ring" cx=${cx} cy=${cy} r="11"/>
+      <text class="lbl bllbl" x=${tx} y=${cy - 3} text-anchor=${end ? "end" : "start"}>${bad ? html`<tspan class="bad">label FAILED: ${x.error}</tspan>` : `${x.label} · ${(+x.p).toFixed(2)}${tag(x)}`}</text>
+      <text class="lbl blgeo" x=${tx} y=${cy + 13} text-anchor=${end ? "end" : "start"}>geometry: ${x.geometry_verdict}</text></g>`; })}
+    <text class="lbl blkey" x="12" y="124">blobs · ${b ? html`${all.length ? `${all.length} labelled` : html`<tspan class="bl-zero">0 labelled</tspan>`} · ${greyed} greyed · ${failed ? html`<tspan class="bad">${failed} FAILED</tspan>` : "0 FAILED"}${b.source ? ` · ${b.source}` : ""}` : "…"} · <tspan class="bl-run" onClick=${press}>▶ name blobs</tspan></text>
+    ${why}</g>`;
+}
+// 16 · blob-labels · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
