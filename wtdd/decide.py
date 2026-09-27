@@ -20,7 +20,7 @@ OpenRouter's example), so WTDD_DECIDE_THRESHOLD is tuned against the per-label p
 request, no retry, no fallback model, no fallback to the stub: a live failure is the decided row with ok=False, raised.
 Row: tool "decided", agent "decide", app "stub" | "openrouter"; args {stop, shift_id, state_chars, threshold};
 state_before {labels}; state_after = the returned decision; response_or_error = the stub's rule or Jev's raw reply.
-Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD, WTDD_SHIFT.
+Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD; shift_id is shift.current().
 UNVERIFIED: the live Jev call has not been run with a key. The body and the parse follow OpenRouter's own API reference,
 "Submit a System One request" (POST https://openrouter.ai/api/v1/systemone, Bearer key; {model, state, questions} in;
 {id, model, provider, answers: {<question>: {type, choice, confidence, probabilities}}, usage} out), and its Jev guide;
@@ -38,7 +38,7 @@ from pathlib import Path
 
 import requests
 
-from . import config, ledger
+from . import config, ledger, shift
 
 DEFAULT_LABELS = ["clear", "out_of_place", "hazard", "person"]
 DESCRIBE = {"clear": "nothing to report at this stop",
@@ -85,7 +85,7 @@ def threshold() -> float:
 
 
 def shift_id() -> str:
-    return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    return shift.current()
 
 
 def _word(n: int) -> str:
@@ -148,8 +148,14 @@ def _stub(state: str, choices: list[str]) -> tuple[str, float, str, str]:
     # and "the eyes disagree" lowers p by 0.3 (two eyes disagreeing is the one uncertainty signal the shipped system
     # has). Why: no Jev key in a worktree, and the round must reach the ask beat dry. Live: set JEV_API_KEY in .env
     # (JEV_LIVE=1 on the CLI refuses the stub); decide() then POSTs the same state to JEV_URL with model JEV_MODEL and
-    # the row says source=live.
+    # the row says source=live. A custom closed list (S6b: what sits on a dot the LiDAR sees covered, session.OBSTACLES):
+    # the first choice the state names as a word (a person also by "someone") at p 0.6, else "other" at 0.4 when it is
+    # a choice; neither: the ValueError below. Live: the same JEV_API_KEY; the follower then calls _jev with the list.
     s = state.lower()
+    if not set(choices) <= set(DEFAULT_LABELS):
+        hit = next((c for c in choices if re.search(rf"\b{re.escape(c)}s?\b", s) or (c == "person" and PERSON.search(s))), None)
+        if hit or "other" in choices:
+            return (hit, 0.6, "stub", f"stub: {hit} named in the state") if hit else ("other", 0.4, "stub", "stub: no choice named, other")
     if HAZARD.search(s):
         label, p = "hazard", 0.85
     elif PERSON.search(s):
