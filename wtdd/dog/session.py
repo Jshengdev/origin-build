@@ -5,7 +5,7 @@ slow and collides. This module holds a single Body on a background asyncio loop;
 handlers) submit coroutines with run(). The API process owns the dog while it runs (WTDD_API_PROCESS=1); other
 processes reach the dog through the API (wtdd/commands.py) so two peers never fight for the slot. If the 20 Hz state
 stream goes quiet for STALE_MS (the dog was power-cycled or left its hotspot) the next call closes the dead peer and
-connects once more, logged; there is no reconnect loop.
+connects once more, logged; there is no reconnect loop. A follow running then is stopped, and its row names the reconnect.
 
 drive() is hold-to-move: the remote refreshes a velocity every 200 ms while a key is down; the loop republishes it at
 MOVE_HZ and sends StopMove 0.6 s after the last refresh or on stop(). Speeds are capped at DRIVE_MAX.
@@ -164,6 +164,7 @@ class DogSession:
             log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=self.cal.get("map"), at=self.cal.get("at"))
         self.follow_state: dict[str, Any] = {}       # the follower's live status (GET /dog/state .follow)
         self._follower: asyncio.Task | None = None
+        self._cut: str | None = None                 # B2: why a stale reconnect stopped the follow (its row's error); None otherwise
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
         self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
@@ -200,6 +201,10 @@ class DogSession:
                     log("dog", "WARN grid kept across the reconnect: if the dog was power-cycled its odometry frame reset; clear it (POST /dog/grid {clear: true})", grid_frames=g.frames)
                 with self._grid_lock:   # S7: the stream stopped with the peer: the pending summary is written
                     self._pc_flush()
+                if self._follower and not self._follower.done():   # B2: a follow never walks on into a dead or a new session
+                    self._cut = f"stopped by a stale-session reconnect: no dog state for {st['age_ms']} ms"
+                    log("dog", f"WARN follow {self._cut}", at=self.follow_state.get("i"))
+                    self._follower.cancel()
                 if self._driver:
                     self._driver.cancel()
                 try:
@@ -822,6 +827,7 @@ class DogSession:
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
                              "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid),
                              "replans": [], "skipped_stops": [], "passed": [], "unchecked": False, "planned": [], "trace": [pose["p"]]}
+        self._cut = None
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -970,13 +976,16 @@ class DogSession:
                     fs["done"] = True
                 finally:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
-                    await self._halt()
+                    if self._cut is None:   # B2: after a stale reconnect the old peer is dead, so no halt goes to it (a new session's drive loop halts a dog it finds moving)
+                        await self._halt()
                     fs["active"] = False
                     if (end := self.map_pose()) is not None:
                         self._traced(fs, end["p"])
                     r["state_after"] = {"reached": list(fs["reached"]), "passed": list(fs["passed"]), "of": len(path),
                                         "seconds": round(time.time() - fs["started"], 1), "map": end, "replans": len(fs["replans"]),
                                         "skipped_stops": list(fs["skipped_stops"])}
+                    if self._cut:   # B2: the row and follow.error name the reconnect, not a bare cancel
+                        raise ConnectionError(self._cut)
         except asyncio.CancelledError:
             fs["error"] = "stopped"
             log("dog", "follow cancelled (stop)")
