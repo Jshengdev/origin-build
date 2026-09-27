@@ -63,6 +63,16 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 25 · head-led · start */
+  .led { fill: none; stroke-width: 6; pointer-events: none; }   /* the head light's last request, a ring around the orange dot (the dot stays orange) */
+  .led.c-white { stroke: var(--led-white, #ffffff); filter: drop-shadow(0 0 1.5px var(--ink, #262323)); }
+  .led.c-red { stroke: var(--led-red, #e03131); } .led.c-yellow { stroke: var(--led-yellow, #f2c200); } .led.c-blue { stroke: var(--led-blue, #1c7ed6); }
+  .led.c-green { stroke: var(--led-green, #2f9e44); } .led.c-cyan { stroke: var(--led-cyan, #15aabf); } .led.c-purple { stroke: var(--led-purple, #7048e8); }
+  .led.sending { stroke-dasharray: 2 7; opacity: .6; }
+  .led.failed { stroke: var(--bad, #b2382e); stroke-dasharray: 6 5; }
+  .lbl.led-bad { fill: var(--bad, #b2382e); } .lbl.led-stub { fill: var(--warn, #d9a400); }
+  .led-stub-badge { color: var(--warn, #d9a400); font-weight: 600; } .led-legend { opacity: .75; margin-top: 2px; }
+  /* 25 · head-led · end */
 </style>
 </head>
 <body>
@@ -191,7 +201,7 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
@@ -273,12 +283,14 @@ function App() {
                 <circle class="dogdot" cx=${x} cy=${y} r="14" onPointerDown=${onDown("dog", 0, 0)} onClick=${e => e.stopPropagation()}/>
                 <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°</text></g>`;
             })()}
+            ${dog?.led && (dogDrag || dog?.map) && html`<${LedRing} led=${dog.led} p=${(dogDrag || dog.map).p} stub=${dog.source === "stub"}/>`}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
           </svg>`}
         </div>
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
           <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${dog ? (dog.connected ? `connected · mode ${dog.state?.mode ?? "?"} · pos ${(dog.state?.position || []).slice(0, 2).map(v => (+v).toFixed(2)).join(", ")} · ${dog.moving ? "moving " + dog.vel.map(v => (+v).toFixed(1)).join("/") : "still"}` : "not connected · the first command connects (about 1 s)") : "…"}</div>
+          <${LedLabel} led=${dog?.led} stub=${dog?.source === "stub"}/>
           ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<span class="mono">hold a key or a button · 0.3 m/s · 0.5 rad/s</span></div>
           <div class="row tight">${key("a", "A ◀")}${key("s", "S ▼")}${key("d", "D ▶")}<button class="small" onClick=${() => post("/dog/stop")}>stop</button></div>`}
           <div class="row tight">
@@ -357,7 +369,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +377,29 @@ function App() {
     </div>
   </div>`;
 }
+// 25 · head-led · start
+// The dog's head light (wtdd/dog/led.py). Route: GET /dog/state .led, the body's last request {color, seconds, flash_ms,
+// code, at, error?}, arriving through App's 1 s poll as props (no poll of its own). code 0 = acked: a ring in that colour
+// around the orange dot; there is no colour getter, so it is the last acked request, never a read colour. A non-zero
+// code, or a refusal before any send (code null + error), is a dashed red ring and "led FAILED · code N" (or the error)
+// on the ring and the label. code null without an error is a request still in flight. On the DEMO_CACHE path
+// (WTDD_STATE_FIXTURE, source "stub") both wear "stub" in amber. The page computes nothing: colour, code, error are served.
+const ledFailed = led => led.error || (led.code != null && led.code !== 0);
+const ledFailedText = (led, full = true) => led.code != null ? `led FAILED · code ${led.code}` : `led FAILED · ${full ? led.error : led.error.split(":")[0]}`;   // the ring names the class, the label the whole error
+function LedRing({ led, p, stub }) {
+  if (!led || !p) return null;
+  const bad = ledFailed(led);
+  return html`<g>
+    <circle class=${bad ? "led failed" : `led c-${led.color}${led.code === 0 ? "" : " sending"}`} cx=${p[0]} cy=${p[1]} r="24"/>
+    ${bad && html`<text class="lbl led-bad" x=${p[0] + 30} y=${p[1] - 14}>${ledFailedText(led, false)}</text>`}
+    ${stub && html`<text class="lbl led-stub" x=${p[0] - 30} y=${p[1] - 14} text-anchor="end">stub</text>`}</g>`;
+}
+function LedLabel({ led, stub }) {
+  return html`<div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>
+    ${!led ? "led · nothing sent yet" : ledFailed(led) ? html`<span class="bad">${ledFailedText(led)}</span>` : led.code === 0 ? `led ${led.color} · acked (no read-back)` : `led ${led.color} · sent, no answer yet`}${stub && html` · <span class="led-stub-badge">stub</span>`}
+    <div class="led-legend">cyan scanning · red asking or halted · green clear</div></div>`;
+}
+// 25 · head-led · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
