@@ -1,7 +1,8 @@
 """python -m wtdd.cam: the laptop side of a fixed camera. It grabs a frame from the laptop's camera, encodes it as a JPEG
-and POSTs it raw to the API's /cam/<id>/frame at --hz; the server saves it, runs the detector, writes the rows and asks
-"who dis?!" when the intruder watch is armed (wtdd/cam/__init__.py). This side writes no ledger rows (it runs on
-another machine; the server's cam.frame and cam.detect rows are the receipts), one stderr line per frame instead.
+and POSTs it raw to the API's /cam/<id>/frame at --hz; the server saves it, runs the detector, writes the rows and hands
+a person to dispatch when the intruder watch is armed (wtdd/cam/__init__.py; item 18). This side writes no ledger
+rows (it runs on another machine; the server's cam.frame and cam.detect rows are the receipts), one stderr line per
+frame instead, naming the dispatch an armed sighting started.
 
   python -m wtdd.cam --cam lap1                                     device 0, 0.5 frames a second, to http://127.0.0.1:7788
   python -m wtdd.cam --cam lap1 --source wtdd/cam/fixtures/frame.jpg --once   one replayed JPEG, prints the server's answer
@@ -94,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             good += 1
             det, person = r["detect"], r.get("person")
             seen = " · ".join(f"{k} x{v}" for k, v in det["classes"].items()) or "nothing in view"
-            asked = "none" if person is None else f"asked={person['asked']}" + ("" if person["asked"] else f" ({person['why']})")
+            asked = "none" if person is None else f"dispatched {person['trigger']}" if person.get("dispatched") else f"asked=False ({person['why']})"
             log("cam", f"{a.cam} -> {server}: {seen} · detector {det['ms']} ms · round trip {ms} ms · person {asked}")
         else:
             log("cam", f"{a.cam} -> {server}: FAILED {status}: {str(r.get('error'))[:160]}", ms=ms)
