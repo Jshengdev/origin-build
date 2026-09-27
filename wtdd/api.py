@@ -13,6 +13,9 @@
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)
   GET  /shift                     the run in force {shift_id, source: file | WTDD_SHIFT | date} (a read, no row; wtdd/shift.py)
   POST /shift {name}              start a "morning" or "night" run: <repo>/shift.json, one shift.started row; any other name is a 400
+  GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
+                                  force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
+  GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status); POST /dog/drive {x,y,z}, /dog/stop
@@ -118,6 +121,18 @@ class H(BaseHTTPRequestHandler):
             try:
                 return self._json(200, shift.read())
             except ValueError as e:
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path in ("/record", "/record/shifts"):   # item 10's record over HTTP, a read (no row); a malformed shift.json, ledger or ui/map.json is a 500 naming it
+            from . import record
+            try:
+                rs = rows()
+                if u.path == "/record/shifts":
+                    return self._json(200, {"shifts": record.shifts(rs), "current": shift.current()})
+                sid = (parse_qs(u.query).get("shift") or [None])[0] or shift.current()   # record.py's default: the run in force
+                if sid not in (ids := record.shifts(rs)):   # record.py's rule: no row stamped with it, no shift; never an empty record
+                    return self._json(404, {"error": f"no shift {sid}: no row is stamped with it; shifts: {', '.join(ids) or 'none'}"})
+                return self._json(200, record.build(sid, rs))   # what python -m wtdd.record --shift <id> prints
+            except Exception as e:  # noqa: BLE001  (reported, the page shows it)
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path == "/dog/state":
             from .dog.session import DogSession
