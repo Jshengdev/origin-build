@@ -20,8 +20,9 @@ one lattice and one inflation, so a waypoint the planner returns is never occupi
 fails loud (ValueError, the row ok false): the planner never picks another goal.
 
 leg(a, b, live_px, dots), S6b: the follower's (wtdd/dog/session.py _follow) route from where the dog stands to the next
-dot, over the live view: its cells and the no-go zones padded (_live_map); the grid's memory is not read (it only
-labels, blocker()). One plan.route row, or plan.replanned when the follower re-plans a leg the newest view blocks
+dot, over the live view: its cells and the no-go zones padded (_live_map); memory is not read (it only labels,
+blocker(), and since S13 memory is the map saved after a scan, ui/grid.json, never the live session grid).
+One plan.route row, or plan.replanned when the follower re-plans a leg the newest view blocks
 (clear()). Its path starts at the dog and ends on the dot exactly, the page's dashed "planned" line. For the
 follower's stuck rule, ahead() and sides() read the live view in the dog's own frame: what is in its body's corridor
 just ahead, and the clear metres left and right. Measured (this Mac, 2026-09-27, median of 10): leg() around a 0.3 m
@@ -143,20 +144,22 @@ def _live_cells(px) -> np.ndarray:
     return m
 
 
-def blocker(p, live_px, g=None, cal: dict | None = None, threshold: int | None = None, lock=None) -> dict[str, Any] | None:
+def blocker(p, live_px, memory_px=None) -> dict[str, Any] | None:
     """S6: what blocks map point p in the live view, or None when nothing does. The live view is the newest LiDAR
     window's band in map pixels; a live cell within half_width() cells of p's cell blocks it (the padding the cost map
-    uses). Memory (the grid's walls through cal, grown by one cell for drift) only labels it: {cells, in_memory, kind},
-    kind "permanent" when memory already held at least PERMANENT_SHARE of those cells, else "new obstacle"."""
+    uses). Memory only labels it: S13, the SAVED map's walls in map pixels (session._memory(): what was there before
+    this walk, never the live session grid), grown by one cell for drift: {cells, in_memory, kind}, kind "permanent"
+    when memory already held at least PERMANENT_SHARE of those cells, else "new obstacle"; with no saved map (None)
+    in_memory 0, "new obstacle" and why "memory: no saved map"."""
     live = _live_cells(live_px)
     r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, half_width()
     box = (slice(max(r0 - k, 0), max(r0 + k + 1, 0)), slice(max(c0 - k, 0), max(c0 + k + 1, 0)))
     n = int(live[box].sum())
     if n == 0:
         return None
-    mem = 0
-    if g is not None and cal is not None:
-        mem = int((live[box] & _inflate(_live_cells(walls_px(g, cal, threshold, lock)), 1)[box]).sum())
+    if memory_px is None:
+        return {"cells": n, "in_memory": 0, "kind": "new obstacle", "why": "memory: no saved map"}
+    mem = int((live[box] & _inflate(_live_cells(memory_px), 1)[box]).sum())
     return {"cells": n, "in_memory": mem, "kind": "permanent" if mem / n >= PERMANENT_SHARE else "new obstacle"}
 
 
