@@ -16,7 +16,7 @@ def run(color="cyan", seconds=5, flash_ms=None):
         return via
     from ..dog import led
     from ..dog.session import DogSession
-    s = DogSession.get()   # an explicit call may connect; a hook never does
+    s = DogSession.get()   # an explicit call may connect, and so does the listener's hook, which arrives here as one
     st = s.run(s.with_body(lambda b: led.hold(b, color, seconds, flash_ms)))
     if not os.environ.get("WTDD_API_PROCESS"):   # a CLI: the resend rows land before it exits
         s.run(_held(s.body), timeout=float(seconds) + 30)

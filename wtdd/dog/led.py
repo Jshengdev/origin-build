@@ -8,12 +8,13 @@
 
 hook(state) is the one line at a call site. It never raises and never blocks the ask, the halt or the follow: in the
 process that holds the dog it schedules hold() on the session loop and returns; in the API process without a dog it is
-one WARN and no row (a light never triggers a connect); in any other process (the listener) it posts the dog_led tool to
-the API on a daemon thread (_post_api). hold() sends one request of time_s() seconds (Body.led: one dog.led row each)
-and a keeper task resends it every time_s() until the state's HOLD_S is covered, the k-th at first send + k*time_s()
-(a request that waits on a slow 1006 read-back never stretches the period); a newer state cancels the keeper, and a
-refused request is never resent. Imports stdlib, config and the ledger only: the listener imports this module, and it
-must not load the driver.
+one WARN and no row (in this process a light never triggers a connect; the listener's hook reaches the API's dog_led
+tool, which connects like any tool call and, on an unreachable dog, writes its dog.probe row); in any other process (the
+listener) it posts the dog_led tool to the API on a daemon thread (_post_api). hold() sends one request of time_s()
+seconds (Body.led: one dog.led row each) and a keeper task resends it every time_s() until the state's HOLD_S is
+covered, the k-th at first send + k*time_s() (a request that waits on a slow 1006 read-back never stretches the period);
+a newer state cancels the keeper, and a refused request is never resent. Imports stdlib, config and the ledger only: the
+listener imports this module, and it must not load the driver.
 
 UNVERIFIED on the dog (Needs the dog 25.1-25.5): the request shape, the `time` ceiling (WTDD_LED_TIME_S, 5 s as in the
 upstream example, so a held state is resent every 5 s), whether the light flickers between resends, the flash_cycle
