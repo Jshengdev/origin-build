@@ -414,9 +414,9 @@ class Run(RunCase):
         self.pending.unlink()
         self.armed.unlink()
         n1 = len(ledger.rows())
-        out = self.D.run("lap1", trigger="cam:lap1:1790000100")
+        out = self.D.run("lap1", trigger="cam:lap1:1790000100", dry=True)   # a live run is refused "not armed" before any decision
         self.assertEqual(rows_since(n1, "dispatch.decided")[-1]["state_after"]["choice"], "ignore")
-        self.assertEqual((len(self.posts), out["phase"], self.s.follows), (1, "ignored", []))
+        self.assertEqual((len(self.posts), out["phase"], self.s.follows), (1, "decided", []))
 
     def test_a_camera_inside_a_no_go_zone_has_no_route_and_says_so(self):
         self.refused("gate2", trigger="cam:gate2:1790000000")
