@@ -296,6 +296,32 @@ class Tool(Fresh):
         self.assertEqual(len(out["stops"]), 2, "with a start given, every tap is a stop")
         self.assertEqual(out["path"], plan.route(THROUGH_WALL, grid=fx.grid(), cal=CAL)["path"], "the same legs as the first-tap start")
 
+    def test_in_the_api_process_the_start_is_the_believed_pose_on_the_session_grid(self):
+        """21.1 at the house, with a stub session: in the API process DogSession.get() gives the grid, its calibration
+        and the lock frames land under, and map_pose() the believed pose (no connect, no HTTP). Uncalibrated, map_pose()
+        is None and the first tap is the start."""
+        import threading
+        from types import SimpleNamespace
+        from wtdd.dog import session
+        lock = threading.Lock()
+        fake = SimpleNamespace(grid=fx.grid(), cal=CAL, _grid_lock=lock, map_pose=lambda: {"p": [300, 900], "heading_deg": 0.0})
+        with mock.patch.dict(os.environ, {"WTDD_API_PROCESS": "1"}), mock.patch.object(session.DogSession, "get", return_value=fake), \
+                mock.patch.object(plan, "route", wraps=plan.route) as spy:
+            out = self.run_tool(stops="650,900;300,1100")
+            fake.map_pose = lambda: None
+            first = self.run_tool(stops="650,900;300,1100")
+        self.assertEqual(out["start"], "pose")
+        self.assertTrue(near(out["path"][0], (300, 900)), f"the route starts at the believed pose: {out['path'][0]}")
+        self.assertEqual(len(out["stops"]), 2, "with the pose as the start, every tap is a stop")
+        self.assertEqual((out["cost_map"], out["grid_source"]), ("grid", "session"))
+        self.assertIs(spy.call_args_list[0].kwargs["lock"], lock, "the planner reads the walls under the session's lock")
+        r = rows_since(self.n0, "plan.multistop")[0]
+        self.assertEqual((r["args"]["grid_source"], r["cached"], r["source"]), ("session", False, "live"), "the session grid is the live path")
+        self.assertEqual(first["start"], "first tap")
+        self.assertTrue(near(first["path"][0], (650, 900)))
+        self.assertEqual(len(first["stops"]), 1, "no pose: tap 1 is the start, so one stop fewer")
+        self.assert_nothing_written()
+
     def test_save_writes_the_route_through_the_maps_rules_and_keeps_the_previous_path(self):
         prev = json.loads(self.before)
         out = self.run_tool(stops="300,1100;650,1100;650,1300", save=True)
