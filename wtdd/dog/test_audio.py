@@ -392,8 +392,8 @@ class NeverBlocks(Base):
             self.assertEqual(calls, want, f"dry={dry}")
 
     def test_a_first_say_never_stalls_the_body_loop(self):
-        """The render (say + ffmpeg, about a second on this Mac) runs off the loop that also carries the drive's
-        10 Hz Move and its StopMove: a ticker on the same loop never waits more than 0.3 s during a first say."""
+        # The render (say + ffmpeg, about a second on this Mac) runs off the loop that also carries the drive's
+        # 10 Hz Move and its StopMove: a ticker on the same loop never waits more than 0.3 s during a first say.
         a, b = self.a, stub_body()
 
         def slow(text, out):
