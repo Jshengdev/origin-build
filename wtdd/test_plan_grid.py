@@ -755,6 +755,23 @@ class NoViewZones(_Harness):
         self.assertNotEqual(a.get("cost_map"), "live", a)
         self.assertIn("no live view", a.get("cost_map") or "", a)
 
+    def test_with_no_live_view_and_no_way_around_the_failed_row_names_no_live_view(self):
+        """B16: a no-go band across the whole floor between the dots: the refused leg's row error said "the live view's 0
+        cells" with the LiDAR off."""
+        m = json.loads(FIXTURE.read_text())
+        m["zones"].append({"name": "band", "label": "band", "poly": [[0, 1300], [1060, 1300], [1060, 1340], [0, 1340]], "nogo": True})
+        walled = _TMP / "map-band.json"
+        walled.write_text(json.dumps(m))
+        self.enterContext(mock.patch.object(plan, "MAP", walled))
+        line = [[300, 1200], [300, 1450]]
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)
+        self.assertIn("refused", fs.get("error") or "", fs)
+        row = rows_since(self.n0, "plan.route")[0]
+        self.assertIs(row["ok"], False, row)
+        self.assertNotIn("live view's", row["response_or_error"], row)
+        self.assertIn("no live view", row["response_or_error"], row)
+
     def test_a_leg_with_no_live_view_and_no_sentence_never_says_it_sees_live(self):
         """B16: leg()'s own sentence, when the caller gives none, names the zones and not a live view."""
         plan.leg([400, 1150], [560, 1150], [], [None, 1], live_view=False)
