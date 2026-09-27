@@ -52,7 +52,8 @@ def install(session) -> None:
     b = Body()
     b._video, b._vid_t0, b.video_source = True, time.monotonic(), "stub"   # the channel counts as on: there is no conn
     session.body = b
-    asyncio.run_coroutine_threadsafe(b._drain(SynthTrack(fps, freeze)), session.loop)
+    b.stub_drain = asyncio.run_coroutine_threadsafe(b._drain(SynthTrack(fps, freeze)), session.loop)   # held: a frozen track's
+    # pending task is otherwise unreachable and garbage-collected ("Task was destroyed but it is pending!")
     while b._fr is None and time.monotonic() - b._vid_t0 < FRAME_TIMEOUT_S:   # as _video_on waits: no reader sees the
         time.sleep(0.01)                                                       # channel on before its first frame
     log("dog", "WARN DEMO_CACHE video stub: no dog, a synthetic frame", fps=fps, freeze_s=freeze, size=f"{W}x{H}")
