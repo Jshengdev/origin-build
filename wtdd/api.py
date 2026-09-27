@@ -29,6 +29,9 @@
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
   GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
+  GET  /dog/scout                 the scout's proposed no-go zones {n, proposals: [{id, kind, label, p, app, cells_px, poly, thumb, ...}], failed, source, why} (polled every 2 s); WTDD_SCOUT=<file> serves a fixture instead (DEMO_CACHE)
+  POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes 04's nogo zone into ui/map.json
+                                  (map.prev.json kept); 400 no name, 404 no open proposal, 409 a stale page, each with its failed row
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -140,6 +143,21 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().objects_state())
             except Exception as e:  # noqa: BLE001  (a missing fixture, a bad WTDD_CAM_FOV_DEG, an unreadable watch.json: the page shows it)
                 return self._json(500, {"n": 0, "objects": [], "error": f"{type(e).__name__}: {e}"})
+        # 19 · scout-zones
+        if u.path == "/dog/scout":   # a read: never connects, no row of its own; the store's rows are zone.decided / zone.proposed
+            try:
+                fixture = config.maybe("WTDD_SCOUT")
+                if fixture:
+                    # DEMO_CACHE: WTDD_SCOUT=<file> serves that file (wtdd/dog/fixtures/scout.json: one stub proposal on the
+                    # chair's 11 WALL_A cells; scout-failed.json: one named model-call failure) so the remote's proposals can
+                    # be screenshotted with no dog, no detector and no key; `source` names the file. Live: unset it; the
+                    # session's Proposals fed by the objects thread answers.
+                    f = Path(fixture) if Path(fixture).is_absolute() else ROOT / fixture
+                    return self._json(200, {**json.loads(f.read_text()), "source": f"fixture: {fixture}"})
+                from .dog.session import DogSession
+                return self._json(200, DogSession.get().scout_state())
+            except Exception as e:  # noqa: BLE001  (a missing fixture or a broken store: the page shows it)
+                return self._json(500, {"n": 0, "proposals": [], "failed": [], "error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -243,6 +261,22 @@ class H(BaseHTTPRequestHandler):
                 out = s.grid_clear(str(body.get("why") or "cleared from the page")) if body.get("clear") else s.grid_save()
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 19 · scout-zones
+        if u.path == "/dog/scout":   # {id, action: confirm | dismiss, by, _version}: a named person's tap; each is one zone.* row, ok or not
+            from .dog.scout_zones import Refused
+            from .dog.session import DogSession
+            body = self._body()
+            if body.get("action") not in ("confirm", "dismiss"):
+                log("api", "scout tap refused: unknown action", action=body.get("action"))
+                return self._json(400, {"ok": False, "error": f"action must be confirm or dismiss, got {body.get('action')!r}"})
+            s = DogSession.get().scout
+            try:
+                out = s.confirm(body.get("id"), body.get("by"), body.get("_version")) if body["action"] == "confirm" else s.dismiss(body.get("id"), body.get("by"))
+                return self._json(200, {"ok": True, **out})
+            except Refused as e:   # no name, no open proposal, a stale page, a zone 04 refuses: its failed row is written
+                return self._json(e.code, {"ok": False, "error": str(e)})
+            except Exception as e:  # noqa: BLE001  (an unreadable map: the failed row has it, the page shows it)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
