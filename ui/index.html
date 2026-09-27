@@ -437,14 +437,16 @@ function Cams({ cameras }) {
 // A camera's person sends the dog (wtdd/dispatch.py): GET /dispatch every second, with or without a dog. part="map", inside
 // the map SVG: the planned route (solid; A* over the dog's own grid, on the page before anything moves), a ring at the
 // camera's spot and a dot at the arrival. The block under the map: the phase, the three probabilities the decision came
-// back with, the demotion, then the words it was made on, verbatim. The page computes nothing; "stale" once the file is
-// over 3 s old (a walk rewrites it every second; an ask waits unwritten); a failed dispatch is FAILED in red with its
-// reason (and the ring turns red).
+// back with, the demotion, then the words it was made on, verbatim. The page computes nothing; "stale" only while
+// `following` (the one phase rewritten every second) and the file is over 3 s old: the other phases are states, written
+// once (an ask waits up to two minutes for its reply). A failed or ignored dispatch shows that one phase, not the happy
+// path it never walked; a failure is FAILED in red with its reason (and the ring turns red); an error on an arrived
+// page (the detector FAILED) is in red too.
 function Dispatch({ part }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => { const f = () => fetch(`${API}/dispatch`).then(r => r.json()).then(x => { setD(x); setErr(null); }).catch(e => setErr(String(e))); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
-  const PHASES = ["planned", "decided", "asked", "following", "arrived"], stale = d?.age_ms > 3000, failed = d?.phase === "failed", pr = d?.probabilities;
+  const PHASES = ["planned", "decided", "asked", "following", "arrived"], stale = d?.phase === "following" && d?.age_ms > 3000, failed = d?.phase === "failed", pr = d?.probabilities;
   if (part === "map") return d?.pt ? html`<g>
     ${(d.path || []).length > 1 && html`<polyline class="dispatch" points=${d.path.map(p => p.join(",")).join(" ")}/>`}
     <circle class=${"dcam" + (failed ? " failed" : "")} cx=${d.pt[0]} cy=${d.pt[1]} r="26"/>
@@ -454,10 +456,10 @@ function Dispatch({ part }) {
     ${err ? html`<div class="mono bad">dispatch · GET /dispatch FAILED · ${err}</div>` : !d ? html`<div class="mono">dispatch · …</div>`
       : !d.phase ? html`<div class="hint">dispatch · none yet · python -m wtdd dispatch cam=lap1 dry=true</div>` : html`
       <div class="mono">dispatch · camera ${d.cam}${d.label ? ` (${d.label})` : ""}${d.dry ? " · dry: nothing posts, nothing moves" : ""}${stale ? " · stale" : ""}</div>
-      <div class="dphase">${PHASES.map((p, i) => html`<span key=${p}>${i ? " → " : ""}${p === d.phase ? html`<b>${p}</b>` : p}</span>`)}${PHASES.includes(d.phase) ? "" : html` → <b class=${failed ? "bad" : ""}>${d.phase}</b>`}</div>
+      <div class="dphase">${PHASES.includes(d.phase) ? PHASES.map((p, i) => html`<span key=${p}>${i ? " → " : ""}${p === d.phase ? html`<b>${p}</b>` : p}</span>`) : html`<b class=${failed ? "bad" : ""}>${d.phase}</b>`}</div>
       ${pr && html`<div class="dprob">${["dispatch", "ask", "ignore"].map(k => `${k} ${pr[k]}`).join(" · ")}${d.demoted === "auto off" ? ` · auto off${d.ask_to ? `: asking ${d.ask_to}` : ""}` : d.demoted ? ` · ${d.demoted}` : ""}</div>`}
       ${d.choice && html`<div class="mono">choice ${d.choice}${d.p != null ? ` · p ${d.p}` : " · a person said yes"}${d.reached != null ? ` · reached ${d.reached} of ${d.of}` : ""}</div>`}
-      ${failed && html`<div class="bad dfail">FAILED ${d.error}</div>`}
+      ${d.error && html`<div class="bad dfail">${failed ? "FAILED " : ""}${d.error}</div>`}
       ${d.state && html`<pre class="dstate">${d.state}</pre>`}`}
   </div>`;
 }
