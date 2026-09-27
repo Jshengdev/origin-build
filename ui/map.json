@@ -343,5 +343,20 @@
     "gain": 2.1
   },
   "stops": [],
-  "actions": {}
+  "actions": {},
+  "labels": [
+    "clear",
+    "material_stack",
+    "opening",
+    "hazard",
+    "person",
+    "other"
+  ],
+  "policy": {
+    "escalate": [
+      "opening",
+      "hazard",
+      "person"
+    ]
+  }
 }
