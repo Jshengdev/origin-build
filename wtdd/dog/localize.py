@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import config
+from .. import shift
 from . import lidar
 
 SEARCH_M = 0.40          # +- metres searched in x and y, in whole grid cells (UNVERIFIED: tune on the dog)
@@ -146,7 +146,7 @@ def over_cap(m: dict, cap_m: float = CAP_M, cap_deg: float = CAP_DEG) -> str | N
 
 
 def shift_id() -> str:
-    return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    return shift.current()
 
 
 def row(m: dict, pivot: str, before: dict, after: dict, why: str | None = None, **counts: Any) -> dict[str, Any]:

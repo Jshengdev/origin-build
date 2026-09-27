@@ -43,12 +43,11 @@ from __future__ import annotations
 import contextlib
 import json
 import math
-import time
 from typing import Any
 
 import numpy as np
 
-from . import config
+from . import shift
 from . import nogo
 from .config import ROOT
 from .field import MAP, inside
@@ -267,7 +266,7 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
     follower names the waypoint to rejoin (rejoin), and the row carries the follower's sentence (args.say)."""
     m = json.loads(MAP.read_text())
     args = {"from": [int(p[0]), int(p[1])], "blocked": {"index": i, "waypoint": [int(path[i][0]), int(path[i][1])]}, "cell_px": CELL,
-            "shift_id": config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")}
+            "shift_id": shift.current()}
     with step("plan", "plan.replanned", "map", args) as r:
         if grid is None or cal is None:
             raise ValueError(f"replan needs the grid and a calibration ({'no grid' if grid is None else 'not calibrated'})")

@@ -1,9 +1,9 @@
 """Sign the shift's record: one record.signed {by, at, shift_id} row closes the shift; a second signature of the same
 shift is refused with its own ok=false row. by defaults to the on-call person (WTDD_ON_CALL_NAME), shift_id to
-WTDD_SHIFT or today's date. The ledger is the record: the shift is closed when an ok record.signed row exists, and the
+the run in force (shift.current()). The ledger is the record: the shift is closed when an ok record.signed row exists, and the
 signature counts only once it is read back from the ledger. Zero flags in the shift is a WARN, not a refusal (item 03)."""
 ARGS = {"by": {"type": "string", "default": None, "doc": "the signer's name; default WTDD_ON_CALL_NAME"},
-        "shift_id": {"type": "string", "default": None, "doc": "the shift to close; default WTDD_SHIFT or today YYYY-MM-DD"}}
+        "shift_id": {"type": "string", "default": None, "doc": "the shift to close; default the run in force: shift.json, else WTDD_SHIFT, else today YYYY-MM-DD"}}
 
 
 def run(by=None, shift_id=None):
