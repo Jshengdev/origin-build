@@ -491,6 +491,41 @@ class FollowerLive(_Harness):
         self.assertEqual(fs["reached"], list(range(len(ROUTE))))
 
 
+class Padding(unittest.TestCase):
+    """S8 (live on main 93605f1, 03:29): the padding was 4 lattice cells of 10 px, so at the measured 87 px/m every side
+    grew 0.46 m and any gap under ~0.9 m read as closed; the Go2 is ~0.31 m wide. Johnny, at the gap: "can it seriously not
+    go through this gap?" The padding is now HALF_WIDTH_M per side in metres, converted at the scale in force, and a
+    detour trusts the live view where it can see (memory counts only beyond LIVE_TRUST_M of the dog)."""
+
+    def at_scale(self, v):
+        from wtdd.dog import nav
+        return mock.patch.object(nav, "PX_PER_M", v)
+
+    def test_the_padding_is_metres_at_the_scale_in_force(self):
+        with self.at_scale(87.0):
+            self.assertEqual(plan.half_width(), 2)
+        with self.at_scale(108.5):
+            self.assertEqual(plan.half_width(), 3)
+
+    def test_a_detour_goes_through_a_seventy_centimetre_gap(self):
+        with self.at_scale(87.0):
+            gap = 0.7 * 87.0
+            live = [[600, y] for y in range(0, plan.H, 4) if abs(y - 1400) > gap / 2]   # a wall across the whole map, one 0.7 m gap
+            path = [[500, 1400], [650, 1400], [700, 1400]]
+            out = plan.replan((500, 1400), path, 1, fx.grid(), CAL, live_px=live, rejoin=2)   # no way round: only the gap
+            cross = [a[1] + (b[1] - a[1]) * (600 - a[0]) / (b[0] - a[0]) for a, b in zip(out["path"], out["path"][1:])
+                     if a[0] != b[0] and min(a[0], b[0]) <= 600 <= max(a[0], b[0])]
+            self.assertEqual(len(cross), 1, out["path"])
+            self.assertLess(abs(cross[0] - 1400), gap / 2, f"it crosses the wall inside the gap: {out['path']}")
+
+    def test_a_detour_ignores_remembered_walls_the_live_view_shows_gone(self):
+        with self.at_scale(87.0):
+            path = [[500, 1400], [600, 1400], [700, 1400]]
+            out = plan.replan((500, 1400), path, 1, fx.grid(blob_px=(600, 1400)), CAL, live_px=[], rejoin=2)
+            self.assertLessEqual(out["length_px"], 210, f"a straight run, not a bend around a blob that is gone: {out}")
+            self.assertEqual(out.get("cost_map"), "live")
+
+
 class Receipts(unittest.TestCase):
     """S6, Johnny 03:15: the receipts panel reads like the agent talking. A row's first-person sentence (args.say) is its
     main line, and a red row shows its error (response_or_error), which the panel never showed before S6."""
