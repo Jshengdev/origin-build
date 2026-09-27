@@ -13,7 +13,6 @@ ARGS = {"look": {"type": "string", "default": "level", "doc": "level | tilt | si
 
 TEXT = "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!"
 ASK = "who dis?!"
-PENDING_WINDOW_S = 120
 
 
 def run(look="level", seconds=5, trigger=None, ask=True):

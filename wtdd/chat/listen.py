@@ -189,7 +189,6 @@ class Listener:
         heads-up line to the on-call person (a heads_up question, the hold); ask posts the "not sure" line with the photo
         to the group (a decide question, the hold); continue asks nothing. "who dis?!" wins when both would ask (one
         question per stop). Every pending names the question it asked."""
-        from .. import tools
         from ..tools.dog_say import look_and_see
         k = m["guid"] + (f":{at}" if at is not None else "")
         look, ask = "tilt", _flag("WTDD_ALARM")
