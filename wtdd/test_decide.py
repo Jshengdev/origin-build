@@ -730,6 +730,27 @@ class ListenEscalate(unittest.TestCase):
         self.assertFalse(self.pending.exists())
         wait.assert_not_called()
 
+    def test_a_question_that_replaces_an_open_flag_is_a_warn(self):
+        """pending.json holds one question. A held flag ("on it") outlives its stop, so the next stop's question replaces
+        it: that is one WARN naming the flag it drops, never silent (fix round 1; seen failing first)."""
+        opening = {"label": "opening", "p": 0.98, "needs_person": False, "model": "stub", "action": "escalate"}
+        other = {"label": "other", "p": 0.5, "needs_person": True, "model": "stub", "action": "ask"}
+        person = {"label": "person", "p": 0.95, "needs_person": False, "model": "stub", "action": "escalate"}
+        for at, is_person, d in ((23, False, opening), (23, False, other), (22, True, person)):
+            with self.subTest(at=at, action=d["action"]):
+                self.pending.unlink(missing_ok=True)
+                with mock.patch.object(self.L, "log") as log:
+                    self._stop(10, False, opening)
+                self.assertFalse([c for c in log.call_args_list if str(c.args[1]).startswith("WARN")])   # nothing open: nothing dropped
+                held = {**json.loads(self.pending.read_text()), "acknowledged": True}
+                self.pending.write_text(json.dumps(held))
+                with mock.patch.object(self.L, "log") as log:
+                    self._stop(at, is_person, d)
+                warns = [c for c in log.call_args_list if str(c.args[1]).startswith("WARN an open flag is replaced")]
+                self.assertEqual(len(warns), 1, log.call_args_list)
+                self.assertEqual((warns[0].kwargs["was"], warns[0].kwargs["acknowledged"]), ("decide:g1:10", True))
+                self.assertEqual(json.loads(self.pending.read_text())["trigger"], f"{'alarm' if is_person else 'decide'}:g1:{at}")
+
     def test_continue_asks_nobody(self):
         wait = self._stop(10, False, {"label": "material_stack", "p": 0.93, "needs_person": False, "model": "stub", "action": "continue"})
         self.assertEqual([k for _, k, _, _, _ in self.posts], ["say:g1:10"])

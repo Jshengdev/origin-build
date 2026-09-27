@@ -14,6 +14,9 @@ for. Only a who_dis flag (03's person-in-frame at an ask stop, or intruder_alarm
 escalation of a decided label) or a decide question stands down on stranger. acknowledged holds the flag open for
 handled; handled closes it; below the threshold or unclear, "do you know them? yes or no" once, then stand down, logged
 as unclear; the round's hold goes on across the re-ask. A pending of kind halt (item 00) never enters read_reply.
+From the review of 17: the answer to the re-ask is read against the re-ask (args.question); one acked_ms per flag (a
+close after a hold carries closed_ms instead; after a re-ask the final row keeps the first reply's time), so
+numbers.shifts() on the remote fixture counts one; a verdict read by the stub is a cached/stub row, an unread one is not.
 
 Offline: the scratch ledger and memory.db are set through WTDD_LEDGER / WTDD_MEMORY before wtdd.ledger is imported. Run
 alone, they are this module's; after wtdd.test_decide in one process they are that module's (wtdd.ledger reads the
@@ -235,15 +238,22 @@ class Verdict(unittest.TestCase):
         self.pend.write_text(json.dumps({"kind": kind, "t": time.time(), "file": "/tmp/f.jpg", "seconds": 5,
                                          "trigger": self.trigger, "chat": ONCALL}))
 
-    def _m(self, text: str, n: int = 1) -> dict:
+    def _m(self, text: str, n: int = 1, ts: str = "2026-09-27 12:18:22") -> dict:
         return {"rowid": n, "guid": f"R-{self._testMethodName}-{n}", "text": text, "is_from_me": 0, "sender": HANDLE,
-                "ts_utc": "2026-09-27 12:18:22", "attachments": [], "chat": ONCALL}
+                "ts_utc": ts, "attachments": [], "chat": ONCALL}
 
-    def _say(self, text: str, n: int = 1, **env: str):
+    def _say(self, text: str, n: int = 1, ts: str = "2026-09-27 12:18:22", **env: str):
         with mock.patch.dict(os.environ, env), mock.patch.object(L, "PENDING", self.pend), \
                 mock.patch("wtdd.tools.call", return_value={"signaled": [], "errors": []}) as call:
-            got = self.l.verdict(self._m(text, n))
+            got = self.l.verdict(self._m(text, n, ts))
         return got, call
+
+    def _flagged(self, utc: str) -> None:
+        """The flag's confirmed chat.post under this check's trigger (read back at `utc`, chat.db's clock), so acked_ms is a number."""
+        ledger.append({"step": "chat.post", "agent": "central", "tool": "chat.post", "app": "imessage", "ok": True,
+                       "args": {"guid": ONCALL, "kind": "escalate", "trigger": self.trigger, "text": "who dis?!", "file": "/tmp/f.jpg"},
+                       "state_before": None, "state_after": {"guid": f"P-{self._testMethodName}", "rowid": 1, "ts": utc},
+                       "response_or_error": None, "latency_ms": 0})
 
     def _rows(self, tool: str) -> list[dict]:
         key = "trigger" if tool == "reply.decided" else "asked"
@@ -340,6 +350,8 @@ class Verdict(unittest.TestCase):
         self.assertEqual(self.posts[0][0], ONCALL)
         self.assertTrue(self.posts[0][3].startswith("couldn't read the reply"), self.posts[0][3])
         self.assertEqual(self._verdicts(), [("unread", "stand_down")])
+        v = self._rows("intruder.verdict")[0]
+        self.assertEqual((v["cached"], v["source"]), (False, "live"))   # no reading happened, so nothing on it is the stub's
         self.assertFalse(self.pend.exists())
 
     def test_a_halt_is_never_read_as_a_reply(self):
@@ -362,6 +374,57 @@ class Verdict(unittest.TestCase):
         call.assert_not_called()
         self.assertEqual(self._texts(), [REASK, STANDING_DOWN])
         self.assertEqual(self._verdicts(), [("known", "stand_down")])
+
+    # ---------- fix round 1 (review of 17): each check below was seen failing before its fix
+
+    def test_the_answer_to_the_reask_is_read_against_the_reask(self):
+        """After "do you know them? yes or no", the next reply answers that, not "who dis?!": its reply.decided row says so
+        (args.question), and the state the model reads is that question and that answer."""
+        self._ask("who_dis")
+        self._say("wait what", 1)
+        self.assertEqual(json.loads(self.pend.read_text()).get("question"), REASK)
+        self._say("no", 2)
+        read = self._rows("reply.decided")
+        self.assertEqual([(r["args"]["question"], r["args"]["text"]) for r in read], [(WHO, "wait what"), (REASK, "no")])
+
+    def test_one_acked_ms_per_flag_the_close_is_closed_ms(self):
+        """A held flag has two verdict rows; only the first carries acked_ms (numbers.py and 10's record count every one).
+        The close's time from the flag is args.closed_ms."""
+        self._ask("heads_up")
+        self._flagged("2026-09-27 12:18:10")
+        self._say("on it", 1, "2026-09-27 12:18:22")
+        self._say("handled, cover is back on", 2, "2026-09-27 12:19:45")
+        held, closed = [r["args"] for r in self._rows("intruder.verdict")]
+        self.assertEqual(held["acked_ms"], 12000)
+        self.assertNotIn("acked_ms", closed)
+        self.assertEqual(closed["closed_ms"], 95000)
+        self.assertEqual(closed["shift_id"], held["shift_id"])
+
+    def test_after_a_reask_acked_ms_is_the_first_replys(self):
+        """The re-ask writes no verdict row, so the final row carries the first reply's time: the person answered then."""
+        self._ask("who_dis")
+        self._flagged("2026-09-27 12:18:10")
+        self._say("wait what", 1, "2026-09-27 12:18:22")
+        self._say("thats my friend", 2, "2026-09-27 12:19:00")
+        self.assertEqual([r["args"]["acked_ms"] for r in self._rows("intruder.verdict")], [12000])
+
+    def test_a_stub_reading_is_a_stub_verdict_row(self):
+        """The verdict's meaning and p are the DEMO_CACHE reader's when JEV_API_KEY is unset: the row says so, like its
+        reply.decided row beside it (10's record counts cached rows for its "a fixture, not a night" header)."""
+        self._ask("who_dis")
+        self._say("thats my friend")
+        v = self._rows("intruder.verdict")[0]
+        self.assertEqual((v["cached"], v["source"]), (True, "stub"))
+
+
+class Fixture(unittest.TestCase):
+    """The committed remote fixture read by the README's numbers: one flag, one acked_ms (the hold's), not the close's too."""
+
+    def test_numbers_counts_one_acked_ms_for_the_one_flag(self):
+        from wtdd import numbers
+        rows = [json.loads(x) for x in (ROOT / "wtdd" / "fixtures" / "ledger-17-remote.jsonl").read_text().splitlines() if x.strip()]
+        s = numbers.shifts(rows)
+        self.assertEqual([(x["shift_id"], x["flags"], x["acked_ms"]) for x in s], [("2026-09-27", 1, [12000])])
 
 
 if __name__ == "__main__":
