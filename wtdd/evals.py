@@ -498,12 +498,7 @@ def run_twice() -> list[dict[str, Any]]:
 
 
 # 19 · scout-zones
-FIXTURES = config.ROOT / "wtdd" / "fixtures" / "evals"   # 11's name: the dry ledgers a scenario is graded on
 ORDER.append("scout")
-
-
-def load(path) -> list[dict[str, Any]]:
-    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
 
 
 def _auto_why(r: dict[str, Any], thr: float) -> str | None:
@@ -723,9 +718,6 @@ def main(argv: list[str] | None = None) -> int:
     if a.write and any(r.get("dry") for r in res):   # the README's trials are device grades only: a dry trial never lands there
         raise SystemExit(f"--write refused: {sorted({r['scenario'] for r in res if r.get('dry')})} graded dry on fixtures; README.md and evals.json untouched")
     if a.write:
-        if any(r.get("dry") for r in res):
-            raise SystemExit("--write refuses dry (fixture) trials: the README's trials table is device grades only; "
-                             "run with --ledger ledger.jsonl --shift <id>")
         write_readme(table(merge([{k: v for k, v in r.items() if k != "dry"} for r in res])))   # evals.json keeps the 7-key row
     return 0 if all(r["grade"] == "pass" for r in res) else 1
 
