@@ -148,8 +148,14 @@ def _stub(state: str, choices: list[str]) -> tuple[str, float, str, str]:
     # and "the eyes disagree" lowers p by 0.3 (two eyes disagreeing is the one uncertainty signal the shipped system
     # has). Why: no Jev key in a worktree, and the round must reach the ask beat dry. Live: set JEV_API_KEY in .env
     # (JEV_LIVE=1 on the CLI refuses the stub); decide() then POSTs the same state to JEV_URL with model JEV_MODEL and
-    # the row says source=live.
+    # the row says source=live. A custom closed list (S6b: what sits on a dot the LiDAR sees covered, session.OBSTACLES):
+    # the first choice the state names as a word (a person also by "someone") at p 0.6, else "other" at 0.4 when it is
+    # a choice; neither: the ValueError below. Live: the same JEV_API_KEY; the follower then calls _jev with the list.
     s = state.lower()
+    if not set(choices) <= set(DEFAULT_LABELS):
+        hit = next((c for c in choices if re.search(rf"\b{re.escape(c)}s?\b", s) or (c == "person" and PERSON.search(s))), None)
+        if hit or "other" in choices:
+            return (hit, 0.6, "stub", f"stub: {hit} named in the state") if hit else ("other", 0.4, "stub", "stub: no choice named, other")
     if HAZARD.search(s):
         label, p = "hazard", 0.85
     elif PERSON.search(s):
