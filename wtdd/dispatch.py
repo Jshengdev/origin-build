@@ -39,7 +39,8 @@ run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written at
      boxed copy of the sighting; never a file found on disk, else text only), pending.json {kind: dispatch} (phase
      `asked`); a question that opened since step 2 (looked for again just before the post and just before
      pending.json) wins and this one is refused, its pending.json untouched. The reply is read by listen.verdict: only
-     a whole short yes (AFFIRM.fullmatch) walks. dispatch: DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
+     a whole short yes (AFFIRM.fullmatch) walks. dispatch: a question opened since step 2 is looked for again and wins
+     (refused, nothing moves), then DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
      len(path) * session.WP_TIMEOUT_S then stop() (phase `following`); on arrival a level look (dog_say.look_and_see) and
      one post with the photo, or the existing who-dis ask when the DETECTOR boxed a person (phase `arrived`); a failed
      detector is never "no person": the post says "detector FAILED" and the page's error carries it. Never STRANGER
@@ -492,7 +493,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
             return _publish(page, phase="ignored")
         if d["choice"] == "ask":
             return _ask(page, c, trigger, file, refuse)
-        return _walk(page, s, c, trigger)
+        return _walk(page, s, c, trigger, refuse)
     except Exception as e:  # noqa: BLE001  (the last net: a failure no step above has told, e.g. an unreadable ui/grid.json)
         if getattr(e, "told", False):
             raise
@@ -539,12 +540,18 @@ def _ask(page: dict, c: dict, trigger: str, file: str | None, refuse) -> dict:
     return _publish(page, phase="asked", ask_to=config.maybe("WTDD_ON_CALL_NAME") or "the group")
 
 
-def _walk(page: dict, s, c: dict, trigger: str) -> dict:
-    """The follow, bounded, then a level look and one post. Called only in the process that owns the dog."""
+def _walk(page: dict, s, c: dict, trigger: str, refuse) -> dict:
+    """The follow, bounded, then a level look and one post. Called only in the process that owns the dog. A question
+    that opened since run() looked (the dog's own who-dis, during the plan or the decision) is looked for again just
+    before the follow, as _ask's hold() does, and wins: run()'s refusal, nothing moves, its pending.json untouched."""
     from . import tools
     from .dog import session
     from .tools import chat_post, dog_say
     path = page["path"]
+    pend = _open_question()
+    if pend:
+        why, said = _held(pend, "opened before the walk")
+        refuse(why, frame=False, said=said)
     try:
         _publish(page, phase="following")
         s.follow(path, [], from_nearest=False, avoid=True)
