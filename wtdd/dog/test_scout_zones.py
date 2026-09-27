@@ -703,6 +703,27 @@ class Feed(Base):
         self.assertNotIn("waiting", p.state()["why"], "a thing no longer seen does not wait forever")
         self.assertFalse(self.rows)
 
+    def test_a_waiting_thing_that_goes_stale_untaken_is_named_not_dropped_without_a_trace(self):
+        # review round 4: the feed after the stale windows cleared the waiting WARN with no line, and state()'s why said
+        # "no placed object yet" although 07 placed both. What went stale before the scout took it is one WARN and the why.
+        moved = {"position": [0.10, 0.0], "yaw": 0.0}
+        p = self.props()
+        p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
+        for t in range(objects.STALE_WINDOWS):
+            self.store.observe({**frame(), "boxes": [], "t": 10.0 + t}, moved, self.g, CAL, FOV, threshold=THR)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            for _ in range(2):   # two ticks: the change is logged once
+                p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
+        why = p.state()["why"]
+        self.assertNotIn("no placed object yet", why, "07 placed two")
+        for name in ("o1", "o2", "stale"):
+            self.assertIn(name, why, "the why names what went stale un-proposed")
+        lines = [ln for ln in err.getvalue().splitlines() if ln.startswith("[wtdd:scout]")]
+        self.assertEqual(len(lines), 1, f"one WARN line for the change: {err.getvalue()!r}")
+        self.assertTrue(all(s in lines[0] for s in ("WARN", "o1", "o2", "stale")), lines[0])
+        self.assertFalse(self.rows, "nothing was asked, so no row")
+
 
 class Confirm(Base):
     def setUp(self):
