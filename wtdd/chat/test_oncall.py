@@ -32,6 +32,7 @@ os.environ["WTDD_WAKE_SHOW"] = "0"
 os.environ["WTDD_AGENT"] = "0"
 os.environ["WTDD_ALLOW_SELF"] = "0"
 os.environ["WTDD_ALARM"] = "1"
+os.environ["JEV_API_KEY"] = ""   # 17: verdict() reads the reply through decide.read_reply; a .env key must not make these live calls
 
 from wtdd import ledger, numbers, tools  # noqa: E402
 from wtdd.chat import __main__ as cli, db, listen as L, memory, send  # noqa: E402
@@ -44,6 +45,8 @@ OTHER = "any;-;+15550009999"               # another 1:1 chat: never a target
 CASTLE = "any;+;9dc250e675d447a888c6287339f429e0"
 SHIFT = "2026-09-27"
 FIXTURE = Path(__file__).parent / "fixtures" / "oncall-shift.jsonl"
+# what dog_say.look_and_see returns beside the look since 02: every stop carries its decision (17 adds the action)
+DECISION = {"label": "person", "p": 0.95, "needs_person": False, "model": "stub", "action": "escalate"}
 
 
 def _oncall():
@@ -177,7 +180,7 @@ class Escalate(unittest.TestCase):
 
     def test_look_and_say_flags_the_on_call_with_the_photo(self):
         seen = {"text": "someone by the trench cover", "file": "/tmp/look-level-boxed.jpg", "person": True,
-                "detector": {"classes": ["person"]}}
+                "detector": {"classes": ["person"]}, "decision": DECISION}
         with mock.patch("wtdd.tools.dog_say.look_and_see", return_value=seen), \
              mock.patch.object(L, "PENDING", _TMP / "pending.json"), \
              mock.patch.object(self.l, "await_verdict", return_value=False):
@@ -238,7 +241,7 @@ class Escalate(unittest.TestCase):
         # error under its own escalate-fail: key (alarm: can already be claimed by a flag whose send failed, see the next
         # test), no question is opened, the dog does not hold 45 s.
         seen = {"text": "someone by the trench cover", "file": "/tmp/look-level-boxed.jpg", "person": True,
-                "detector": {"classes": ["person"]}}
+                "detector": {"classes": ["person"]}, "decision": DECISION}
         with mock.patch.dict(os.environ), \
              mock.patch("wtdd.tools.dog_say.look_and_see", return_value=seen), \
              mock.patch.object(L, "PENDING", _TMP / "pending-5.json"), \
@@ -260,7 +263,7 @@ class Escalate(unittest.TestCase):
         # error stays on the failed chat.post row, and look_and_say returns (field.walk's on_stop has no try around it):
         # no question opened, no hold, the round goes on.
         seen = {"text": "someone by the trench cover", "file": "/tmp/look-level-boxed.jpg", "person": True,
-                "detector": {"classes": ["person"]}}
+                "detector": {"classes": ["person"]}, "decision": DECISION}
         rowids = iter(range(60100, 60200))
 
         def confirmed(ts: str) -> dict:
