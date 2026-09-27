@@ -20,6 +20,9 @@ records the believed pose while Johnny drives, mark(look, say) adds a stop at th
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
 row; a failed or cancelled follow says so in state().follow.error.
+The map scale (S5b): scale(v) is the page's slider (GET/POST /dog/scale), nav.set_scale inside one dog.scale row, saved as
+px_per_m beside the tie in dog_cal.json; a new session takes that over WTDD_PX_PER_M (an out-of-range one is a WARN and
+ignored) and names the scale's source in one stderr line. Only the process that holds the session sees the saved value.
 A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
 calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
 Before each waypoint the follower asks the session's occupancy grid (wtdd/plan.py occupied) whether it now sits in an
@@ -109,8 +112,15 @@ class DogSession:
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
         self.recheck = False   # no calibration loaded; state() reads this before any connect
-        if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
-            self.cal = json.loads(CAL_FILE.read_text())
+        saved = json.loads(CAL_FILE.read_text()) if CAL_FILE.exists() else {}
+        if (v := saved.pop("px_per_m", None)) is not None:   # the page's scale, saved beside the tie, wins over WTDD_PX_PER_M
+            try:
+                nav.set_scale(v, CAL_FILE.name)
+            except ValueError as e:
+                log("dog", f"WARN saved scale ignored, keeping {nav.SCALE_SOURCE}", file=CAL_FILE.name, err=str(e))
+        log("dog", f"scale {nav.PX_PER_M} px/m from {nav.SCALE_SOURCE}")
+        if saved:   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
+            self.cal = saved
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
             log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=self.cal.get("map"), at=self.cal.get("at"))
         self.follow_state: dict[str, Any] = {}       # the follower's live status (GET /dog/state .follow)
@@ -428,10 +438,29 @@ class DogSession:
         with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1), "corr": localize.describe(c)}, self.map_pose(st)) as r:
             self.cal = {**nav.calibration((x, y), yaw, p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
             self.recheck = False
-            CAL_FILE.write_text(json.dumps(self.cal))
+            self._save_cal()
             r["state_after"] = {"cal": self.cal, "map": self.map_pose(st)}
         log("dog", "calibrated", p=list(p), heading_deg=round(math.degrees(heading), 1))
         return self.map_pose(st)
+
+    def _save_cal(self) -> None:
+        """dog_cal.json: the tie and, once the page has set it, the scale beside it; each write keeps the other."""
+        keep = {"px_per_m": nav.PX_PER_M} if nav.SCALE_SOURCE in ("page", CAL_FILE.name) else {}
+        CAL_FILE.write_text(json.dumps({**(self.cal or {}), **keep}))
+
+    def scale(self, px_per_m: Any = None) -> dict[str, Any]:
+        """GET/POST /dog/scale, the page's slider. None reads {px_per_m, source}, no row. A value goes through
+        nav.set_scale inside one dog.scale row (px_per_m before and after) and is saved beside the tie; a value that is
+        not a number or outside 20..400 fails the row (ValueError naming it) and changes nothing."""
+        now = {"px_per_m": nav.PX_PER_M, "source": nav.SCALE_SOURCE}
+        if px_per_m is None:
+            return now
+        with step("dog", "dog.scale", "map", {"px_per_m": px_per_m, "source": "page"}, now) as r:
+            nav.set_scale(px_per_m, "page")
+            self._save_cal()
+            r["state_after"] = {"px_per_m": nav.PX_PER_M, "source": nav.SCALE_SOURCE, "file": CAL_FILE.name}
+        log("dog", "scale set", px_per_m=nav.PX_PER_M, was=now["px_per_m"])
+        return r["state_after"]
 
     # ---- following the drawn path
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
