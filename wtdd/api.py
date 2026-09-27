@@ -30,6 +30,7 @@
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
   POST /cam/<id>/frame  raw image/jpeg   a fixed camera's frame (python -m wtdd.cam): saved, detected out of process, cam.frame + cam.detect rows, the who-dis ask when armed
   GET  /cam                       every fixed camera's newest detections {<id>: {classes, boxes, ms, t, age_ms, error?}}; GET /cam/<id>/frame.jpg its raw frame
+  GET  /dispatch                  the running or last dispatch (wtdd/dispatch.py): route, state words, probabilities, phase, error, plus age_ms; {} before one
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -136,6 +137,10 @@ class H(BaseHTTPRequestHandler):
             if len(parts) != 4 or parts[3] != "frame.jpg" or not cam.ID.fullmatch(parts[2]) or not f.is_file():
                 return self._json(404, {"error": f"no frame for camera {parts[2][:64]}"})
             return self._send(200, "image/jpeg", f.read_bytes())
+        # 18 · dispatch
+        if u.path == "/dispatch":   # the running or last dispatch (<repo>/dispatch.json) plus age_ms, {} before the first
+            from . import dispatch
+            return self._json(200, dispatch.read())
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name

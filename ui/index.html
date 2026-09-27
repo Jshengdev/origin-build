@@ -74,6 +74,14 @@
   svg.cam rect.box { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 2; vector-effect: non-scaling-stroke; }
   svg.cam text { font: 600 12px var(--mono, monospace); fill: var(--live, #0b0dc4); paint-order: stroke; stroke: #fff; stroke-width: 3px; }
   /* 09 · fixed-cam · end */
+  /* 18 · dispatch · start */
+  .dispatch { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; opacity: .85; pointer-events: none; }   /* the planned route: solid, unlike the taught path */
+  .dcam { fill: rgba(11,13,196,.08); stroke: var(--live, #0b0dc4); stroke-width: 4; pointer-events: none; } .dcam.failed { fill: rgba(178,56,46,.1); stroke: var(--bad); }
+  .darr { fill: var(--live, #0b0dc4); pointer-events: none; }
+  .dblock { margin-top: var(--gap-group); } .dblock .dphase, .dblock .dprob { font-family: var(--mono); font-size: 11.5px; margin: var(--gap-in) 0; }
+  .dblock .dphase b, .dblock .dfail { font-weight: 700; }
+  .dblock .dstate { white-space: pre-wrap; font-family: var(--mono); font-size: 11px; line-height: 1.55; margin: var(--gap-in) 0 0; padding: 8px 10px; background: #fff; border-radius: var(--r-card); box-shadow: 0 0 0 1px var(--card-edge); }
+  /* 18 · dispatch · end */
 </style>
 </head>
 <body>
@@ -274,6 +282,7 @@ function App() {
             ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
+            <${Dispatch} part="map"/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
@@ -287,6 +296,7 @@ function App() {
             })()}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
           </svg>`}
+          <${Dispatch} part="block"/>
         </div>
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
@@ -423,6 +433,35 @@ function Cams({ cameras }) {
   </div>`;
 }
 // 09 · fixed-cam · end
+// 18 · dispatch · start
+// A camera's person sends the dog (wtdd/dispatch.py): GET /dispatch every second, with or without a dog. part="map", inside
+// the map SVG: the planned route (solid; A* over the dog's own grid, on the page before anything moves), a ring at the
+// camera's spot and a dot at the arrival. The block under the map: the phase, the three probabilities the decision came
+// back with, the demotion, then the words it was made on, verbatim. The page computes nothing; "stale" once the file is
+// over 3 s old (a walk rewrites it every second; an ask waits unwritten); a failed dispatch is FAILED in red with its
+// reason (and the ring turns red).
+function Dispatch({ part }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { const f = () => fetch(`${API}/dispatch`).then(r => r.json()).then(x => { setD(x); setErr(null); }).catch(e => setErr(String(e))); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
+  const PHASES = ["planned", "decided", "asked", "following", "arrived"], stale = d?.age_ms > 3000, failed = d?.phase === "failed", pr = d?.probabilities;
+  if (part === "map") return d?.pt ? html`<g>
+    ${(d.path || []).length > 1 && html`<polyline class="dispatch" points=${d.path.map(p => p.join(",")).join(" ")}/>`}
+    <circle class=${"dcam" + (failed ? " failed" : "")} cx=${d.pt[0]} cy=${d.pt[1]} r="26"/>
+    ${d.arrival && html`<circle class="darr" cx=${d.arrival[0]} cy=${d.arrival[1]} r="7"/>`}
+    <text class=${"lbl" + (failed ? " bad" : "")} x=${d.pt[0] + 34} y=${d.pt[1] + 6}>camera ${d.cam}${d.label ? ` · ${d.label}` : ""}${failed ? " · FAILED" : ""}</text></g>` : null;
+  return html`<div class="dblock">
+    ${err ? html`<div class="mono bad">dispatch · GET /dispatch FAILED · ${err}</div>` : !d ? html`<div class="mono">dispatch · …</div>`
+      : !d.phase ? html`<div class="hint">dispatch · none yet · python -m wtdd dispatch cam=lap1 dry=true</div>` : html`
+      <div class="mono">dispatch · camera ${d.cam}${d.label ? ` (${d.label})` : ""}${d.dry ? " · dry: nothing posts, nothing moves" : ""}${stale ? " · stale" : ""}</div>
+      <div class="dphase">${PHASES.map((p, i) => html`<span key=${p}>${i ? " → " : ""}${p === d.phase ? html`<b>${p}</b>` : p}</span>`)}${PHASES.includes(d.phase) ? "" : html` → <b class=${failed ? "bad" : ""}>${d.phase}</b>`}</div>
+      ${pr && html`<div class="dprob">${["dispatch", "ask", "ignore"].map(k => `${k} ${pr[k]}`).join(" · ")}${d.demoted === "auto off" ? ` · auto off${d.ask_to ? `: asking ${d.ask_to}` : ""}` : d.demoted ? ` · ${d.demoted}` : ""}</div>`}
+      ${d.choice && html`<div class="mono">choice ${d.choice}${d.p != null ? ` · p ${d.p}` : " · a person said yes"}${d.reached != null ? ` · reached ${d.reached} of ${d.of}` : ""}</div>`}
+      ${failed && html`<div class="bad dfail">FAILED ${d.error}</div>`}
+      ${d.state && html`<pre class="dstate">${d.state}</pre>`}`}
+  </div>`;
+}
+// 18 · dispatch · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
