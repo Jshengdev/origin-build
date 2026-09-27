@@ -95,6 +95,7 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const redact = s => typeof s === "string" ? s.replace(/\+\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "a member") : s;   // S10: the Receipts are filmed: a phone handle or an email reads "a member"; dates, coordinates and numbers pass
 const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
@@ -369,7 +370,7 @@ function App() {
         </div>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${(pc => pc && html`<div key="pc"><span>${(pc.ts || "").slice(11)}</span><span class=${pc.ok ? "" : "bad"}>pose.corrected${pc.ok ? "" : " FAILED"} · ${pc.args?.windows} windows · largest nudge ${pc.args?.largest_m} m${pc.ok ? "" : ` · ${String(pc.response_or_error ?? "").slice(0, 200)}`}</span><span>${pc.latency_ms} ms</span></div>`)([...ledger].reverse().find(r => r.tool === "pose.corrected"))}
-          ${[...ledger].reverse().filter(r => r.tool !== "pose.corrected").slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? r.args.say : r.args ? JSON.stringify(r.args).slice(0, 60) : ""}${r.ok ? "" : ` · ${String(r.response_or_error ?? "").slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
+          ${[...ledger].reverse().filter(r => r.tool !== "pose.corrected").slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? redact(r.args.say) : r.args ? redact(JSON.stringify(r.args)).slice(0, 60) : ""}${r.ok ? "" : ` · ${redact(String(r.response_or_error ?? "")).slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
@@ -400,7 +401,7 @@ function App() {
           <h2>Commands · demo</h2>
           <div class="row">${cmd("the show (25 s)", "light_show", {})}${cmd("red / blue on 'special' 5 s", "hue_signal", { light: "special", seconds: 5 })}${cmd("make the fire picture", "dog_on_fire", {})}${cmd("read every light", "lights_status", {})}</div>
           <div class="cmd">${cli("light_show", {})}</div>
-          ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
+          ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${redact(JSON.stringify(last.args))} → ${redact(last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error)}</div>`}
         </div>
         ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
