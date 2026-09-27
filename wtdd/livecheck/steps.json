@@ -34,7 +34,7 @@
     {
       "item": "01", "step": "01.1", "pr": 5,
       "title": "`frame_id` must be `odom`. The grid refuses any later frame whose `frame_id` differs, so a mismatch shows as a rising `cb_errors` on `GET /dog/lidar` and `GET /dog/grid`, paired with `WARN lidar frame callback failed err=ValueError: frame_id ...` on stderr.",
-      "do": "Start this check, then: API up from the repo checkout; connect from the page; POST /dog/lidar {on: true}; POST /dog/grid {save: true} once frames arrive; eyes: the `[wtdd:dog] first lidar frame frame_id=odom` line in the API terminal, center_vs_odom_m under 1 m.",
+      "do": "API up from the repo checkout with the tee (README: mkdir -p logs; python -m wtdd.api 2>&1 | tee -a logs/api.log), then start this check, then: connect from the page; POST /dog/lidar {on: true}; POST /dog/grid {save: true} once frames arrive; eyes: the `[wtdd:dog] first lidar frame frame_id=odom` line in the API terminal, center_vs_odom_m under 1 m.",
       "rows": [
         {"tool": "dog.connect", "agent": "dog", "ok": true, "where": {}},
         {"tool": "dog.grid_save", "agent": "dog", "ok": true, "where": {"args.frame_id": "odom", "args.frames": {"gte": 1}}}
@@ -796,7 +796,7 @@
     {
       "item": "22", "step": "22.1", "pr": null,
       "title": "on the first live step of the evening (`01.1`) the verdict line appears within a second of the row landing, read beside the API terminal.",
-      "do": "Run `python -m wtdd.livecheck --step 01.1` beside the API terminal, then do 01.1. Eyes: the verdict line within a second of the dog.connect row in the receipts panel.",
+      "do": "Run `python -m wtdd.livecheck --step 01.1` beside the API terminal, then do 01.1. Eyes: the verdict line within a second of the dog.grid_save row in the receipts panel.",
       "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0, "note": "unchecked: livecheck cannot grade its own latency from a row."
     },
     {
