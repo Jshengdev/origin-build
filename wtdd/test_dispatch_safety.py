@@ -29,6 +29,9 @@ Fix round 4:
                  cannot be read from the ledger), is one FAILED dispatch.decided naming it, the page's failed phase
                  naming it and one text-only "couldn't dispatch" (never in dry): on the camera hook's thread there is
                  no caller to see a traceback.
+  OneYes         one person's yes is one walk: a second approved call on the same verdict (POST /tools/dispatch, the
+                 model loop, the CLI) is one FAILED dispatch.decided (app imessage), "this yes already sent the dog",
+                 before any plan or follow.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -364,6 +367,23 @@ class AnyFailure(Fresh):
         self.assertIn("FAILED to read the camera's sighting", str(cm.exception))
         self.assert_failed_loud("FAILED to read the camera's sighting: ValueError: Expecting value")
         self.assertEqual(td.rows_since(0, "plan.route"), [], "refused before any plan")
+
+
+class OneYes(td.RunCase):
+    def test_two_approved_calls_on_one_yes_are_one_walk(self):
+        from wtdd import tools
+        trig = "cam:lap1:1790008000"
+        verdict(trig)
+        out = tools.call("dispatch", cam="lap1", approved=True, trigger=trig, by=MODEL_SAYS)
+        self.assertEqual((out["phase"], len(self.s.follows)), ("arrived", 1))
+        n1 = len(td.ledger.rows())
+        with self.assertRaises(ValueError) as cm:
+            tools.call("dispatch", cam="lap1", approved=True, trigger=trig, by=MODEL_SAYS)
+        self.assertIn("this yes already sent the dog", str(cm.exception))
+        self.assertEqual(len(self.s.follows), 1, "one yes, one walk")
+        rows = td.rows_since(n1)
+        self.assertEqual([(r["tool"], r["ok"], r["app"]) for r in rows], [("dispatch.decided", False, "imessage")], "no plan.route, no follow")
+        self.assertIn("this yes already sent the dog", rows[0]["response_or_error"])
 
 
 if __name__ == "__main__":
