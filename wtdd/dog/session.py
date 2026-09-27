@@ -533,15 +533,18 @@ class DogSession:
         """One tick: while activity() moves the body, a fresh watch.json with a person box in the band (halt.near) halts
         it: halted set first (it gates _set_vel), the follower cancelled as stop() does and waited for, the velocity
         zeroed, then _halt() inside ONE stop.person row. Idle, already halted, far or no person: nothing. Stale or missing
-        watch.json: one WARN line per change and nothing (the page shows the chip). A frame it cannot read, or a raise,
-        is also the chip (_pw_fail) until a tick gets through. A failed _halt is the row's ok false and the halt stays
-        set; so is a body whose read-back velocity is still above halt.STILL_MPS, or |yaw_speed| above halt.STILL_RADPS
-        (a halt mid-turn), halt.SETTLE_S after the first read-back (state_after.velocity_settled, yaw_speed_settled), or
-        whose read-backs carry no velocity or no yaw_speed: ok is what the device says, not that _halt() returned.
-        state_after.velocity and yaw_speed are as read (None when none came, never main's default); state_after.still_ms
-        is the read-back that said still minus watch.json's t (the settle read when one ran)."""
+        watch.json: one WARN line per change in each stretch of movement, and nothing (the page shows the chip). A frame
+        it cannot read, or a raise, is also the chip (_pw_fail) until a tick gets through. A failed _halt is the row's ok
+        false and the halt stays set; so is a body whose read-back velocity is still above halt.STILL_MPS, or
+        |yaw_speed| above halt.STILL_RADPS (a halt mid-turn), halt.SETTLE_S after the first read-back
+        (state_after.velocity_settled, yaw_speed_settled), or whose read-backs carry no velocity or no yaw_speed: ok is
+        what the device says, not that _halt() returned. state_after.velocity and yaw_speed are as read (None when none
+        came, never main's default); state_after.still_ms is the read-back that said still minus watch.json's t (the
+        settle read when one ran)."""
         with self._person_lock:
             was = self.activity()
+            if was is None:
+                self._pw_last = None   # idle ends a stretch: the next stretch of movement logs its own WARN
             if self.halted or was is None:
                 return None
             fr = halt.freshness(halt.WATCH)
