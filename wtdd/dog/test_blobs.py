@@ -58,9 +58,11 @@ the fixture's lattice cell (gx, gy) is metres / resolution):
              (body.state(), as 07's objects_state reads it), WTDD_CAM_FOV_DEG, a copy of the session grid -> label_stop;
              its rows are the blob.labelled rows and nothing else; no dog or no field of view is one failed row and a
              RuntimeError or ValueError, and never a connect.
-  DogSession.blobs_px()   GET /dog/blobs {labels: [record + pos_px], source, why?}: the newest labels, pinned through
-             the calibration; a read, no row; WTDD_BLOBS=<file> ({labels: [records]}) serves that file instead
-             (DEMO_CACHE, source "fixture: <file>").
+  DogSession.blobs_px()   GET /dog/blobs {labels: [record + pos_px], source, moved, why?}: the newest labels, pinned
+             through the calibration; a read, no row; WTDD_BLOBS=<file> ({labels: [records]}) serves that file instead
+             (DEMO_CACHE, source "fixture: <file>"). Each label's erase and the list moved are GET /dog/floorplan's own
+             (the newest plan, the threshold at the read), never the verdict stamped when the label was made, so the
+             page's "greyed" is what the map greyed.
   DogSession.floorplan_px(t)   15's read with the newest labels erased into it: a greyed run is a slab, not a wall line.
   wtdd/dog/fixtures/blobs.json   the planted labels for the page's dry check: a shelf over the threshold, one FAILED
              label, every cell one the LiDAR saw.
@@ -670,6 +672,19 @@ class Serve(Base):
         self.assertTrue(all(abs(a - b) <= 1 for a, b in zip(lab["pos_px"], want)), (lab["pos_px"], want))
         self.assertEqual(len(rows(None)), 2, "reads write no row: the floor plan press and the one label")
         json.dumps(got)
+
+    def test_greyed_is_what_the_floor_plan_moved_at_the_threshold_of_the_read(self):
+        """The planted file says erase true for the shelf (stamped at 0.7). Read at 0.95, the floor plan moves nothing, so
+        GET /dog/blobs may not say a run was greyed; read at 0.7, both say the shelf's run."""
+        s = self.session(body=None)
+        s.floorplan(3)
+        f = str(Path(blobs.__file__).parent / "fixtures" / "blobs.json")
+        for thr, moved in (("0.95", []), ("0.7", [self.shelf()["id"]])):
+            with mock.patch.dict(os.environ, {"WTDD_BLOBS": f, "WTDD_DECIDE_THRESHOLD": thr}):
+                b, fp = s.blobs_px(), s.floorplan_px(3)
+            self.assertEqual(sum(1 for x in b["labels"] if x["erase"]), len(moved), f"threshold {thr}: a label says greyed, the map did not")
+            self.assertEqual((b["moved"], fp["moved"]), (moved, moved), f"threshold {thr}")
+        self.assertEqual(rows(None), [r for r in rows(None) if r["tool"] == "dog.floorplan"], "reads write no row")
 
     def test_a_press_with_no_dog_is_one_failed_row_and_the_page_says_failed(self):
         s = self.session(body=None)
