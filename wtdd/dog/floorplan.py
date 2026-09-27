@@ -31,7 +31,11 @@ to its last cell, at cell CORNERS in odometry metres (index * res + origin, the 
 Known limit, ours by design: a shelf or a cabinet standing against a wall is grounded and straight, so it is a wall
 here (the fixture's 2 m shelf is class 1 and the tests say so). Only goal 16's label may move such a run to grey; a
 label never adds, moves or widens a cell or a line. For the same reason anything grounded within THICK of a wall's
-line (a box pushed against it) is that wall's thickness, class 1.
+line (a box pushed against it) is that wall's thickness, class 1. And the limit is wider than walls: any grounded blob
+at least RUN long, free-standing or not (a sofa, a bed, a counter, a desk with a modesty panel or a pedestal), is wall,
+drawn as parallel runs about THICK plus one cell apart across its whole depth (a 2 x 0.9 m sofa 0.45 m high, alone in
+a room: 4 runs, every cell wall, none grey); a table on legs is not, because its top floats. Here too only goal 16's
+label may move such runs to grey.
 
 Known limit of the runs (tests: ClosedRoom): walls 1 and 2 cells thick are one segment each, every cell a wall, at
 every turn of the room; 3 cells thick is one segment each square and at 30 degrees, but at a few turns (a 1-degree
