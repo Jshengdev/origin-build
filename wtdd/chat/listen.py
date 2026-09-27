@@ -216,7 +216,6 @@ class Listener:
             log("chat", "who dis: no answer in time, standing down")
             return False
         from .. import tools
-        from ..dog import audio
         stranger = bool(IDK.search(normalize(m["text"])))
         PENDING.unlink(missing_ok=True)
         append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
@@ -225,7 +224,9 @@ class Listener:
         log("chat", "VERDICT", by=hname(m["sender"]), verdict="stranger" if stranger else "known", text=m["text"][:60])
         if not stranger:
             self.say(f"ok:{m['guid']}", "ok, standing down")
-            self.dry or audio.after("ok, standing down")   # 30: the dog says it too, after the post; its own thread and row; not on a dry run
+            if not self.dry:   # 30: the dog says it too, after the post; its own thread and row; imported here so the stranger path never waits on the SDK
+                from ..dog import audio
+                audio.after("ok, standing down")
             return True
         self.say(f"danger:{m['guid']}", "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!")
         try:

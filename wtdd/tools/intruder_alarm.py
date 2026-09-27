@@ -22,7 +22,6 @@ def run(look="level", seconds=5, trigger=None, ask=True):
     import time
     from ..commands import look as _look
     from ..config import ROOT
-    from ..dog import audio
     from ..ledger import step
     from . import chat_post, light_alarm
     from .dog_say import boxed
@@ -37,9 +36,10 @@ def run(look="level", seconds=5, trigger=None, ask=True):
             det = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
         if ask:   # the question with the photo; the chat's answer decides (wtdd/chat/listen.py pending verdict)
             post = chat_post.run(text=ASK, file=file, trigger=key)
-            audio.after(ASK)   # 30: the dog says it too, after the post landed; never blocks or fails the ask
             (ROOT / "pending.json").write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": file, "seconds": seconds,
                                                            "trigger": key, "classes": (det or {}).get("classes")}))
+            from ..dog import audio   # 30: imported after the ask is posted and armed, so the SDK's load never delays it
+            audio.after(ASK)   # 30: the dog says it too, after the post landed; never blocks or fails the ask
             out = {"file": file, "pitch_deg": shot.get("pitch_deg"), "detector": det, "post": post, "text": ASK, "pending": True}
         else:
             post = chat_post.run(text=TEXT, file=file, trigger=key)
