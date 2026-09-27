@@ -134,8 +134,10 @@ class DogSession:
         return self.body is not None
 
     def state(self) -> dict[str, Any]:
-        if config.maybe("WTDD_STATE_FIXTURE"):   # DEMO_CACHE: a planted dog state for the dry screenshots (24, 25, 29, 30), marked source "stub"; unset it and this is the live session; never set in a live run
-            return {**json.loads(Path(config.maybe("WTDD_STATE_FIXTURE")).read_text()), "source": "stub"}
+        # DEMO_CACHE: WTDD_STATE_FIXTURE=<json> serves that planted file as GET /dog/state with source "stub", for the dry
+        # screenshots of the body items (24, 25, 29, 30); it is never set in a live run: unset it and the live body is served.
+        if config.maybe("WTDD_STATE_FIXTURE"):
+            return {**json.loads((config.ROOT / config.maybe("WTDD_STATE_FIXTURE")).read_text()), "source": "stub"}
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
