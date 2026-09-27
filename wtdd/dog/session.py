@@ -21,6 +21,12 @@ ui/map.json: the route the dog drove, and what it did along it, is what it repla
 row; a failed or cancelled follow says so in state().follow.error.
 A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
 calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
+Before each waypoint the follower asks the session's occupancy grid (wtdd/plan.py occupied) whether it now sits in an
+inflated wall; when so it replans a detour to the first free waypoint after it (plan.replan, one plan.replanned row),
+drives it and rejoins; a stop on a skipped waypoint is reported in state().follow.skipped_stops, never waited on; the
+route's end occupied fails the follow. The check is per waypoint, on advancing to it: a blob that lands on the waypoint
+already being driven to is the avoidance service's and WP_TIMEOUT_S's. UNVERIFIED on the dog: exercised with a
+teleporting body only (wtdd/test_plan_grid.py).
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -60,6 +66,7 @@ from typing import Any, Awaitable, Callable
 
 from ..ledger import append, log, step
 from . import lidar, localize, nav, occupancy
+from .. import plan
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -72,6 +79,7 @@ TILT_MIN_DEG = 8.0                            # a tilt frame counts only if the 
 STALE_MS = 5000                               # state stream (20 Hz) older than this: the peer is dead, reconnect once
 PROBE_BACKOFF_S = 15.0                        # after a failed connect, callers get the same error without a new probe row for this long
 WP_TIMEOUT_S = 30.0                           # a waypoint not reached in this long fails the follow (no retry)
+MAX_REPLANS = 5                               # detours per follow; past it the follow fails loud rather than circling
 REC_HZ, REC_MIN_PX, REC_STEP_PX = 5.0, 10, 45   # route recording: sample rate, min move per sample, waypoint spacing (about 0.4 m)
 START_PX = 90                                 # a dog this close to the path's first point replays from the start (a loop's end is also its start)
 STOP_TIMEOUT_S = 180.0                        # a stop without resume for this long fails the follow
@@ -439,7 +447,8 @@ class DogSession:
         start = 0 if (near_start or not from_nearest) else nav.nearest_index(path, pose["p"])   # at the start of a loop: replay it, not the end
         log("dog", "follow from waypoint", start=start, n=len(path), near_start=near_start, dist_to_start_px=round(math.dist(path[0], pose["p"])))
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
-                             "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid)}
+                             "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid),
+                             "replans": [], "skipped_stops": []}
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -450,29 +459,56 @@ class DogSession:
     def _set_vel(self, x: float, y: float, z: float) -> None:
         self.vel, self.vel_t = (x, y, z), time.monotonic()   # the drive loop publishes it and stops 0.6 s after the last refresh
 
+    async def _goto(self, target, reach_px: float, fs: dict[str, Any], what: str) -> dict[str, Any]:
+        """nav.steer at 10 Hz feeding the drive loop until `target` is within reach_px; returns the pose there. Not
+        reached in WP_TIMEOUT_S: TimeoutError naming `what`."""
+        t_wp = time.monotonic()
+        while True:
+            pose = self.map_pose()
+            if pose is None:
+                raise RuntimeError("no pose (state stream stopped)")
+            ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), target, reach_px)
+            fs.update({"dist_px": ctl["dist_px"], "err_deg": ctl["err_deg"], "p": pose["p"], "heading_deg": pose["heading_deg"]})
+            if ctl["reached"]:
+                return pose
+            if time.monotonic() - t_wp > WP_TIMEOUT_S:
+                raise TimeoutError(f"{what} not reached in {WP_TIMEOUT_S}s (dist {ctl['dist_px']} px, err {ctl['err_deg']} deg)")
+            self._set_vel(ctl["x"], 0.0, ctl["z"])
+            await asyncio.sleep(0.1)
+
     async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
         """Waypoint by waypoint from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume().
-        One dog.follow row at the end with the waypoints reached and the error, if any. Never retries a waypoint."""
+        Before each waypoint, plan.occupied on the session grid: occupied, plan.replan's detour is driven (no stop on
+        it) and the route continues at the rejoin index; at most MAX_REPLANS per follow. One dog.follow row at the end
+        with the waypoints reached, the replans, the stops skipped and the error, if any. Never retries a waypoint."""
         fs = self.follow_state
         args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
         try:
             with step("dog", "dog.follow", "map", args, self.map_pose()) as r:
                 try:
-                    for i in range(start, len(path)):
+                    if self.grid is None:
+                        log("dog", "WARN following without an occupancy grid: a blob on the route cannot make a replan (POST /dog/lidar {on: true})")
+                    i, replans = start, 0
+                    while i < len(path):
                         fs["i"] = i
-                        t_wp = time.monotonic()
-                        while True:
+                        if plan.occupied(path[i], self.grid, self.cal, lock=self._grid_lock):
+                            if replans >= MAX_REPLANS:
+                                raise RuntimeError(f"waypoint {i} occupied after {replans} replans this follow (MAX_REPLANS): not circling")
                             pose = self.map_pose()
                             if pose is None:
                                 raise RuntimeError("no pose (state stream stopped)")
-                            ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), path[i], reach_px)
-                            fs.update({"dist_px": ctl["dist_px"], "err_deg": ctl["err_deg"], "p": pose["p"], "heading_deg": pose["heading_deg"]})
-                            if ctl["reached"]:
-                                break
-                            if time.monotonic() - t_wp > WP_TIMEOUT_S:
-                                raise TimeoutError(f"waypoint {i} not reached in {WP_TIMEOUT_S}s (dist {ctl['dist_px']} px, err {ctl['err_deg']} deg)")
-                            self._set_vel(ctl["x"], 0.0, ctl["z"])
-                            await asyncio.sleep(0.1)
+                            det = plan.replan(pose["p"], path, i, self.grid, self.cal, lock=self._grid_lock)
+                            j = det["rejoin"]["index"]
+                            skipped = [k for k in stops if i <= k < j]
+                            fs["replans"].append({"at": i, "rejoin": j, "waypoints": len(det["path"]), "skipped_stops": skipped})
+                            fs["skipped_stops"] += skipped
+                            replans += 1
+                            log("dog", "WARN waypoint occupied: replanned", at=i, rejoin=j, detour=len(det["path"]), skipped_stops=skipped, length_m=det["length_m"])
+                            for k, q in enumerate(det["path"]):   # every point, the first is where it stands; no stop on a detour
+                                pose = await self._goto(q, reach_px, fs, f"detour point {k} around waypoint {i}")
+                            i = j
+                            continue
+                        pose = await self._goto(path[i], reach_px, fs, f"waypoint {i}")
                         fs["reached"].append(i)
                         log("dog", f"waypoint {i}/{len(path) - 1} reached", p=pose["p"])
                         if i in stops:
@@ -485,12 +521,14 @@ class DogSession:
                                     raise TimeoutError(f"stopped at {i} for {STOP_TIMEOUT_S}s without resume")
                                 await asyncio.sleep(0.2)
                             fs["stopped_at"] = None
+                        i += 1
                     fs["done"] = True
                 finally:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
                     await self._halt()
                     fs["active"] = False
-                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose()}
+                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose(),
+                                        "replans": len(fs["replans"]), "skipped_stops": list(fs["skipped_stops"])}
         except asyncio.CancelledError:
             fs["error"] = "stopped"
             log("dog", "follow cancelled (stop)")
