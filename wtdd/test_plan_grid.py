@@ -537,7 +537,7 @@ class Receipts(unittest.TestCase):
     PAGE = (Path(__file__).resolve().parent.parent / "ui" / "index.html").read_text()
 
     def receipt_line(self) -> str:
-        return next(l for l in self.PAGE.splitlines() if "[...ledger].reverse().slice(0, 25)" in l)
+        return next(l for l in self.PAGE.splitlines() if ".slice(0, 25)" in l)   # S7 filters pose.corrected before the slice
 
     def test_the_sentence_is_the_main_line(self):
         self.assertIn("r.args?.say", self.receipt_line())
