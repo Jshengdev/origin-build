@@ -3,10 +3,12 @@ Checks: zone_of(pt, zones), the first drawn non-nogo zone containing the point u
 validate_cameras(cameras, zones): ids unique and non-empty (and postable: cam.ID, the rule POST /cam/<id>/frame already
 applies, so a placed camera can always receive frames), pt a pair inside the viewBox (0 0 1060 1540), zone recomputed
 from pt whatever the page sent, a camera in no zone kept with zone null plus exactly one WARN line
-`[wtdd:cam] camera lap1 placed in no zone: the roster will refuse`; and, through the real API handler in a thread,
+`[wtdd:cam] camera lap1 placed in no zone: the roster will refuse`, the zones it reads a list of named polygons or a
+ValueError naming the zone (a 400, never a dropped socket); and, through the real API handler in a thread,
 POST /map with cameras[]: a placed camera round-trips through GET /map with its zone recomputed and the previous file
 in map.prev.json, one map.camera_placed row {id, pt, zone, shift_id} per camera whose pt is new or moved (none when
-nothing moved, none on a refused save; the night-2 contracts' row for 22's livecheck), a duplicate id and a pt outside
+nothing moved, none on a refused save; the night-2 contracts' row for 22's livecheck; still written when the previous
+file's cameras are null or hand-added without an id), a duplicate id, a bad zone and a pt outside
 the viewBox are 400 with the file and map.prev.json untouched, and a map with no cameras key is saved as sent (no key
 invented). Lights pass through a save untouched. The page's half (the `place camera` button beside each camera in 09's
 Cams panel, the placing mode, the glyph `lap1 · zone a` / `lap1 · no zone` in yellow) is the headless screenshot gate
@@ -145,6 +147,22 @@ class Validate(unittest.TestCase):
                 if named:
                     self.assertIn(named, str(c.exception), why)
 
+    def test_bad_zones_raise_naming_the_zone(self):
+        ok = [{"id": "lap1", "label": "x", "pt": [322, 1284]}]
+        for zones, why, named in (   # a ValueError is the API's 400; a TypeError or KeyError would drop the page's socket
+            (None, "zones null", "zones"),
+            ({"a": ZONES[0]}, "zones not a list", "zones"),
+            ([ZONES[0], "b"], "a zone that is not a dict", "zone 2"),
+            ([ZONES[0], {"label": "no name", "poly": ZONES[1]["poly"]}], "a zone with no name", "zone 2"),
+            ([ZONES[0], {"name": "b", "label": "zone b"}], "a zone with no poly", "zone b"),
+            ([{**ZONES[0], "poly": [[266, 1135], [372], [372, 1500]]}], "a vertex that is not a pair", "zone a"),
+            ([{**NOGO_IN_B, "poly": None}, *ZONES], "a no-go zone with no poly", "zone nogo-1"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaises(ValueError) as c:
+                    cam.validate_cameras(ok, zones)
+                self.assertIn(named, str(c.exception), why)
+
 
 class Save(unittest.TestCase):
     """POST /map with cameras[], through the real handler: what the page's save does after a `place camera` click."""
@@ -251,6 +269,34 @@ class Save(unittest.TestCase):
                 self.assertIn("lap1", r["error"])
         self.assertTrue(self.map.read_bytes() == before, "a refused save leaves the file as it was")
         self.assertFalse(self.prev.exists())
+
+    def test_bad_zone_is_400_not_a_dropped_connection(self):
+        before = self.map.read_bytes()
+        for zones in (None, [{"name": "x"}]):
+            with self.subTest(zones=zones):
+                m = fresh_map()
+                m["zones"] = zones
+                status, r = self.post(m)   # before the fix: RemoteDisconnected, the handler thread died on a TypeError/KeyError
+                self.assertEqual(status, 400, r)
+                self.assertFalse(r["ok"])
+                self.assertIn("zone", r["error"])
+        self.assertTrue(self.map.read_bytes() == before, "a refused save leaves the file as it was")
+        self.assertFalse(self.prev.exists())
+
+    def test_previous_file_with_broken_cameras_still_gets_its_row(self):
+        for prev, why in (
+            (None, "cameras: null on the previous file"),
+            ([{"label": "hand-added, no id", "pt": [600, 1100]}], "a hand-added camera with no id on the previous file"),
+        ):
+            with self.subTest(why=why):
+                self.map.write_text(json.dumps({**fresh_map(), "cameras": prev}, indent=2) + "\n")
+                n0 = len(ledger.rows())
+                status, r = self.post(fresh_map())
+                self.assertEqual(status, 200, r)
+                placed = rows_since(n0, "map.camera_placed")
+                self.assertEqual([(x["args"]["id"], x["ok"]) for x in placed], [("lap1", True)], why)
+                self.assertIsNone(placed[0]["state_before"], "no camera lap1 on the previous file: a new camera")
+                self.assertEqual(placed[0]["state_after"], {"pt": [322, 1284], "zone": "a"})
 
     def test_cameras_not_a_list_is_400(self):
         m = fresh_map()
