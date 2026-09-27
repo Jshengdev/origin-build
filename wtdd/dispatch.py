@@ -23,7 +23,9 @@ run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written at
      in the last COOLDOWN_S; the post is text only), not calibrated (no calibration or believed pose, or
      DogSession.recheck: loaded from disk or kept across a reconnect and not confirmed by a drag), following,
      recording, a question open (pending.json
-     younger than QUESTION_S: tonight's two-eyes rule, one question at a time and the dog's own eye wins, no second ask).
+     younger than QUESTION_S: tonight's two-eyes rule, one question at a time and the dog's own eye wins, no second ask;
+     the thread reads "still waiting for a yes on the last ask about camera <id>" when the open question is the
+     camera's own ask, "the dog's own question is open" for a who-dis or a decide, never a trigger key).
   3. plan.plan from the believed pose to arrival(): one plan.route row, no-go zones hard blocks. No route: a FAILED
      dispatch.decided offering only ask / ignore, the planner's own words in the thread. Phase `planned`.
   4. One dispatch.decided row: app imessage (a person said yes: choice dispatch, no model call), openrouter (JEV_API_KEY
@@ -292,6 +294,19 @@ def _open_question() -> dict | None:
     return pend if time.time() - pend.get("t", 0) <= QUESTION_S else None
 
 
+def _held(pend: dict, when: str) -> tuple[str, str]:
+    """A refusal on an open question: (the row's and the page's words, naming its kind and trigger key; the thread's
+    words, by its kind and with no key). The camera's own ask is still waiting for a yes, not withdrawn; a who-dis or a
+    decide is the dog's own question (two eyes: the dog's eye wins)."""
+    kind = pend.get("kind")
+    why = f"question open: {kind} {pend.get('trigger') or ''} {when}; one question at a time"
+    if kind == "dispatch":
+        return why, f"still waiting for a yes on the last ask about camera {pend.get('cam')}"
+    if kind in ("who_dis", "decide"):
+        return why + ", the dog's own eye wins", "the dog's own question is open"
+    return why, "a question is open in the thread"
+
+
 def _body(dry: bool) -> tuple:
     """(session | None, grid, cal, grid lock, grid_source, believed pose | None, why not calibrated)."""
     from .dog import occupancy, session
@@ -369,9 +384,9 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         where = f" (person at camera {cam}" + (f", {page['label']}" if page.get("label") else "") + ")" if seen else ""
         return _tell(dry, f"{trigger}:refused", f"couldn't dispatch: {why}{where}", file if seen else None)
 
-    def refuse(why: str, own_page: bool = True, frame: bool = True):
+    def refuse(why: str, own_page: bool = True, frame: bool = True, said: str | None = None):
         """The refusal list: one FAILED dispatch.decided naming why, the page failed (unless another dispatch owns it),
-        "couldn't dispatch: <why>" in the thread (never in dry), then raise. Nothing has moved."""
+        "couldn't dispatch: <said, else why>" in the thread (never in dry), then raise. Nothing has moved."""
         ledger.append({"step": "dispatch.decided", "agent": "dispatch", "tool": "dispatch.decided", "app": app, "args": args,
                        "state_before": before, "state_after": None, "ok": False, "response_or_error": f"RuntimeError: {why}",
                        "latency_ms": round((time.perf_counter() - t0) * 1000), **label})
@@ -381,7 +396,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
                 _publish(page, phase="failed", error=why)
             except Exception as e:  # noqa: BLE001  (the row above and the post below still say it; the page cannot)
                 ledger.log("dispatch", "FAILED to draw the failed page", err=f"{type(e).__name__}: {str(e)[:100]}")
-        told = tell(why, frame)
+        told = tell(said or why, frame)
         raise _told(RuntimeError(why + (f" (and the thread was not told: {told})" if told else "")))
 
     if not _lock.acquire(blocking=False):
@@ -413,8 +428,8 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         if before["dog"]["recording"]:
             refuse("recording: a route is being recorded")
         if pend:
-            refuse(f"question open: {pend.get('kind')} {pend.get('trigger') or ''} is waiting for an answer; one question at a time, "
-                   "the dog's own eye wins", own_page=pend.get("kind") != "dispatch", frame=False)
+            why, said = _held(pend, "is waiting for an answer")
+            refuse(why, own_page=pend.get("kind") != "dispatch", frame=False, said=said)
 
         m = json.loads(plan.MAP.read_text())
         try:
@@ -506,8 +521,8 @@ def _ask(page: dict, c: dict, trigger: str, file: str | None, refuse) -> dict:
         if pend:
             ledger.log("dispatch", f"WARN a question opened {when}: no dispatch question on top of it", kind=pend.get("kind"),
                        asked=pend.get("trigger"))
-            refuse(f"question open: {pend.get('kind')} {pend.get('trigger') or ''} opened {when}; one question at a time, "
-                   "the dog's own eye wins", frame=False)
+            why, said = _held(pend, f"opened {when}")
+            refuse(why, frame=False, said=said)
     hold("before the ask was posted")
     try:
         chat_post.run(text=ask_line(c), file=frame, trigger=trigger)
