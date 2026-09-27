@@ -63,6 +63,18 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 29 · live-stream · start */
+  .lv-wrap { position: relative; }
+  img.lv { width: 100%; display: block; aspect-ratio: auto 16 / 9; border-radius: var(--r-card); background: var(--ink, #262323); }
+  svg.lv { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  svg.lv rect { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  svg.lv text { font-family: var(--mono); font-weight: 600; paint-order: stroke; stroke: var(--ink, #262323); stroke-width: 5; }
+  svg.lv.dim { opacity: .35; }
+  .lv-note { position: absolute; left: 8px; top: 8px; font-family: var(--mono); font-size: 10.5px; padding: 2px 6px; border-radius: var(--r-card); background: var(--ink, #262323); color: var(--page, #f6f3ec); }
+  .lv-stat { margin: var(--gap-in) 0 var(--gap-group); opacity: 1; }
+  .lv-tile { aspect-ratio: 16 / 9; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 12px; margin-bottom: var(--gap-group); border-radius: var(--r-card); background: var(--bad, #b2382e); color: var(--page, #f6f3ec); font-family: var(--mono); font-size: 13px; text-align: center; }
+  .lv-stub { font-weight: 600; padding: 0 5px; border-radius: var(--r-card); background: var(--warn, #d9a400); color: var(--ink, #262323); }
+  /* 29 · live-stream · end */
 </style>
 </head>
 <body>
@@ -121,9 +133,6 @@ function App() {
   // is held; the server stops the dog 0.6 s after the last refresh, so a dropped key never runs it into a wall.
   const [dog, setDog] = useState(null);
   const [photo, setPhoto] = useState(null);
-  const [live, setLive] = useState(null);   // the dog's camera: GET /dog/frame.jpg, self-paced, only while connected
-  const next = ms => setTimeout(() => setLive(`${API}/dog/frame.jpg?t=${Date.now()}`), ms);
-  useEffect(() => { if (dog?.connected && !live) next(0); if (dog && !dog.connected && live) setLive(null); }, [dog]);
   const [lidar, setLidar] = useState(null);   // GET /dog/lidar: the dog's LiDAR band on the map, polled every 500 ms only while connected
   useEffect(() => { if (!dog?.connected) { setLidar(null); return; } const t = setInterval(() => fetch(`${API}/dog/lidar`).then(r => r.json()).then(setLidar).catch(() => {}), 500); return () => clearInterval(t); }, [dog?.connected]);
   const keys = useRef(new Set()); const driveTimer = useRef(null);
@@ -302,7 +311,7 @@ function App() {
       <div>
         <div class="panel">
           <h2>The eye · what it sees</h2>
-          ${live && html`<img src=${live} onLoad=${() => next(150)} onError=${() => next(2000)} style=${{ width: "100%", borderRadius: 2, display: "block", marginBottom: "var(--gap-group)" }}/>`}
+          <${LiveView} dog=${dog} watch=${watch}/>
           ${(() => {
             const fresh = watch && watch.age_ms != null && watch.age_ms < 3000;
             const seen = [...ledger].reverse().find(r => r.tool === "llm.generate" && r.agent === "watch" && r.ok);
@@ -365,6 +374,42 @@ function App() {
     </div>
   </div>`;
 }
+// 29 · live-stream · start
+// The dog's camera as one MJPEG stream, GET /dog/stream.mjpg: one connection at the rate the dog delivers, and the
+// request that switches the camera on. Everything drawn is served. dog.video comes from App's 1 s /dog/state poll
+// (fps, age_ms, bytes, w, h, sha, stale, source). watch comes from App's 500 ms /watch poll (boxes, frame_sha,
+// frames_behind). The boxes take the detector's class colours only when watch.frame_sha is video.sha, the frame they
+// were computed on; otherwise they are dimmed, with the server's frames_behind. A stall (video.stale) unmounts the image,
+// which closes the stream, and shows a red tile naming it. A refused stream reads /dog/frame.jpg once and names its error
+// in a red tile. 'ms' is the age of the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp).
+const CLS = ["#042AFF", "#0BDBEB", "#F3F3F3", "#00DFB7", "#111F68", "#FF6FDD", "#FF444F", "#CCED00", "#00F344", "#BD00FF",
+             "#00B4FF", "#DD00BA", "#00FFFF", "#26C000", "#01FFB3", "#7D24FF", "#7B0068", "#FF1B6C", "#FC6D2F", "#A2FF0B"];   // ultralytics 8.4.163 Colors (utils/plotting.py:117-138): watch.jpg strokes class cls % 20 in these
+function LiveView({ dog, watch }) {
+  const [epoch, setEpoch] = useState(0);        // bumped to open a new stream (retry, or the video back after a stall)
+  const [failed, setFailed] = useState(null);   // the refused stream's error, as /dog/frame.jpg serves it
+  const v = dog?.video, wasStale = useRef(false);
+  useEffect(() => { if (wasStale.current && v && !v.stale) { setFailed(null); setEpoch(e => e + 1); } wasStale.current = !!v?.stale; }, [v?.stale]);
+  if (!dog?.connected) return null;
+  const retry = () => { setFailed(null); setEpoch(e => e + 1); };
+  const onError = () => fetch(`${API}/dog/frame.jpg`).then(async r => setFailed(r.ok ? "stream closed by the server" : (await r.json()).error)).catch(e => setFailed(`${e}`));
+  const tile = text => html`<div class="lv-tile"><span>${text}</span><button class="small" onClick=${retry}>retry</button></div>`;
+  if (v?.stale) return tile(`stream stalled · ${(v.age_ms / 1000).toFixed(1)} s`);
+  if (failed) return tile(`video FAILED · ${failed}`);
+  const fresh = v && watch && watch.age_ms != null && watch.age_ms < 3000;   // the eye panel's rule for the detector
+  const joined = fresh && watch.frame_sha && watch.frame_sha === v.sha;
+  return html`<div>
+    <div class="lv-wrap">
+      <img class="lv" src=${`${API}/dog/stream.mjpg?e=${epoch}`} onError=${onError}/>
+      ${fresh && html`<svg class=${joined ? "lv" : "lv dim"} viewBox=${`0 0 ${v.w} ${v.h}`} preserveAspectRatio="none">
+        ${(watch.boxes || []).map((b, i) => { const [x0, y0, x1, y1] = b.xyxy, c = b.cls != null ? CLS[b.cls % 20] : "var(--live, #0b0dc4)";
+          return html`<g key=${i}><rect x=${x0} y=${y0} width=${x1 - x0} height=${y1 - y0} stroke=${c}/><text x=${x0} y=${Math.max(y0 - 8, v.h / 24)} fill=${c} font-size=${v.h / 24}>${b.name} ${b.conf}</text></g>`; })}
+      </svg>`}
+      ${fresh && !joined && html`<div class="lv-note">boxes · ${watch.frames_behind != null ? `${watch.frames_behind} frames behind` : "frame unknown"}</div>`}
+    </div>
+    <div class="mono lv-stat">${v ? `${v.fps ?? "—"} fps · ${v.age_ms} ms · ${v.bytes ? Math.round(v.bytes / 1000) : "—"} KB · ${v.w}×${v.h}` : "video · waiting for the first frame"}${v?.source === "stub" && html` <span class="lv-stub">stub</span>`}</div>
+  </div>`;
+}
+// 29 · live-stream · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
