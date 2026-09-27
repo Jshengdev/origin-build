@@ -5,7 +5,9 @@ Run: python -m wtdd.chat chats           named chats with guid, member count, la
 
 Verified on this Mac (2026-09-13). chat.db is readable once the terminal has Full Disk Access. Group chat guids have the
 form `any;+;<32 hex>` and are exactly the ids AppleScript's `get id of every chat` returns, so the same guid drives both
-the read (here) and the send (send.py). message.date is nanoseconds since 2001-01-01, hence
+the read (here) and the send (send.py). A 1:1 chat is `any;-;<handle>` with one member and usually display_name ''
+(read-only query 2026-09-26: 253 such chats, 248 unnamed), so `chats` never lists it; chat_members() is how the send
+gate checks the on-call person's 1:1 (item 03). message.date is nanoseconds since 2001-01-01, hence
 `date / 1000000000 + 978307200` for a unix epoch. Tapbacks are rows with associated_message_type != 0 and are dropped.
 `text` can be NULL with the content in `attributedBody` (a typedstream blob; attributed_text decodes it); when that
 fails too the message stays None and the caller logs it as [non-text]. On macOS 26 the dog's own outgoing text also
@@ -51,6 +53,14 @@ WHERE c.display_name IS NOT NULL AND c.display_name != ''
 ORDER BY last_ts DESC
 """
 
+MEMBERS_SQL = """
+SELECT h.id FROM chat c
+JOIN chat_handle_join chj ON chj.chat_id = c.ROWID
+JOIN handle h ON h.ROWID = chj.handle_id
+WHERE c.guid = ?
+ORDER BY h.id
+"""
+
 # The dog's own echo above a watermark: the first from-me row that is a file (text NULL, attachment flag) or carries the text.
 _FROM_ME = """
 SELECT m.ROWID, m.guid, datetime(m.date / 1000000000 + 978307200, 'unixepoch') AS ts_utc
@@ -82,6 +92,13 @@ def chat_name(guid: str) -> str | None:
     with connect() as c:
         r = c.execute("SELECT display_name FROM chat WHERE guid = ?", (guid,)).fetchone()
     return r["display_name"] if r else None
+
+
+def chat_members(guid: str) -> list[str]:
+    """The member handles of a chat (chat_handle_join), sorted; [] when no such chat. A 1:1 chat is guid any;-;<handle>
+    with exactly one member, that handle, and usually no display_name, so send.gate checks the on-call target by this."""
+    with connect() as c:
+        return [r["id"] for r in c.execute(MEMBERS_SQL, (guid,))]
 
 
 def max_rowid() -> int:
