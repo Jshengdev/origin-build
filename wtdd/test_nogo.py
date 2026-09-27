@@ -201,3 +201,22 @@ class PageSave(unittest.TestCase):
         self.assertIn('mode === "nogo" && nogoDraft.length', save)
         self.assertIn("not saved: a no-go zone is still being drawn", save)
         self.assertLess(save.index("nogoDraft.length"), save.index("putMap("), "the refusal comes before any POST /map")
+
+
+class PageClear(unittest.TestCase):
+    """S4 · one "clear no-go" button takes every no-go zone off the map and saves it at once (Johnny, 2026-09-27: "add a
+    clear nogo button"); the lighting zones stay. Reads ui/index.html's source, as PageSave does."""
+
+    def setUp(self):
+        self.page = (Path(__file__).resolve().parent.parent / "ui" / "index.html").read_text()
+
+    def test_clear_drops_only_the_nogo_zones_and_saves(self):
+        clear = next((l for l in self.page.splitlines() if "const clearNogo = async () =>" in l), "")
+        self.assertIn("z.nogo !== true", clear)
+        self.assertIn("putMap(", clear)
+
+    def test_the_button_is_wired_and_shown_only_when_a_zone_exists(self):
+        self.assertIn("clear=${clearNogo}", self.page)
+        btn = next((l for l in self.page.splitlines() if ">clear no-go</button>" in l), "")
+        self.assertIn("zones.some(z => z.nogo === true)", btn)
+        self.assertIn("onClick=${clear}", btn)
