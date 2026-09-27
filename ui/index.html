@@ -410,7 +410,7 @@ function Cams({ cameras, place, placing }) {
               ${(c.boxes || []).map((b, i) => html`<g key=${i}><rect class="box" x=${b.xyxy[0]} y=${b.xyxy[1]} width=${b.xyxy[2] - b.xyxy[0]} height=${b.xyxy[3] - b.xyxy[1]}/><text x=${b.xyxy[0] + 3} y=${b.xyxy[1] + 13}>${b.name} ${b.conf}</text></g>`)}
             </svg>`}
           </div>
-          <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${where ? `${where.label} · ${where.zone ? `zone ${where.zone}` : "no zone"}` : "not on the map (ui/map.json cameras)"} · ${c.model} · ${c.shift_id}</div>
+          <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${where ? `${where.label} · ${where.zone ? `zone ${where.zone}` : where.zone === null ? "no zone" : "unsaved"}` : "not on the map (ui/map.json cameras)"} · ${c.model} · ${c.shift_id}</div>
         </div>`;
       })}
   </div>`;
