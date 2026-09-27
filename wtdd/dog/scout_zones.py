@@ -256,6 +256,7 @@ class Proposals:
         self.thr: float | None = None        # the threshold of the last feed, for state()'s why
         self._warned: str | None = None     # what placed objects wait for (no pose, or a dog that moved), logged once per change
         self.error: str | None = None        # the last feed's raise, on the GET until a feed gets past the map read
+        self._taking: dict | None = None     # the object this feed took last; a raise before its row lands names it in failed
         self._lock = threading.Lock()        # this store's own state; never held during the model call
 
     def _map(self) -> Path:
@@ -271,14 +272,26 @@ class Proposals:
              fov_deg: float | None, threshold: int = occupancy.THRESHOLD, grid_lock=None) -> dict[str, int]:
         """Every placed, not stale object not handled before is handled once, or waits (see the module docstring);
         returns the counts. A raise (a bad WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a failed ledger write) is
-        kept as state()["error"] and re-raised for the objects thread's log; the objects it had not taken yet are taken
-        by the next feed."""
+        kept as state()["error"] and re-raised for the objects thread's log; an object is taken when the loop reaches it,
+        so the one it was taking stays handled and is a line in state()["failed"] (its row is what may be missing), and
+        the objects it had not reached are taken by the next feed."""
+        self._taking = None
         try:
             return self._feed(objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock)
         except Exception as e:
+            err = f"feed: {type(e).__name__}: {e}"
             with self._lock:
-                self.error = f"feed: {type(e).__name__}: {e}"
+                self.error = err
+                o = self._taking if self._taking and not any(f["object_id"] == self._taking["id"] for f in self.failed) else None
+            if o:
+                self._fail(o, "feed", err)
             raise
+
+    def _take(self, o: dict) -> None:
+        """o is handled from here on: never taken again; a raise before this feed ends names it (feed())."""
+        with self._lock:
+            self.handled.add(o["id"])
+            self._taking = o
 
     def _feed(self, objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock) -> dict[str, int]:
         t_all = time.perf_counter()
@@ -298,7 +311,6 @@ class Proposals:
                   if z.get("source") == "scout" and z.get("cells")]   # a person already made these rules
         with self._lock:
             self.error = None   # past the threshold and the map: this feed can ask
-            self.handled.update(o["id"] for o in cands)
         try:
             data = Path(frame["file"]).read_bytes()
             from PIL import Image
@@ -306,6 +318,7 @@ class Proposals:
         except (OSError, KeyError, TypeError) as e:
             err = f"frame unreadable, no photo and no question: {type(e).__name__}: {e} (watch.json file {frame.get('file')})"
             for o in cands:
+                self._take(o)
                 self._fail(o, "frame read", err)
                 self._row("zone.proposed", "map", {"object_id": o["id"], "kind": o["label"]}, None, None, False, err, 0)
             n["handled"] = n["failed"] = len(cands)
@@ -323,11 +336,10 @@ class Proposals:
                 cells, poly, err = [], None, f"blob FAILED: {type(e).__name__}: {e}"
             else:
                 if not cells:   # the cone from here misses 07's hit: the dog moved since 07 placed it. A wait, not a failure:
-                    waiting.append(o)   # taken again by the next feed, with the hit 07 refreshes from where the dog is then
-                    with self._lock:
-                        self.handled.discard(o["id"])
+                    waiting.append(o)   # not taken: the next feed tries again, with the hit 07 refreshes from where the dog is then
                     continue
                 err = None
+            self._take(o)
             n["handled"] += 1
             if err:
                 self._fail(o, "cells", err)
@@ -405,6 +417,7 @@ class Proposals:
                       f"proposed {zid}: {len(cells)} cells, {z['label']} at p {z['p']:.2f}, {z['dist_m']} m",
                       blob_ms + round((time.perf_counter() - t2) * 1000), stub)   # the cells and the photo; the call is its own row's
             n["proposed"] += 1
+        self._taking = None   # every row landed
         names = ", ".join(f"{o['id']} {o['label']}" for o in waiting)
         self._warn(f"WARN {len(waiting)} placed object(s) waiting ({names}): no counted cell in the box's cone from where the dog "
                    f"is now (it moved since 07 placed them); asked when 07 places them again" if waiting else None)
