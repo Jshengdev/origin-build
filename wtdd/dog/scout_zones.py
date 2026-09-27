@@ -250,6 +250,7 @@ class Proposals:
         self.counts = {"asked": 0, "proposed": 0, "confirmed": 0, "dismissed": 0, "deduped": 0}
         self.thr: float | None = None        # the threshold of the last feed, for state()'s why
         self._warned: str | None = None
+        self.error: str | None = None        # the last feed's raise, on the GET until a feed gets past the map read
         self._lock = threading.Lock()        # this store's own state; never held during the model call
 
     def _map(self) -> Path:
@@ -257,7 +258,17 @@ class Proposals:
 
     def feed(self, objs: list[dict], frame: dict, pose: dict | None, grid: occupancy.Grid | None, cal: dict | None,
              fov_deg: float | None, threshold: int = occupancy.THRESHOLD, grid_lock=None) -> dict[str, int]:
-        """Every placed object not handled before is handled once (see the module docstring); returns the counts."""
+        """Every placed object not handled before is handled once (see the module docstring); returns the counts. A raise
+        (a bad WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a failed ledger write) is kept as state()["error"] and
+        re-raised for the objects thread's log; the objects it had not taken yet are taken by the next feed."""
+        try:
+            return self._feed(objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock)
+        except Exception as e:
+            with self._lock:
+                self.error = f"feed: {type(e).__name__}: {e}"
+            raise
+
+    def _feed(self, objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock) -> dict[str, int]:
         t_all = time.perf_counter()
         with self._lock:
             cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and o["id"] not in self.handled]
@@ -276,6 +287,7 @@ class Proposals:
         on_map = [(z.get("name"), _key(z["cells"])) for z in json.loads(self._map().read_text()).get("zones", [])
                   if z.get("source") == "scout" and z.get("cells")]   # a person already made these rules
         with self._lock:
+            self.error = None   # past the threshold and the map: this feed can ask
             self.handled.update(o["id"] for o in cands)
         n["handled"] = len(cands)
         try:
@@ -459,21 +471,24 @@ class Proposals:
         return self._tap("zone.dismissed", zid, by, time.perf_counter(), drop)
 
     def state(self) -> dict[str, Any]:
-        """The GET /dog/scout body (without `source`): {n, proposals, failed, why}; why names the reason whenever n is 0."""
+        """The GET /dog/scout body (without `source`): {n, proposals, failed, why, error?}; why names the reason whenever
+        n is 0; error is the last feed's raise until a feed gets past the threshold and the map (the page draws it red)."""
         with self._lock:
             props = [{k: z[k] for k in PROPOSAL_KEYS} for z in self.open.values()]
             failed, c = [dict(f) for f in self.failed], dict(self.counts)
-            handled = len(self.handled)
+            handled, warned, error = len(self.handled), self._warned, self.error
         why = None
         if not props:
             if not handled:
-                why = "no placed object yet: the scout asks once about each thing 07 pins on the grid"
+                why = warned or ("no object taken: the last feed FAILED (error)" if error else
+                                 "no placed object yet: the scout asks once about each thing 07 pins on the grid")
             else:
                 parts = [f"{c['asked']} asked, {c['proposed']} proposed as a hazard at p >= {self.thr}"]
                 parts += [f"{c[k]} {k}" for k in ("confirmed", "dismissed", "deduped") if c[k]]
                 parts += [f"{len(failed)} failed (listed)"] if failed else []
+                parts += [warned] if warned else []
                 why = "no open proposal: " + ", ".join(parts)
-        return {"n": len(props), "proposals": props, "failed": failed, "why": why}
+        return {"n": len(props), "proposals": props, "failed": failed, "why": why, **({"error": error} if error else {})}
 
 
 def png(grid: occupancy.Grid, threshold: int, cells, path) -> Path:
