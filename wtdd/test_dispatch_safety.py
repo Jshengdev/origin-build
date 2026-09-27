@@ -43,6 +43,8 @@ Fix round 5 (the independent review's probes):
                  "couldn't dispatch", with no plan.route, no model, no ask and no follow. A dry run is not refused.
   WalkRecheck    a question that opens while an approved run plans and decides (the dog's own who-dis, probe 4) stops
                  the walk before s.follow: one FAILED dispatch.decided naming it, no follow, its pending.json untouched.
+  AutoStamped    WTDD_DISPATCH_AUTO is on every dispatch.decided row (N2-D), including approval()'s refusal and the
+                 camera hook's FAILED hand-off (probe 5).
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -488,6 +490,24 @@ class WalkRecheck(td.RunCase):
         self.assertEqual([(p["text"], p["file"]) for p in self.posts], [("couldn't dispatch: the dog's own question is open", None)])
         self.assertEqual(json.loads(self.pending.read_text()), who, "the dog's question is left as it wrote it")
         self.assertEqual(self.page()["phase"], "failed")
+
+
+class AutoStamped(Fresh):
+    def test_every_dispatch_decided_row_carries_auto(self):
+        with self.subTest("approval()'s refusal (auto off, the default)"):
+            with self.assertRaises(ValueError):
+                self.call(cam="lap1", approved=True, trigger="cam:lap1:1790012000", by=MODEL_SAYS)
+            (r,) = td.rows_since(0, "dispatch.decided")
+            self.assertIs(r["args"].get("auto"), False, r["args"])
+        with self.subTest("the camera's FAILED hand-off (auto on)"), self.env(WTDD_DISPATCH_AUTO="1"):
+            n0, boxed = len(td.ledger.rows()), td.cam.cams() / "lap1-boxed.jpg"
+            seen = {"ms": 5, "n": 1, "classes": {"person": 1}, "boxes": [{"name": "person", "p": 0.9, "box": [1, 2, 3, 4]}], "file": str(boxed)}
+            with td.mock.patch.object(td.cam, "detect_file", return_value=seen), td.mock.patch.dict(td.cam._last, clear=True), \
+                    td.mock.patch.object(td.cam.shutil, "copyfile", side_effect=OSError(28, "No space left on device")):
+                out = td.cam.ingest("lap1", td.FRAME.read_bytes())
+            self.assertFalse(out["ok"], out)
+            (r,) = td.rows_since(n0, "dispatch.decided")
+            self.assertIs(r["args"].get("auto"), True, r["args"])
 
 
 if __name__ == "__main__":
