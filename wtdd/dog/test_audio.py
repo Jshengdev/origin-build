@@ -19,7 +19,8 @@ What it checks, each against the goal's words:
     a first say's render never stalls the body's loop; with the speaker unimportable, the stranger alarm still sounds
     and the ask is still posted and armed (neither waits on the speaker's import);
   - the uuid cache round-trips; a cached line plays without a list or an upload; a listed line is never re-uploaded;
-  - GET /dog/state .say carries age_s, and is speaking from the ack on, not only after the read-back; WTDD_STATE_FIXTURE
+  - GET /dog/state .say carries age_s, and is speaking from the ack on, not only after the read-back; a say that cannot
+    reach the body is still one FAILED dog.say row and .say.error, kept across a reconnect; WTDD_STATE_FIXTURE
     serves a planted state marked source "stub";
   - `say` is a tool (python -m wtdd list) and dog_say is untouched; WTDD_SAY_STUB=0 is the dog, not the stub.
 """
@@ -545,6 +546,31 @@ class Served(Base):
         self.assertEqual((say["text"], say["code"]), (ASK, 0))
         self.assertGreaterEqual(say["age_s"], 0)
         self.assertIn("speaking", say)
+
+    def test_a_say_that_cannot_reach_the_body_is_a_failed_row_and_a_red_say(self):
+        """_ensure raises before audio.say opens its row (the probe refused, inside PROBE_BACKOFF_S, the dog down after
+        an API restart): the hook's say still leaves exactly one FAILED dog.say row and .say.error, and a reconnect's
+        fresh Body (no play yet) does not clear the red badge."""
+        from wtdd.dog.session import DogSession
+        s = DogSession()
+        self.addCleanup(s.loop.call_soon_threadsafe, s.loop.stop)
+
+        async def unreachable():
+            raise RuntimeError("dog unreachable 0 s ago, not probing again yet: RuntimeError: probe failed")
+
+        n0 = n_rows()
+        with mock.patch.object(s, "_ensure", unreachable), self.assertRaises(RuntimeError):
+            s.say(ASK)
+        r = self.one(new_rows(n0, "dog.say"))
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["args"], {"text": ASK, "via": "audiohub"})
+        self.assertIn("dog unreachable", r["response_or_error"])
+        say = s.state()["say"]
+        self.assertEqual(say["text"], ASK)
+        self.assertIn("dog unreachable", say["error"])
+        self.assertFalse(say["speaking"])
+        s.body = stub_body()
+        self.assertIn("dog unreachable", s.state()["say"]["error"])
 
 
 class Fixture(unittest.TestCase):
