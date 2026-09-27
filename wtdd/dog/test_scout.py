@@ -763,6 +763,20 @@ class FailLoud(Harness):
         self.assertIn("stopped", str(r[0]["response_or_error"]))
         self.assertEqual(set(r[0]["state_after"] or {}), AFTER, "state_after is complete on this FAILED row too")
 
+    def test_a_state_read_that_fails_still_names_05a_and_05b_absent(self):
+        body = FakeBody(yaw_rate=3.0, frames=self.frames)
+        s = self.session(body)
+        s.calibrate([300, 900], 0.0)
+
+        async def no_state(required: bool = False):
+            raise RuntimeError("no fresh state")
+
+        body.fresh_state = no_state
+        s.scout(z=0.5, target_deg=360, timeout_s=10)
+        st, r = self.failed(s, body)
+        self.assertIn("no fresh state", st["error"])
+        self.assertEqual((r["state_before"]["localize"], r["state_before"]["utlidar"]), ("absent", "absent"))
+
 
 class Api(Harness):
     def test_post_dog_scout_runs_and_post_dog_stop_cancels_it(self):
