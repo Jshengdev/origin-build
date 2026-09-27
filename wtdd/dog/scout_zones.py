@@ -1,7 +1,8 @@
 """The scout's proposed no-go zones: every thing 07 pins on the grid is asked once whether it is a hazard; a hazard
 becomes a PROPOSED zone made of the LiDAR cells it sits on, with the photo, the label and p; only a named person's tap
 makes it a rule, written into 04's `nogo: true` schema on ui/map.json. A proposal refuses nothing: the walk and the
-follower read only the map (04's nogo.refuse(), untouched), and a proposal is never on the map.
+follower read only the map (04's nogo.refuse(), untouched) once 04 merges: on 07's base nothing calls refuse(), so a
+confirmed zone is written and drawn but refuses no walk or follow until then; and a proposal is never on the map.
 
 Run. The API's dog session (wtdd/dog/session.py) owns one Proposals store; its 'objects' thread feeds it 07's objects
 after every detector window (session.scout_feed), GET /dog/scout reads it, POST /dog/scout {id, action: confirm |
