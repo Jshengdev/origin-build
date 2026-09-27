@@ -63,6 +63,12 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 17 · decision-to-action · start */
+  .pin17 { font-size: 15px; fill: var(--live, #0b0dc4); } .pin17.bad { fill: var(--bad); }
+  .rules17 { font-family: var(--mono); font-size: 11px; line-height: 1.7; margin-bottom: var(--gap-group); } .rules17 .mono { opacity: .6; }
+  .decided17 { font-family: var(--mono); font-size: 10.5px; line-height: 1.55; }
+  .decided17 > div { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(38,35,35,.06); }
+  /* 17 · decision-to-action · end */
 </style>
 </head>
 <body>
@@ -191,7 +197,7 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
@@ -274,6 +280,7 @@ function App() {
                 <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°</text></g>`;
             })()}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
+            <${DecidePins} map=${map} ledger=${ledger}/>
           </svg>`}
         </div>
         <div class="panel">
@@ -323,6 +330,7 @@ function App() {
                 </div></div>` : html`<div class="hint">no look yet · python -m wtdd dog_say</div>`}`;
           })()}
         </div>
+        <${DecideRules} ledger=${ledger}/>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
@@ -357,7 +365,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +373,42 @@ function App() {
     </div>
   </div>`;
 }
+// 17 · decision-to-action · start
+// A stop's decision and the on-call person's reply, as served: GET /rules (decide.rules(): the table's lines, its source,
+// both thresholds, the "unconfirmed" band) and the decided / reply.decided rows the page already polls (GET /ledger).
+// The page formats; it decides nothing. A failed row, or a failed /rules, is red with its reason, never an absence.
+function useRules17() {
+  const [rules, setRules] = useState(null);
+  useEffect(() => { fetch("/rules").then(r => r.json()).then(setRules).catch(e => setRules({ error: `${e}` })); }, []);
+  return rules;
+}
+const p17 = x => (typeof x === "number" ? x.toFixed(2) : "?");
+function DecidePins({ map, ledger }) {   // each stop's newest decision under its pin: a label is never drawn without its number
+  const rules = useRules17(), band = rules?.unconfirmed;
+  return html`<g>${(map.stops || []).map(i => {
+    const r = [...ledger].reverse().find(x => x.tool === "decided" && (x.args || {}).stop === i), pt = map.path[i];
+    if (!r || !pt) return null;
+    const d = r.state_after || {}, unconfirmed = band && d.p >= band[0] && d.p < band[1];
+    return html`<text key=${"d17-" + i} class=${"lbl pin17" + (r.ok ? "" : " bad")} x=${pt[0] + 16} y=${pt[1] + 30}>${r.ok ? `${d.label} ${p17(d.p)}${unconfirmed ? " · unconfirmed" : ""} · ${d.action}` : "couldn't decide"}</text>`;
+  })}</g>`;
+}
+function DecideRules({ ledger }) {   // the Rules panel: what a stop does, then the decided and done columns, typed
+  const rules = useRules17();
+  const rows = [...ledger].filter(r => r.tool === "decided" || r.tool === "reply.decided").reverse().slice(0, 12);
+  const line = r => {
+    const d = r.state_after || {}, a = r.args || {};
+    if (r.tool === "decided") return r.ok ? `decided · ${d.label} ${p17(d.p)} · ${d.action} · ${a.rule}` : html`<span class="bad">decided FAILED · ${r.response_or_error}</span>`;
+    return r.ok ? `"${a.text}" → ${d.meaning} ${p17(d.p)}${d.named && d.named !== "not_said" ? ` · ${d.named} ${p17(d.p_named)}` : ""}`
+      : html`<span class="bad">couldn't read the reply · ${r.response_or_error}</span>`;
+  };
+  return html`<div class="panel"><h2>Rules · what a stop does</h2>
+    ${!rules ? html`<div class="mono">reading /rules…</div>` : rules.error ? html`<div class="bad">rules FAILED: ${rules.error}</div>`
+      : html`<div class="rules17">${rules.lines.map(l => html`<div key=${l}>${l}</div>`)}<div class="mono">table from ${rules.source} · replies read at ${rules.reply_threshold}</div></div>`}
+    <h2>Decided · done</h2>
+    <div class="decided17">${rows.length ? rows.map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span>${line(r)}</span></div>`) : html`<div class="mono">no decision yet</div>`}</div>
+  </div>`;
+}
+// 17 · decision-to-action · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
