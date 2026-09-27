@@ -1,8 +1,9 @@
-"""The scout's proposed no-go zones: every thing 07 pins on the grid is asked once whether it is a hazard; a hazard
-becomes a PROPOSED zone made of the LiDAR cells it sits on, with the photo, the label and p; only a named person's tap
-makes it a rule, written into 04's `nogo: true` schema on ui/map.json. A proposal refuses nothing: the walk and the
-follower read only the map (04's nogo.refuse(), untouched) once 04 merges: on 07's base nothing calls refuse(), so a
-confirmed zone is written and drawn but refuses no walk or follow until then; and a proposal is never on the map.
+"""The scout's auto no-go zones: every thing 07 pins on the grid is asked once whether it is a hazard; a hazard at p >=
+the threshold is written at once into 04's `nogo: true` schema on ui/map.json, made of the LiDAR cells it sits on, with
+by "auto", the label and p (Johnny, 2026-09-27 04:14: "either drawn or auto classified with a jev confidence level");
+a named person's tap dismisses it. The walk and the follower read only the map (04's nogo.refuse(), untouched) once 04
+merges: on 07's base nothing calls refuse(), so an auto zone is written and drawn but refuses no walk or follow until
+then. The open-proposal path (confirm, a proposal's dismiss, state()'s proposals) is kept, but the feed opens none now.
 
 Run. The API's dog session (wtdd/dog/session.py) owns one Proposals store; its 'objects' thread feeds it 07's objects
 after every detector window (session.scout_feed), GET /dog/scout reads it, POST /dog/scout {id, action: confirm |
@@ -12,8 +13,9 @@ dismiss, by, _version} is the person's tap. Offline:
         --pose 0,0,0 --fov 90 --png /tmp/scout.png [--threshold N]
 
 builds the grid from the replayed frames, places the fixture's boxes with 07's store, asks the stub (never Jev, even with
-a key), and writes the occupancy PNG with every proposed cell a PNG_SCALE square in CELL_RGB: one stderr line per row
-it would have written and a summary, exit 2 with a WARN when nothing is proposed. It writes no ledger row.
+a key), adds its zones to a scratch map, and writes the occupancy PNG with every added zone's cell a PNG_SCALE square in
+CELL_RGB: one stderr line per row it would have written and a summary, exit 2 with a WARN when nothing is added. It
+writes no ledger row and never touches ui/map.json.
 
 How. blob(): the cells seen threshold+ times, flood-filled 8-connected from 07's hit cell, keeping a cell only when its
 bearing from the dog lies inside the box's angular extent (objects.bearing of the box's left and right columns, each
@@ -25,18 +27,23 @@ hull. The pad is a stated rule on points, drawn dashed on the remote; it is not 
 one Jev (TypeSafe System One) Choice over SCOUT_LABELS with a words-only state (no digits: 02's rule), 02's _jev
 vendored as decide_live, or the DEMO_CACHE stub below when JEV_API_KEY is unset; the call runs outside every lock and is
 its own zone.decided row, ok or not (never `decided`: 11's grade_decide owns that name). A choice other than
-not_a_hazard at p >= WTDD_DECIDE_THRESHOLD (default 0.7) is one zone.proposed row and an open proposal "z<n>" whose photo
-is the detector frame copied once to ~/Pictures/wtdd with its sha256. A thing is asked once (07's object id); a thing
-whose cells overlap an open proposal, a dismissed one or a scout zone already on the map is the same thing (logged, no
-call, no row). A failed call, an unreadable frame or a blob that raises is a failed row and a line in state()["failed"],
+not_a_hazard at p >= WTDD_DECIDE_THRESHOLD (default 0.7) is the zone "z<n>", its photo the detector frame copied once to
+~/Pictures/wtdd with its sha256, written to the map at once by _add(), the code path confirm() uses (the rules below;
+the map read before the call is the version, so a map that changed meanwhile is 409, a failed row, not retried): one
+zone.confirmed row, by "auto (jev <p>)" and the say "I added a no-go zone around the <kind>: Jev is <p> sure it's a
+hazard." (a stub answer says stub, never Jev). Below the threshold, or not_a_hazard, nothing: the thing stays 07's pin.
+A thing is asked once (07's object id); a thing whose cells overlap an open proposal, a dismissed one or a scout zone
+already on the map is the same thing (logged, no call, no row). A failed call, an unreadable frame or a blob that raises is a failed row and a line in state()["failed"],
 never a canned label, never retried. An empty blob is a wait, not a failure: the cone from where the dog is now misses
 07's hit because the dog moved since 07 placed the thing, so no row, one WARN per change, named in state()'s why, and
 the thing is taken again by the next feed with the hit 07 refreshes each window; a stale thing (07 no longer sees it)
 is never taken, so nothing waits forever, and one WARN and state()'s why name each thing that went stale before a feed
-took it (asked if 07 sees it again). confirm(id, by) follows POST /map's rules (a stale _version is 409, the
-previous map kept as map.prev.json) and nogo.zones() must accept the entry first; every refusal is a failed
-zone.confirmed row before anything is written. A zone confirmed from a stub proposal keeps `app: "stub"` on its map
-entry (04 ignores the key), so the remote still says stub on the solid zone after the tap.
+took it (asked if 07 sees it again). Every scout write to the map (_rewrite: an auto zone, confirm(id, by), dismiss(id,
+by)) follows POST /map's rules (a stale _version is 409, the previous map kept as map.prev.json) and nogo.zones() must
+accept the result first; every refusal is a failed zone.* row before anything is written. dismiss() of an auto zone
+takes that one entry off the map and remembers its cells (no re-add this session); a zone a person drew (04) or
+confirmed is never the scout's to dismiss (404). A zone from a stub answer keeps `app: "stub"` on its map entry (04
+ignores the key), so the remote says stub on the solid zone.
 
 UNVERIFIED on the real dog (the first live run must confirm): everything 07 lists (the camera's field of view, the
 bearing's sign, one odometry for the voxel frame and the pose); the cone uses the pose when the scout is fed and 07's
@@ -44,12 +51,12 @@ hit the pose when 07 placed the window, neither the one when the frame was shot.
 its own tick, so the two are milliseconds apart; a window a GET /dog/objects tick placed is up to TICK_S apart, more
 while the scout's previous model call held the thread. A turn or a sideways step in that gap SHIFTS the cone, it does
 not empty it: in the fixture world a 3 degree turn takes 9 of the chair's 11 cells plus 2 wall cells beside it, 7
-degrees 6 of 11 plus 5, 0.1 m sideways 9 of 11 plus 2 (0.3 m back: all 11 plus 2), and that zone is proposed and the
+degrees 6 of 11 plus 5, 0.1 m sideways 9 of 11 plus 2 (0.3 m back: all 11 plus 2), and that zone is added and the
 thing is never asked again; a turn from about 8 degrees or a step toward it (0.06 m) empties the cone and the thing
 waits (above). On the dog, check that the red cells sit on the table after driving up to it, not beside it;
 the photo is the newest watch frame, which the detector may already have replaced since the window 07 placed;
-a table touching a wall brings the wall's cells inside the cone along (the person sees the cells
-and the photo, and decides); positive obstacles only: COCO has no hole or trench and the grid's z band has no floor, so
+a table touching a wall brings the wall's cells inside the cone along (no person sees them before the zone is on the
+map: the remote shows it, and a tap dismisses it); positive obstacles only: COCO has no hole or trench and the grid's z band has no floor, so
 an opening is always drawn by a person (04). The live Jev call has not been run with a key (02's own UNVERIFIED)."""
 from __future__ import annotations
 import argparse
@@ -89,7 +96,7 @@ NUMBERS = ("zero one two three four five six seven eight nine ten eleven twelve 
            "seventeen eighteen nineteen twenty").split()
 TABLE_KINDS, SHARP_KINDS = {"dining table", "bench", "chair"}, {"knife", "scissors"}
 PHOTOS = Path.home() / "Pictures" / "wtdd"
-CELL_RGB = (220, 38, 38)   # the replay PNG's proposed cells
+CELL_RGB = (220, 38, 38)   # the replay PNG's zone cells
 PROPOSAL_KEYS = ("id", "object_id", "kind", "label", "p", "app", "cells", "cells_px", "poly", "thumb", "photo", "dist_m",
                  "area_m2", "ts")
 
@@ -162,8 +169,9 @@ def polygon(cells, cal: dict, resolution: float) -> list[list[int]]:
 # DEMO_CACHE: the scout's hazard answer. What: COCO names mapped to a scout label (dining table, bench, chair -> table;
 # knife, scissors -> sharp_object; anything else -> not_a_hazard) with p = the detector's own confidence, raw
 # "stub: <kind> -> <label>". Why: no JEV_API_KEY in a worktree, and the dry screenshot and the replay must reach a
-# proposal without a model. Live: set JEV_API_KEY in .env; decider() then picks decide_live, one Jev call per thing.
-# Its zone.decided and zone.proposed rows say cached=true, source=stub, and the remote says "stub" beside the proposal.
+# zone without a model. Live: set JEV_API_KEY in .env; decider() then picks decide_live, one Jev call per thing.
+# Its zone.decided and zone.confirmed rows say cached=true, source=stub, by "auto (stub <p>)", and the remote says "stub"
+# beside the zone.
 def decide_stub(q: dict) -> dict[str, Any]:
     kind = q["kind"]
     label = "table" if kind in TABLE_KINDS else "sharp_object" if kind in SHARP_KINDS else "not_a_hazard"
@@ -256,11 +264,11 @@ class Proposals:
         self.photo_dir = Path(photo_dir) if photo_dir else None   # None: PHOTOS, read at the write
         self.map_path = Path(map_path) if map_path else None      # None: field.MAP, read at call time
         self.open: dict[str, dict[str, Any]] = {}
-        self.dismissed: list[tuple] = []     # (id, cells) of every proposal a person said no to, this session
+        self.dismissed: list[tuple] = []     # (id, cells) of every proposal or auto zone a person said no to, this session
         self.handled: set[str] = set()       # 07's object ids already taken (asked, deduped or failed): never again
         self.failed: list[dict[str, Any]] = []
         self.n_ids = 0
-        self.counts = {"asked": 0, "proposed": 0, "confirmed": 0, "dismissed": 0, "deduped": 0}
+        self.counts = {"asked": 0, "added": 0, "confirmed": 0, "dismissed": 0, "deduped": 0}
         self.thr: float | None = None        # the threshold of the last feed, for state()'s why
         self._warned: str | None = None     # what placed objects wait for (no pose, or a dog that moved), logged once per change
         self.error: str | None = None        # the last feed's raise, on the GET until a feed gets past the map read
@@ -311,7 +319,7 @@ class Proposals:
                     and o["id"] not in self.handled]   # placed, then stale before any feed took them: named, never dropped silently
         gone_why = (f"WARN {len(gone)} placed object(s) went stale before the scout took them "
                     f"({', '.join(o['id'] + ' ' + o['label'] for o in gone)}): asked if 07 sees them again") if gone else None
-        n = {"handled": 0, "decided": 0, "proposed": 0, "failed": 0, "deduped": 0}
+        n = {"handled": 0, "decided": 0, "added": 0, "failed": 0, "deduped": 0}
         if not cands:
             self._warn(gone_why)
             return n
@@ -320,8 +328,10 @@ class Proposals:
             self._warn(f"WARN {len(cands)} placed object(s) waiting: no {', no '.join(missing)}", gone_why)
             return n
         thr = self.thr = decide_threshold()
-        on_map = [(z.get("name"), _key(z["cells"])) for z in json.loads(self._map().read_text()).get("zones", [])
-                  if z.get("source") == "scout" and z.get("cells")]   # a person already made these rules
+        mp = self._map()
+        ver = int(mp.stat().st_mtime)   # the version this feed's writes check: a map changed during a model call is 409
+        on_map = [(z.get("name"), _key(z["cells"])) for z in json.loads(mp.read_text()).get("zones", [])
+                  if z.get("source") == "scout" and z.get("cells")]   # the scout's zones already on the map
         with self._lock:
             self.error = None   # past the threshold and the map: this feed can ask
         try:
@@ -411,7 +421,7 @@ class Proposals:
                 f = pdir / f"scout-{time.strftime('%Y%m%dT%H%M%S')}-{zid}.jpg"
                 f.write_bytes(data)
             except OSError as e:
-                err = f"photo not written, no proposal: {type(e).__name__}: {e}"
+                err = f"photo not written, no zone: {type(e).__name__}: {e}"
                 self._fail(o, "photo write", err)
                 self._row("zone.proposed", "map", {"id": zid, "object_id": o["id"], "kind": o["label"]}, None, None, False, err, 0, stub)
                 n["failed"] += 1
@@ -420,16 +430,24 @@ class Proposals:
                  "cells": cells, "cells_px": occupancy.to_map_px(cells, cal).tolist(), "poly": poly, "thumb": o.get("thumb"),
                  "photo": {"path": str(f), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)},
                  "dist_m": o["dist_m"], "area_m2": area, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
-            with self._lock:
-                self.open[zid] = z
-                self.counts["proposed"] += 1
-            self._row("zone.proposed", app, {"id": zid, "object_id": o["id"], "kind": o["label"], "label": z["label"], "p": z["p"],
-                                             "cells": cells, "cells_n": len(cells), "poly": poly, "photo": z["photo"],
-                                             "dist_m": z["dist_m"], "area_m2": area},
-                      {"decided": got}, {"open": len(self.open)}, True,
-                      f"proposed {zid}: {len(cells)} cells, {z['label']} at p {z['p']:.2f}, {z['dist_m']} m",
-                      blob_ms + round((time.perf_counter() - t2) * 1000), stub)   # the cells and the photo; the call is its own row's
-            n["proposed"] += 1
+            by, before = f"auto ({'stub' if stub else 'jev'} {z['p']:.2f})", {k: v for k, v in z.items() if k != "thumb"}
+            try:   # on the map at once, by confirm's own path and rules
+                with self._lock:
+                    out, after = self._add(z, "auto", ver, "the scout read it before the model call; not retried")
+                    self.counts["added"] += 1
+            except Exception as e:  # noqa: BLE001  (a stale map, a zone 04 refuses, an unwritable file: a failed row, never retried)
+                self._fail(o, "map write", f"{type(e).__name__}: {e}")
+                self._row("zone.confirmed", "map", {"id": zid, "zone": None, "by": by}, before, None, False,
+                          f"{type(e).__name__}: {e}", blob_ms + round((time.perf_counter() - t2) * 1000), stub)
+                n["failed"] += 1
+                continue
+            ver = after["_version"]
+            on_map.append((out["zone"]["name"], key))   # a second thing on these cells in this feed is the same thing
+            self._row("zone.confirmed", "map", {"id": zid, "zone": out["zone"]["name"], "by": by}, before, after, True,
+                      f"I added a no-go zone around the {o['label']}: {'the stub (DEMO_CACHE, not Jev)' if stub else 'Jev'} "
+                      f"is {z['p']:.2f} sure it's a hazard.",
+                      blob_ms + round((time.perf_counter() - t2) * 1000), stub)   # the cells, the photo, the write; the call is its own row's
+            n["added"] += 1
         self._taking = None   # every row landed
         names = ", ".join(f"{o['id']} {o['label']}" for o in waiting)
         self._warn(f"WARN {len(waiting)} placed object(s) waiting ({names}): no counted cell in the box's cone from where the dog "
@@ -437,7 +455,7 @@ class Proposals:
         return self._summary(n, t_all) if n["handled"] else n
 
     def _summary(self, n: dict, t_all: float) -> dict[str, int]:
-        log("scout", f"{'WARN ' if n['handled'] and not n['proposed'] else ''}feed", **n, open=len(self.open),
+        log("scout", f"{'WARN ' if n['handled'] and not n['added'] else ''}feed", **n, open=len(self.open),
             ms=round((time.perf_counter() - t_all) * 1000))
         return n
 
@@ -458,8 +476,9 @@ class Proposals:
         log("scout", f"{tool} ok={ok}", app=app, **kv, **({} if ok else {"err": str(resp)[:160]}), ms=int(ms))
 
     def _tap(self, tool: str, zid: str, by: Any, t0: float, fn: Callable[[dict, str], tuple[dict, Any]]) -> dict[str, Any]:
-        """A person's confirm or dismiss under the store's lock: a name and an open id first, then fn(proposal, by) ->
-        (out, state_after); one row either way, the failed one written before the raise."""
+        """A person's confirm or dismiss under the store's lock: a name and an open id (a dismiss: or an auto zone on the
+        map) first, then fn(proposal or map entry, by) -> (out, state_after); one row either way, the failed one written
+        before the raise."""
         by = str(by or "").strip()
         with self._lock:
             z = self.open.get(zid)
@@ -468,57 +487,86 @@ class Proposals:
             try:
                 if not by:
                     raise Refused(400, f"{'a confirm' if tool == 'zone.confirmed' else 'a dismiss'} needs the name of the person making it (by)")
+                if z is None and tool == "zone.dismissed":   # an auto zone on the map; never one a person drew (04) or confirmed
+                    z = before = next((x for x in json.loads(self._map().read_text()).get("zones", [])
+                                       if x.get("name") == zid and x.get("source") == "scout" and x.get("by") == "auto"), None)
                 if z is None:
-                    raise Refused(404, f"no open proposal {zid!r} (open: {', '.join(self.open) or 'none'})")
+                    raise Refused(404, f"no open proposal{' or auto zone' if tool == 'zone.dismissed' else ''} {zid!r} "
+                                       f"(open: {', '.join(self.open) or 'none'})")
                 out, after = fn(z, by)
             except Exception as e:
                 self._row(tool, "map", args, before, None, False, f"{type(e).__name__}: {e}", round((time.perf_counter() - t0) * 1000))
                 raise
-            del self.open[zid]
+            self.open.pop(zid, None)
             self.counts[tool.split(".")[1]] += 1
             if tool == "zone.confirmed":
                 args["zone"] = out["zone"]["name"]
             self._row(tool, "map", args, before, after, True, out.get("say"), round((time.perf_counter() - t0) * 1000))
         return {k: v for k, v in out.items() if k != "say"}
 
-    def confirm(self, zid: str, by: Any, version: Any = None) -> dict[str, Any]:
-        """The proposal becomes 04's no-go zone on ui/map.json (see the module docstring); {ok, zone, _version}."""
-        def write(z: dict, by: str) -> tuple[dict, Any]:
-            mp = self._map()
-            if version is not None and int(mp.stat().st_mtime) != int(version):   # POST /map's rule: a stale page never overwrites
-                raise Refused(409, f"not confirmed: the map changed on the server since this page loaded (page {version}, "
-                                   f"file {int(mp.stat().st_mtime)}). Reload the page, then confirm again.")
-            old = mp.read_text()
-            m = json.loads(old)
-            zones = list(m.get("zones") or [])
+    def _rewrite(self, version: Any, verb: str, change: Callable[[list], list],
+                 since: str = "this page loaded; reload the page, then try again") -> int:
+        """Every scout write to ui/map.json, by POST /map's rules: a version that is not the file's int(mtime) is 409 (a
+        stale page, or a map changed during the model call), nogo.zones() must accept the new map (else 400), the previous
+        map is kept as map.prev.json. change(zones) -> the new zones. Returns the new version. The caller holds the lock."""
+        mp = self._map()
+        if version is not None and int(mp.stat().st_mtime) != int(version):   # POST /map's rule: a stale read never overwrites
+            raise Refused(409, f"not {verb}: the map changed on the server (version {version}, file {int(mp.stat().st_mtime)}) since {since}")
+        old = mp.read_text()
+        m = json.loads(old)
+        m["zones"] = change(list(m.get("zones") or []))
+        try:
+            nogo.zones(m)
+        except ValueError as e:
+            raise Refused(400, f"not {verb}: 04 refuses the map: {e}") from None
+        mp.with_name("map.prev.json").write_text(old)   # the previous map survives one overwrite
+        mp.write_text(json.dumps(m, indent=2) + "\n")
+        return int(mp.stat().st_mtime)
+
+    def _add(self, z: dict, by: str, version: Any, since: str = "this page loaded; reload the page, then try again") -> tuple[dict, Any]:
+        """z becomes 04's no-go zone on ui/map.json by _rewrite's rules, the next free nogo-<n>: confirm's (by a person's
+        name) and the feed's (by "auto", with the label and p). -> (out, state_after)."""
+        box: dict = {}
+
+        def add(zones: list) -> list:
             names, k = {x.get("name") for x in zones}, sum(1 for x in zones if x.get("nogo") is True) + 1
             while f"nogo-{k}" in names:   # NoGoButtons' rule: the next free nogo-<n>
                 k += 1
-            entry = {"name": f"nogo-{k}", "label": f"{z['label']} · {z['p']:.2f} · scout", "poly": z["poly"], "nogo": True,
-                     "source": "scout", "cells": z["cells"], "proposal": z["id"], "by": by,
-                     **({"app": "stub"} if z["app"] == "stub" else {})}   # DEMO_CACHE provenance survives the tap; 04 ignores the key
-            m["zones"] = zones + [entry]
-            try:
-                nogo.zones(m)
-            except ValueError as e:
-                raise Refused(400, f"not confirmed: 04 refuses the zone: {e}") from None
-            mp.with_name("map.prev.json").write_text(old)   # the previous map survives one overwrite
-            mp.write_text(json.dumps(m, indent=2) + "\n")
-            v = int(mp.stat().st_mtime)
-            return ({"ok": True, "zone": entry, "_version": v, "say": f"{z['id']} is {entry['name']} on the map, by {by}"},
-                    {"zone": entry, "_version": v})
-        return self._tap("zone.confirmed", zid, by, time.perf_counter(), write)
+            e = box["e"] = {"name": f"nogo-{k}", "label": f"{z['label']} · {z['p']:.2f} · scout", "poly": z["poly"], "nogo": True,
+                            "source": "scout", "cells": z["cells"], "proposal": z["id"], "by": by,
+                            **({"app": "stub"} if z["app"] == "stub" else {})}   # DEMO_CACHE provenance survives; 04 ignores the key
+            if by == "auto":   # a model's label and p, no person's name: the remote says "auto · <label> · <p>"
+                e.update(label=z["label"], p=z["p"])
+            return zones + [e]
+        v = self._rewrite(version, "added" if by == "auto" else "confirmed", add, since)
+        e = box["e"]
+        return {"ok": True, "zone": e, "_version": v, "say": f"{z['id']} is {e['name']} on the map, by {by}"}, {"zone": e, "_version": v}
 
-    def dismiss(self, zid: str, by: Any) -> dict[str, Any]:
-        """The person says no: the proposal is dropped and its cells are remembered (no re-ask this session)."""
+    def confirm(self, zid: str, by: Any, version: Any = None) -> dict[str, Any]:
+        """An open proposal becomes 04's no-go zone on ui/map.json in a person's name (kept; the feed opens none now);
+        {ok, zone, _version}."""
+        return self._tap("zone.confirmed", zid, by, time.perf_counter(), lambda z, by: self._add(z, by, version))
+
+    def dismiss(self, zid: str, by: Any, version: Any = None) -> dict[str, Any]:
+        """The person says no: an open proposal is dropped; an auto zone (by "auto") leaves the map by _rewrite's rules,
+        exactly that entry. Either way its cells are remembered (no re-add this session)."""
         def drop(z: dict, by: str) -> tuple[dict, Any]:
-            self.dismissed.append((z["id"], _key(z["cells"])))
-            return {"ok": True, "dismissed": z["id"], "say": f"{z['id']} dismissed by {by}"}, {"open": len(self.open) - 1}
+            say, after = f"{zid} dismissed by {by}", {"open": len(self.open) - 1}
+            if zid not in self.open:
+                v = self._rewrite(version, "dismissed", lambda zs: [x for x in zs if not (x.get("name") == zid and x.get("source") == "scout"
+                                                                                          and x.get("by") == "auto")])
+                say, after = f"I took {zid} (auto · {z['label']} · {z['p']:.2f}) off the map: {by} dismissed it.", {"_version": v}
+            self.dismissed.append((zid, _key(z["cells"])))
+            return {"ok": True, "dismissed": zid, "say": say}, after
         return self._tap("zone.dismissed", zid, by, time.perf_counter(), drop)
 
     def state(self) -> dict[str, Any]:
-        """The GET /dog/scout body (without `source`): {n, proposals, failed, why, error?}; why names the reason whenever
-        n is 0; error is the last feed's raise until a feed gets past the threshold and the map (the page draws it red)."""
+        """The GET /dog/scout body (without `source`): {n, proposals, zones, _version, failed, why, error?}; zones are the
+        auto zones on the map and _version the map's (a dismiss sends it back); why names the reason whenever n is 0;
+        error is the last feed's raise until a feed gets past the threshold and the map (the page draws it red)."""
+        mp = self._map()
+        v = int(mp.stat().st_mtime)
+        zones = [z for z in json.loads(mp.read_text()).get("zones", []) if z.get("source") == "scout" and z.get("by") == "auto"]
         with self._lock:
             props = [{k: z[k] for k in PROPOSAL_KEYS} for z in self.open.values()]
             failed, c = [dict(f) for f in self.failed], dict(self.counts)
@@ -529,16 +577,17 @@ class Proposals:
                 why = warned or ("no object taken: the last feed FAILED (error)" if error else
                                  "no placed object yet: the scout asks once about each thing 07 pins on the grid")
             else:
-                parts = [f"{c['asked']} asked, {c['proposed']} proposed as a hazard at p >= {self.thr}"]
+                parts = [f"{c['asked']} asked, {c['added']} added to the map as a hazard at p >= {self.thr}"]
                 parts += [f"{c[k]} {k}" for k in ("confirmed", "dismissed", "deduped") if c[k]]
                 parts += [f"{len(failed)} failed (listed)"] if failed else []
                 parts += [warned] if warned else []
                 why = "no open proposal: " + ", ".join(parts)
-        return {"n": len(props), "proposals": props, "failed": failed, "why": why, **({"error": error} if error else {})}
+        return {"n": len(props), "proposals": props, "zones": zones, "_version": v, "failed": failed, "why": why,
+                **({"error": error} if error else {})}
 
 
 def png(grid: occupancy.Grid, threshold: int, cells, path) -> Path:
-    """occupancy.png, then every proposed cell one PNG_SCALE square in CELL_RGB (grid rows and columns, not the map)."""
+    """occupancy.png, then every zone cell one PNG_SCALE square in CELL_RGB (grid rows and columns, not the map)."""
     from PIL import Image
     occupancy.png(grid, threshold, path)
     im = np.array(Image.open(path).convert("RGB"))
@@ -551,12 +600,12 @@ def png(grid: occupancy.Grid, threshold: int, cells, path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m wtdd.dog.scout_zones", description="Replay LiDAR frames and one detector window: propose the scout's zones (stub), draw their cells.")
+    ap = argparse.ArgumentParser(prog="python -m wtdd.dog.scout_zones", description="Replay LiDAR frames and one detector window: add the scout's zones to a scratch map (stub), draw their cells.")
     ap.add_argument("--replay", required=True, help="npz of wire-format frames (wtdd/dog/fixtures/voxel_frames.npz)")
     ap.add_argument("--watch", required=True, help="a watch.json-shaped detector window (wtdd/dog/fixtures/watch-frame.json)")
     ap.add_argument("--pose", required=True, help="x,y,yaw of the dog in the frames' odometry (metres, radians)")
     ap.add_argument("--fov", type=float, required=True, help="the camera's horizontal field of view, degrees")
-    ap.add_argument("--png", required=True, help="where the grid PNG with the proposed cells goes")
+    ap.add_argument("--png", required=True, help="where the grid PNG with the zone cells goes")
     ap.add_argument("--threshold", type=int, default=occupancy.THRESHOLD, help=f"frames a cell must be seen in (default {occupancy.THRESHOLD})")
     a = ap.parse_args(argv)
     t_all = time.perf_counter()
@@ -587,17 +636,17 @@ def main(argv: list[str] | None = None) -> int:
                               decide=decide_stub, photo_dir=tmp, map_path=Path(tmp) / "map.json")
             props.feed(store.to_list(), frame, pose, g, CAL, a.fov, a.threshold)
             st = props.state()
-        for z in st["proposals"]:
-            log("scout", z["id"], kind=z["kind"], label=z["label"], p=z["p"], cells=len(z["cells"]), dist_m=z["dist_m"], poly=z["poly"])
-        png(g, a.threshold, [c for z in st["proposals"] for c in z["cells"]], a.png)
+        for z in st["zones"]:
+            log("scout", z["name"], label=z["label"], p=z["p"], by=z["by"], cells=len(z["cells"]), poly=z["poly"])
+        png(g, a.threshold, [c for z in st["zones"] for c in z["cells"]], a.png)
     except Exception as e:  # noqa: BLE001  (reported with the path, non-zero exit; nothing written stands in for it)
         log("scout", "FAILED", err=f"{type(e).__name__}: {e}")
         return 1
-    log("scout", "replay done", proposed=st["n"], failed=len(st["failed"]), placed=sum(o["pos_px"] is not None for o in store.to_list()),
+    log("scout", "replay done", added=len(st["zones"]), failed=len(st["failed"]), placed=sum(o["pos_px"] is not None for o in store.to_list()),
         frames=g.frames, threshold=a.threshold, fov_deg=a.fov, cal="make_objects_fixture.CAL (the tests' tie)", png=a.png,
         ms=round((time.perf_counter() - t_all) * 1000))
-    if st["n"] == 0:
-        log("scout", f"WARN proposed=0: {st['why']} (the PNG has the grid, no proposed cell)")
+    if not st["zones"]:
+        log("scout", f"WARN added=0: {st['why']} (the PNG has the grid, no zone cell)")
         return 2
     return 0
 
