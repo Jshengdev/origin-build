@@ -493,10 +493,12 @@ class DogSession:
                 r["state_before"], err = before, None   # when they merge, read self.loc / 05a's utpose through getattr
                 turned, prev, n0, e0, c0, h0, avoid, t0 = 0.0, None, 0, 0, 0, 0, bool(b._avoid), time.monotonic()
                 try:
-                    st, lp = await b.fresh_state(required=True), b.lidar_points()
-                    prev, n0, e0, (c0, h0) = st["rpy"][2], lp["n"], lp["cb_errors"], cells()
-                    before.update(map=self.map_pose(st), heading0_deg=round(math.degrees(prev), 1), grid_frames=g.frames if (g := self.grid) is not None else 0,
-                                  cells=c0, lidar_n=n0, range_obstacle=st.get("range_obstacle"))
+                    lp = b.lidar_points()   # the synchronous baselines before the first await: a state read that fails
+                    n0, e0, (c0, h0) = lp["n"], lp["cb_errors"], cells()   # never credits the spin with the session's history
+                    before.update(grid_frames=g.frames if (g := self.grid) is not None else 0, cells=c0, lidar_n=n0)
+                    st = await b.fresh_state(required=True)
+                    prev = st["rpy"][2]
+                    before.update(map=self.map_pose(st), heading0_deg=round(math.degrees(prev), 1), range_obstacle=st.get("range_obstacle"))
                     if self._scout_stop:   # a stop after the press's last look and before this task could be cancelled
                         raise RuntimeError("stopped (POST /dog/stop) before the spin started")
                     await b.lidar_on(self._on_frame)   # a refused disable_traffic_saving raises here (wtdd/dog/lidar.py subscribe)
