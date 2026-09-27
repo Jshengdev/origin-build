@@ -381,16 +381,18 @@ function App() {
 // frames_behind). The boxes take the detector's class colours only when watch.frame_sha is video.sha, the frame they
 // were computed on; otherwise they are dimmed, with the server's frames_behind. A stall (video.stale) unmounts the image,
 // which closes the stream, and shows a red tile naming it. A refused stream reads /dog/frame.jpg once and names its error
-// in a red tile. 'ms' is the age of the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp).
+// in a red tile. Every mount of the image is a new ?e=, so a remount never re-shows an ended stream. 'ms' is the age of
+// the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp).
 const CLS = ["#042AFF", "#0BDBEB", "#F3F3F3", "#00DFB7", "#111F68", "#FF6FDD", "#FF444F", "#CCED00", "#00F344", "#BD00FF",
              "#00B4FF", "#DD00BA", "#00FFFF", "#26C000", "#01FFB3", "#7D24FF", "#7B0068", "#FF1B6C", "#FC6D2F", "#A2FF0B"];   // ultralytics 8.4.163 Colors (utils/plotting.py:117-138): watch.jpg strokes class cls % 20 in these
 function LiveView({ dog, watch }) {
-  const [epoch, setEpoch] = useState(0);        // bumped to open a new stream (retry, or the video back after a stall)
+  const [epoch, setEpoch] = useState(0);        // the stream URL's ?e=, so each mount of the image opens a new request
   const [failed, setFailed] = useState(null);   // the refused stream's error, as /dog/frame.jpg serves it
-  const v = dog?.video, wasStale = useRef(false);
-  useEffect(() => { if (wasStale.current && v && !v.stale) { setFailed(null); setEpoch(e => e + 1); } wasStale.current = !!v?.stale; }, [v?.stale]);
+  const v = dog?.video, live = !!v && !v.stale, showing = !!dog?.connected && !failed && !v?.stale;   // showing: the image is mounted
+  useEffect(() => { if (!showing) setEpoch(e => e + 1); }, [showing]);   // the image went away: chromium re-shows an ended stream's last part under a reused src (gotcha 29-3)
+  useEffect(() => { if (live) setFailed(null); }, [live]);   // the video back (after a stall, or a new body's first frame) clears a FAILED tile
   if (!dog?.connected) return null;
-  const retry = () => fetch(`${API}/dog/frame.jpg`).then(async r => { if (!r.ok) return setFailed((await r.json()).error); setFailed(null); setEpoch(e => e + 1); }).catch(e => setFailed(`${e}`));   // frame.jpg is the request that reconnects a dead peer (session._ensure); the stream reopens once it answers
+  const retry = () => fetch(`${API}/dog/frame.jpg`).then(async r => setFailed(r.ok ? null : (await r.json()).error)).catch(e => setFailed(`${e}`));   // frame.jpg is the request that reconnects a dead peer (session._ensure); the image remounts, under a new ?e=, once it answers
   const onError = () => fetch(`${API}/dog/frame.jpg`).then(async r => setFailed(r.ok ? "stream closed by the server" : (await r.json()).error)).catch(e => setFailed(`${e}`));
   const tile = text => html`<div class="lv-tile"><span>${text}${v?.source === "stub" && html` <span class="lv-stub">stub</span>`}</span><button class="small" onClick=${retry}>retry</button></div>`;
   if (failed) return tile(`video FAILED · ${failed}`);
