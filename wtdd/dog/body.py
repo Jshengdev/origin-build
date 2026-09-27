@@ -622,6 +622,8 @@ class Body:
         (GET /dog/frame.jpg, GET /dog/stream.mjpg, watch.py through the first). No ledger row: a read, like jpeg().
         There is no await between the check and the store, so the loop serializes readers and each n costs one encode."""
         await self._video_on()
+        if self._fr is None:   # _video_on timed out earlier and left the channel on: no frame has ever come
+            raise RuntimeError(f"no video frame yet (frames={self._fr_n})")
         age = time.monotonic() - self._fr_at
         if age > FRAME_STALE_S:
             raise RuntimeError(f"video stale: last frame {age:.1f}s ago (frames={self._fr_n})")
