@@ -64,6 +64,15 @@ Review round 1 (the classes at the end, RED before their fixes):
   the thumbnail copy                 its failure is state_after.file_error on an ok stop.person: ok is the device's
   field.walk(on_hold=)               on_hold() runs every tick of the hold; the chat's round passes its resume-word
                                      reader, so the word is read while the listener is inside its own walk
+
+Review round 2 (the classes after RoundHold, RED before their fixes):
+  a body still moving after _halt()  (the dog's 2026-09-13 bug: the avoidance service kept the last velocity after
+                                     StopMove) a read-back velocity above halt.STILL_MPS is read again after
+                                     halt.SETTLE_S as state_after.velocity_settled; still above it, stop.person is ok
+                                     false naming it, the halt stands (ok false on the page), every move is refused and
+                                     the eval grades fail; a body that settles within it is an ok stop
+  the word from the dog's own account  (is_from_me: sender '' in chat.db) is still POSTed and refused with its row,
+                                     and the chat and the WARN line name the missing handle, not "a person's name"
 """
 from __future__ import annotations
 import asyncio
@@ -1078,6 +1087,91 @@ class RoundHold(unittest.TestCase):
                 self.field.walk(dry=True, source="dog")
         self.assertIn("stopped", str(cm.exception))
         self.assertNotIn("not running", str(cm.exception))
+
+
+
+# ------------------------------------------------------------------------------------------------ review round 2
+class Coasting(FakeBody):
+    """The dog's known failure (README, bugs found, 2026-09-13): the avoidance service kept the last velocity after
+    StopMove. After a StopMove this body reads back walking at V for `reads` fresh reads (forever by default)."""
+    V = [0.4, 0.0, 0.0]
+
+    def __init__(self, reads: int = 10 ** 9) -> None:
+        super().__init__()
+        self.left = reads
+
+    async def fresh_state(self, required: bool = False) -> dict:
+        st = await super().fresh_state(required)
+        if self.left > 0 and "StopMove" in [n for n, _ in self.cmds]:
+            self.left -= 1
+            return {**st, "velocity": list(self.V)}
+        return st
+
+
+class StillMoving(Dry):
+    """A halt the device does not confirm is not a halt: ok is what the read-back velocity says, not that _halt()
+    returned."""
+
+    def halt_on(self, body: FakeBody) -> dict:
+        self.fake = self.s.body = body
+        self.plant([person(near_h() + 10)], t=time.time())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.s.drive(0.3, 0.0, 0.0)
+            self.s.person_tick()
+        rows = of("stop.person")
+        self.assertEqual(len(rows), 1, rows)
+        return rows[0]
+
+    def test_a_body_still_moving_after_the_halt_is_a_failed_stop_and_the_halt_stands(self):
+        r = self.halt_on(Coasting())
+        self.assertIs(r["ok"], False, r)
+        self.assertIn("still moving", r["response_or_error"])
+        self.assertEqual(r["state_after"]["velocity"], Coasting.V)
+        self.assertEqual(r["state_after"]["velocity_settled"], Coasting.V)
+        h = self.s.state()["halted"]
+        self.assertTrue(h)
+        self.assertIs(h["ok"], False)
+        self.assertIn("still moving", h["error"])
+        for move in (lambda: self.s.drive(0.3, 0.0, 0.0), lambda: self.s.follow([list(p) for p in PATH], []),
+                     lambda: self.s.cmd("Hello"), lambda: self.s.look("tilt")):
+            with self.assertRaises(RuntimeError):
+                move()
+        g, why, _ = halt.grade([DET()] + ledger.rows())
+        self.assertEqual(g, "fail", why)
+        self.assertIn("still moving", why)
+
+    def test_a_body_that_settles_within_the_settle_is_an_ok_stop(self):
+        r = self.halt_on(Coasting(reads=1))
+        self.assertIs(r["ok"], True, r["response_or_error"])
+        self.assertEqual(r["state_after"]["velocity"], Coasting.V)   # the first read-back, as it was
+        self.assertEqual(r["state_after"]["velocity_settled"], [0.0, 0.0, 0.0])
+        self.assertLessEqual(r["state_after"]["latency_ms"], halt.HALT_MS)   # still the first read-back minus watch.json's t
+        self.assertEqual(halt.grade([DET()] + ledger.rows() + [RESUMED()])[0], "pass")
+
+
+class OwnAccount(unittest.TestCase):
+    """The resume word typed from the dog's own account (WTDD_ALLOW_SELF=1: Johnny's phone is the dog's account): chat.db
+    gives an is_from_me row the sender '' (chat/db.py COALESCE(h.id, '')). The blank name stays refused, with its row;
+    what the chat and the log say is the real cause."""
+    setUp = Word.setUp
+    tearDown = Word.tearDown
+
+    def test_the_word_from_the_dogs_own_account_is_refused_naming_the_missing_handle(self):
+        m = {**msg("resume", rowid=13, sender=""), "is_from_me": 1}
+        refused = mock.Mock(status_code=400, json=lambda: {"ok": False, "error": "ValueError: a halt resumes only with a person's name"})
+        buf = io.StringIO()
+        with mock.patch("requests.post", return_value=refused) as p, contextlib.redirect_stderr(buf):
+            self.l.handle(m)
+        p.assert_called_once()   # the API refuses it and writes its stop.resumed row
+        self.assertEqual(p.call_args.kwargs["json"], {"by": "", "via": "imessage"})
+        said = [t for _, t in self.posted if t]
+        self.assertEqual(len(said), 1, said)
+        self.assertTrue(said[0].startswith("couldn't resume"), said)
+        self.assertIn("no sender handle", said[0])
+        self.assertIn("from the page", said[0])
+        self.assertNotIn("person's name", said[0])
+        warns = [l for l in buf.getvalue().splitlines() if "WARN" in l and "no sender handle" in l]
+        self.assertTrue(warns, buf.getvalue()[-600:])
 
 
 if __name__ == "__main__":
