@@ -123,6 +123,9 @@ function App() {
 
   // ---------- the dog: hold-to-drive (W A S D, Q E to turn) and the looks. Velocities refresh every 200 ms while a key
   // is held; the server stops the dog 0.6 s after the last refresh, so a dropped key never runs it into a wall.
+  // S1: the keyboard drives only in #admin and only while "keys drive" is on (off by default); typing in a field or a
+  // shortcut with ctrl, cmd or alt never drives; leaving the tab (blur, hidden) releases every held key, sends one stop
+  // if a key was held, and disarms, because a keyup that lands in another window would otherwise refresh the dead-man forever.
   const [dog, setDog] = useState(null);
   const [photo, setPhoto] = useState(null);
   const [live, setLive] = useState(null);   // the dog's camera: GET /dog/frame.jpg, self-paced, only while connected
@@ -136,12 +139,20 @@ function App() {
   const sendDrive = () => { const v = [0, 0, 0]; for (const k of keys.current) { const kv = VEL[k]; if (kv) { v[0] += kv[0]; v[1] += kv[1]; v[2] += kv[2]; } } return v.some(Boolean) ? post("/dog/drive", { x: v[0], y: v[1], z: v[2] }) : post("/dog/stop"); };
   const press = k => { if (!VEL[k] || keys.current.has(k)) return; keys.current.add(k); if (!driveTimer.current) { sendDrive(); driveTimer.current = setInterval(sendDrive, 200); } };
   const release = k => { keys.current.delete(k); if (!keys.current.size && driveTimer.current) { clearInterval(driveTimer.current); driveTimer.current = null; post("/dog/stop"); } };
+  const releaseAll = () => { const held = keys.current.size > 0 || driveTimer.current !== null; keys.current.clear(); if (driveTimer.current) { clearInterval(driveTimer.current); driveTimer.current = null; } if (held) post("/dog/stop"); };
+  const armedRef = useRef(false); const [armed, setArmed] = useState(false);
+  const arm = on => { armedRef.current = on; setArmed(on); if (!on) releaseAll(); };
+  useEffect(() => { if (!admin) arm(false); }, [admin]);
   useEffect(() => {
-    const kd = e => { if (e.target.tagName === "INPUT" || e.repeat) return; press(e.key.toLowerCase()); };
+    const typing = e => { const t = e.target; return !!t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)); };
+    const kd = e => { if (!armedRef.current || typing(e) || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; press(e.key.toLowerCase()); };
     const ku = e => release(e.key.toLowerCase());
+    const off = () => arm(false);   // the tab lost focus: nothing held stays held
+    const vis = () => { if (document.hidden) off(); };
     window.addEventListener("keydown", kd); window.addEventListener("keyup", ku);
+    window.addEventListener("blur", off); document.addEventListener("visibilitychange", vis);
     const t = setInterval(() => fetch(`${API}/dog/state`).then(r => r.json()).then(d => { setDog(d); if (!drag.current) setDogDrag(null); }).catch(() => {}), 1000);
-    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); clearInterval(t); };
+    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); window.removeEventListener("blur", off); document.removeEventListener("visibilitychange", vis); clearInterval(t); };
   }, []);
   const markIf = (look, say, ask = false) => { if (dog?.rec) post("/dog/mark", { look, say, ask }).then(r => r.json()).then(setLast); };   // recording: the look pressed here becomes this stop's action, with a report
   const lookShot = async kind => { markIf(kind, true); const out = await run("dog_look", { look: kind }); if (out.ok) setPhoto({ url: `${API}/pictures/look-${kind}.jpg?t=${out.result.pitch_deg}-${Math.floor(performance.now())}`, down: out.result.file_down ? `${API}/pictures/look-down.jpg?t=${Math.floor(performance.now())}` : null, file: out.result.file, pitch: out.result.pitch_deg, pitchDown: out.result.pitch_down_deg, kind }); };
@@ -284,7 +295,7 @@ function App() {
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
           <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${dog ? (dog.connected ? `connected · mode ${dog.state?.mode ?? "?"} · pos ${(dog.state?.position || []).slice(0, 2).map(v => (+v).toFixed(2)).join(", ")} · ${dog.moving ? "moving " + dog.vel.map(v => (+v).toFixed(1)).join("/") : "still"}` : "not connected · the first command connects (about 1 s)") : "…"}</div>
-          ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<span class="mono">hold a key or a button · 0.3 m/s · 0.5 rad/s</span></div>
+          ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<button class=${"small" + (armed ? " on" : "")} title="W A S D Q E drive only while this is on; leaving the tab turns it off and stops a held key" onClick=${() => arm(!armed)}>${armed ? "keys drive · on" : "keys drive · off"}</button><span class="mono">hold a button, or a key while keys drive is on · 0.3 m/s · 0.5 rad/s</span></div>
           <div class="row tight">${key("a", "A ◀")}${key("s", "S ▼")}${key("d", "D ▶")}<button class="small" onClick=${() => post("/dog/stop")}>stop</button></div>`}
           <div class="row tight">
             <button class="small" disabled=${!map || (map.path || []).length < 2} title="the dog stands on path point 1 facing point 2" onClick=${() => post("/dog/calibrate", { p: map.path[0], toward: map.path[1] }).then(r => r.json()).then(setLast)}>at path start, facing pt 2</button>
