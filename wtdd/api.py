@@ -25,6 +25,7 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /rules                     decide.rules(): the site labels, the escalate table (map or default), the thresholds in force, the Rules panel's lines
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -113,6 +114,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "image/jpeg", DogSession.get().snapshot())
             except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+        # 17 · decision-to-action
+        if u.path == "/rules":   # the page's Rules panel prints this; a malformed table or threshold is its 500, shown red
+            try:
+                from .decide import rules
+                return self._json(200, rules())
+            except Exception as e:  # noqa: BLE001  (reported, never a default table)
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
