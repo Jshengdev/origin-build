@@ -25,7 +25,9 @@ of path point indices (double-click a path point on the remote); at each one the
 point, room), the lights hold, then it resumes. The chat's wake sequence passes its look-and-say as on_stop; with no
 stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=dog in the chat): the entity is the
 real dog's calibrated odometry pose from the API, the follower (POST /dog/follow) drives it and pauses at the stops,
-and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. Measured on the live wake demo
+and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. While GET
+/dog/state says halted (goal 00, a person in the dog's frame), the walk holds on the dog's spot instead of ending, so the
+lights stay where it stopped; after the named resume the cancelled follow's error ends it. Measured on the live wake demo
 (2026-09-13): dark start 1.46 s, walk 63.6 s across four rooms (seven crossings, five lights), 67 writes, 0 errors.
 """
 from __future__ import annotations
@@ -204,6 +206,7 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
         stops_done: list[int] = []
         pending_stops = list(stops)
         follow_error: str | None = None
+        held = False   # 00: logged once when a person halt holds the walk on the spot
         try:
           while True:
             if source == "dog":
@@ -258,7 +261,11 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
                 log("field", "stopped by request", after_s=round(time.monotonic() - t0, 1))
                 break
             if source == "dog" and follower:
-                if not f.get("active"):
+                if d.get("halted"):   # 00: a person halt; the lights hold on the dog's spot until a named resume
+                    if not held:
+                        log("field", "halted: holding the lights on the dog's spot", x=int(p[0]), y=int(p[1]), was=d["halted"].get("was"))
+                    held = True
+                elif not f.get("active"):
                     follow_error = f.get("error")
                     break
             elif source == "entity" and s >= total:
