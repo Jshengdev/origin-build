@@ -31,7 +31,8 @@ call, no row). A failed call, an unreadable frame or a blob that raises is a fai
 never a canned label, never retried. An empty blob is a wait, not a failure: the cone from where the dog is now misses
 07's hit because the dog moved since 07 placed the thing, so no row, one WARN per change, named in state()'s why, and
 the thing is taken again by the next feed with the hit 07 refreshes each window; a stale thing (07 no longer sees it)
-is never taken, so nothing waits forever. confirm(id, by) follows POST /map's rules (a stale _version is 409, the
+is never taken, so nothing waits forever, and one WARN and state()'s why name each thing that went stale before a feed
+took it (asked if 07 sees it again). confirm(id, by) follows POST /map's rules (a stale _version is 409, the
 previous map kept as map.prev.json) and nogo.zones() must accept the entry first; every refusal is a failed
 zone.confirmed row before anything is written. A zone confirmed from a stub proposal keeps `app: "stub"` on its map
 entry (04 ignores the key), so the remote still says stub on the solid zone after the tap.
@@ -268,8 +269,9 @@ class Proposals:
     def _map(self) -> Path:
         return self.map_path or field.MAP
 
-    def _warn(self, why: str | None) -> None:
-        """One WARN line per change of what placed objects wait for, kept for state()'s why; None: nothing waits."""
+    def _warn(self, *whys: str | None) -> None:
+        """One WARN line per change of what placed objects wait for or lost, kept for state()'s why; none: nothing did."""
+        why = "; ".join(w for w in whys if w) or None
         if why and why != self._warned:
             log("scout", why)
         self._warned = why
@@ -304,13 +306,17 @@ class Proposals:
         with self._lock:   # a stale thing is not taken: 07 no longer sees it, so it never waits forever
             cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and not o.get("stale")
                      and o["id"] not in self.handled]
+            gone = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and o.get("stale")
+                    and o["id"] not in self.handled]   # placed, then stale before any feed took them: named, never dropped silently
+        gone_why = (f"WARN {len(gone)} placed object(s) went stale before the scout took them "
+                    f"({', '.join(o['id'] + ' ' + o['label'] for o in gone)}): asked if 07 sees them again") if gone else None
         n = {"handled": 0, "decided": 0, "proposed": 0, "failed": 0, "deduped": 0}
         if not cands:
-            self._warn(None)
+            self._warn(gone_why)
             return n
         missing = [k for k, v in (("pose", pose), ("grid", grid), ("calibration", cal), ("field of view", fov_deg)) if v is None]
         if missing:   # taken again when they are back: 07 placed these, the scout cannot see them now
-            self._warn(f"WARN {len(cands)} placed object(s) waiting: no {', no '.join(missing)}")
+            self._warn(f"WARN {len(cands)} placed object(s) waiting: no {', no '.join(missing)}", gone_why)
             return n
         thr = self.thr = decide_threshold()
         on_map = [(z.get("name"), _key(z["cells"])) for z in json.loads(self._map().read_text()).get("zones", [])
@@ -328,7 +334,7 @@ class Proposals:
                 self._fail(o, "frame read", err)
                 self._row("zone.proposed", "map", {"object_id": o["id"], "kind": o["label"]}, None, None, False, err, 0)
             n["handled"] = n["failed"] = len(cands)
-            self._warn(None)
+            self._warn(gone_why)
             return self._summary(n, t_all)
         fn, waiting = self.decide, []   # decider() is read when a call is about to be made, never on a tick that asks nothing
         for o in cands:
@@ -426,7 +432,7 @@ class Proposals:
         self._taking = None   # every row landed
         names = ", ".join(f"{o['id']} {o['label']}" for o in waiting)
         self._warn(f"WARN {len(waiting)} placed object(s) waiting ({names}): no counted cell in the box's cone from where the dog "
-                   f"is now (it moved since 07 placed them); asked when 07 places them again" if waiting else None)
+                   f"is now (it moved since 07 placed them); asked when 07 places them again" if waiting else None, gone_why)
         return self._summary(n, t_all) if n["handled"] else n
 
     def _summary(self, n: dict, t_all: float) -> dict[str, int]:
