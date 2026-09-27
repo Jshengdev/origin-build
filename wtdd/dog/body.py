@@ -39,7 +39,7 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
               Body.taps. Any other RTC_TOPIC is subscribed for the window and unsubscribed after, unless its slot holds a
               callback the sniff did not put there (refused: add that topic to SNIFF_OWNED and tap it); streams() counts
               every arrival. UNVERIFIED on the dog: every topic but rt/lf/sportmodestate (the sniff exists to end that).
-  auth:      firmware 1.1.15+ needs aes_128_key, fetched once with
+  auth:       firmware 1.1.15+ needs aes_128_key, fetched once with
               `unitree-fetch-aes-key --email <unitree account> --password '...' --device-type Go2`.
   discovery:  discover_ip_sn() is multicast 231.1.1.1:10131; a dog in STA mode on another subnet does not answer.
   signaling:  the dog listens on TCP 9991 (con_notify) or 8081 (legacy /offer).
