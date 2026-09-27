@@ -2,8 +2,9 @@
 Checks, through the real API handler in a thread: a fixture frame POSTed raw (image/jpeg) to /cam/<id>/frame lands as
 a file, is detected, writes one cam.frame and one cam.detect row (both carrying shift_id), is served back to the remote
 (GET /cam, GET /cam/<id>/frame.jpg); a person box while the intruder watch is armed is handed to the dispatch tool
-(item 18: tools.call("dispatch", cam, trigger, file=<the frame>) on a thread; wtdd/test_dispatch.py tests what it does),
-not when disarmed, and not twice inside the
+(item 18: tools.call("dispatch", cam, trigger, file=<the sighting's boxed copy, cams/<id>.<epoch>.boxed.jpg>) on a
+thread, so a later frame never reaches the ask; wtdd/test_dispatch.py tests what it does), not when disarmed, and not
+twice inside the
 cooldown; garbage bytes and a failed detector are FAILED rows and error responses, never hidden; the map names the
 camera; the client posts a file source once and reports a dead server loud; cv2 never loads in the API process.
 Stubbed, and why: the detector subprocess (yolo11n.pt is gitignored and downloads on first run; a unit test never
@@ -196,8 +197,13 @@ class Person(Case):
 
         def fake_boxed(file):   # intruder_alarm boxes the frame it posts; here the detector has no weights
             return {"file": file.rsplit(".", 1)[0] + "-boxed.jpg", "classes": {"person": 1}, "n": 1, "ms": 1}
+
+        def boxing_detect(frame, out):   # the real detector writes its boxed copy to `out`; this one marks the frame's bytes
+            Path(out).write_bytes(b"boxed:" + Path(frame).read_bytes())
+            return {**DETECT, "file": str(out)}
         for p in (mock.patch.object(chat_post, "run", fake_post), mock.patch.object(dog_say, "boxed", fake_boxed),
-                  mock.patch.object(config, "ROOT", _TMP), mock.patch.object(cam, "ARMED", _TMP / "intruder.on")):
+                  mock.patch.object(config, "ROOT", _TMP), mock.patch.object(cam, "ARMED", _TMP / "intruder.on"),
+                  mock.patch.object(cam, "detect_file", boxing_detect), mock.patch.dict(cam._last, clear=True)):
             p.start()
             self.addCleanup(p.stop)
         (_TMP / "intruder.on").unlink(missing_ok=True)
@@ -227,7 +233,9 @@ class Person(Case):
             self.assertEqual(r["person"]["dispatched"], True)
             self.assertTrue(r["person"]["trigger"].startswith("cam:lap1:"), r["person"])
             self.assertTrue(called.wait(5), "the dispatch tool was never called")
-            self.assertEqual(calls, [("dispatch", {"cam": "lap1", "trigger": r["person"]["trigger"], "file": str(CAMS / "lap1.jpg")})])
+            key = r["person"]["trigger"]
+            self.assertEqual(calls, [("dispatch", {"cam": "lap1", "trigger": key, "file": str(CAMS / f"lap1.{key.rsplit(':', 1)[1]}.boxed.jpg")})],
+                             "the sighting's own boxed copy, kept under its trigger")
 
             status, _, data = req("POST", "/cam/lap1/frame", FRAME)   # still in view: no second dispatch inside the cooldown
             self.assertEqual(status, 200, data[:300])
@@ -240,6 +248,26 @@ class Person(Case):
         self.assertFalse((_TMP / "pending.json").exists())
         self.assertEqual(len(rows_since(n0, "intruder.alarm")), 0, "never straight to intruder_alarm")
         self.assertEqual(len(rows_since(n0, "cam.detect")), 3, "every frame is still its own detection row")
+
+    def test_the_ask_carries_the_sightings_own_bytes_whatever_the_next_frame_is(self):
+        """The POST returns before dispatch reads its file, and the client posts the next frame 0-1 s later; ingest
+        replaces lap1.jpg and lap1-boxed.jpg with it. The file handed to dispatch must still be the boxed person."""
+        from wtdd import tools
+        calls = []
+        (_TMP / "intruder.on").write_text("2026-09-26T00:00:00\n")
+        later = FRAME + b"\x00later"   # still a JPEG by its first bytes; nobody in it
+        with mock.patch.object(tools, "call", lambda tool, **kw: calls.append((tool, kw))):
+            status, _, data = req("POST", "/cam/lap1/frame", FRAME)
+            self.assertEqual(status, 200, data[:300])
+            self.assertTrue(json.loads(data)["person"]["dispatched"])
+            time.sleep(0.3)
+            with mock.patch.object(cam, "detect_file", lambda frame, out: (Path(out).write_bytes(b"boxed:" + Path(frame).read_bytes()),
+                                                                            {**DETECT, "n": 0, "classes": {}, "boxes": [], "file": str(out)})[1]):
+                status, _, data = req("POST", "/cam/lap1/frame", later)
+            self.assertEqual(status, 200, data[:300])
+        (tool, kw), = calls
+        self.assertEqual((CAMS / "lap1-boxed.jpg").read_bytes(), b"boxed:" + later, "the shared boxed file is the later frame now")
+        self.assertEqual(Path(kw["file"]).read_bytes(), b"boxed:" + FRAME, "the ask posts the frame the detector boxed a person in")
 
     def test_no_person_no_question(self):
         quiet = {**DETECT, "n": 0, "classes": {}, "boxes": []}
