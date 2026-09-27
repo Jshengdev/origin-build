@@ -701,7 +701,8 @@ class Confirm(Base):
         out = self.p.confirm("z1", NAME, self.version)
         m = json.loads(self.map.read_text())
         want = {"name": "nogo-1", "label": "table · 0.71 · scout", "poly": self.prop["poly"], "nogo": True, "source": "scout",
-                "cells": self.prop["cells"], "proposal": "z1", "by": NAME}
+                "cells": self.prop["cells"], "proposal": "z1", "by": NAME,
+                "app": "stub"}   # fix round 2: Base decides with the stub; a zone confirmed from it keeps the stub mark on the map
         self.assertEqual(m["zones"][-1], want)
         self.assertEqual(nogo.zones(m), [want])
         old = json.loads(self.before)
