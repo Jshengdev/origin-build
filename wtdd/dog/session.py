@@ -133,6 +133,8 @@ class DogSession:
     def state(self) -> dict[str, Any]:
         fx = config.maybe("WTDD_STATE_FIXTURE")   # DEMO_CACHE: a hand-typed state (wtdd/fixtures/page/dog-state.json) served as source "stub" for a dry screenshot; live: leave WTDD_STATE_FIXTURE unset and connect the dog
         if fx:   # a missing or broken file raises here: the page shows no dog rather than a default one
+            if self.body is not None:   # a real dog is connected: never serve an invented pose in its place (evals.run_follow and field._dog read GET /dog/state without looking at source)
+                raise RuntimeError("WTDD_STATE_FIXTURE is set while a dog is connected: it is for dry screenshots only; unset it")
             return {**json.loads((config.ROOT / fx).read_text()), "source": "stub"}
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
