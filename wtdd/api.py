@@ -245,7 +245,8 @@ class H(BaseHTTPRequestHandler):
             from .dog import occupancy
             from .dog.session import DogSession
             try:
-                out = DogSession.get().floorplan(int(self._body().get("threshold") or occupancy.THRESHOLD))
+                t = self._body().get("threshold")   # absent only: a posted 0 reaches run() and fails loud with its row
+                out = DogSession.get().floorplan(occupancy.THRESHOLD if t is None else int(t))
                 return self._json(200, out)   # ok=false when no wall was found: the row and `why` say so
             except Exception as e:  # noqa: BLE001  (no grid at all is a failed row and a visible FAILED, never an empty plan)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
