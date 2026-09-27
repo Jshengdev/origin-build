@@ -20,7 +20,7 @@ import numpy as np
 
 from .. import config
 from ..ledger import log
-from .body import Body
+from .body import FRAME_TIMEOUT_S, Body
 
 W, H = 1280, 720
 BLOCK = (760, 200, 920, 640)   # x0, y0, x1, y1 of the dark block (the dry screenshot's planted person box)
@@ -53,4 +53,6 @@ def install(session) -> None:
     b._video, b._vid_t0, b.video_source = True, time.monotonic(), "stub"   # the channel counts as on: there is no conn
     session.body = b
     asyncio.run_coroutine_threadsafe(b._drain(SynthTrack(fps, freeze)), session.loop)
+    while b._fr is None and time.monotonic() - b._vid_t0 < FRAME_TIMEOUT_S:   # as _video_on waits: no reader sees the
+        time.sleep(0.01)                                                       # channel on before its first frame
     log("dog", "WARN DEMO_CACHE video stub: no dog, a synthetic frame", fps=fps, freeze_s=freeze, size=f"{W}x{H}")
