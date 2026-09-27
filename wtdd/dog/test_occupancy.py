@@ -300,6 +300,16 @@ class Hook(unittest.TestCase):
         np.testing.assert_allclose(lp["frame"]["origin"][:2], fx.ORIGINS[-1], err_msg="the newest frame is still kept")
         self.assertIn("WARN lidar frame callback failed", self.err.getvalue())
 
+    def test_a_first_frame_with_no_odometry_position_says_the_offset_is_unknown(self):
+        """B14 (CLEANUP-PLAN): the first frame's check measured the window's centre against `position or [0, 0, 0]`, so
+        a dog with no LF_SPORT_MOD_STATE position yet logged odom_pos [0, 0, 0] and an offset it never measured (and a
+        false "far from the position" WARN once the window was over 1 m from the origin). Body() here has no state."""
+        self.feed(lambda d: None)
+        log = self.err.getvalue()
+        self.assertRegex(log, r"WARN [^\n]*offset[^\n]*unknown")
+        self.assertNotIn("odom_pos=[0.0, 0.0, 0.0]", log)
+        self.assertNotIn("center_vs_odom_m=0.0", log)
+
     def test_the_session_grid_takes_every_frame_the_body_hands_it(self):
         from .. import ledger
         from . import session

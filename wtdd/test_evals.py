@@ -608,5 +608,34 @@ class Dry(unittest.TestCase):
         self.assertEqual(written, out)
 
 
+class Unknown(unittest.TestCase):
+    """B3, B14 (CLEANUP-PLAN): a fail always says why, and an unknown reading is never named as a measured one. The live
+    scenarios are run here against stand-ins for the API and the look (no dog, no model)."""
+
+    def test_a_follow_that_ended_without_done_or_error_says_why(self):
+        state = {"follow": {"active": False, "i": 0, "n": 5, "reached": [0, 1], "stops": [], "error": None}, "map": {"p": [300, 1400]}}
+        scale = {"px_per_m": 108.5, "source": "default"}   # B13's GET /dog/scale, read once before the trial
+        post = mock.Mock(return_value=mock.Mock(json=lambda: {"ok": True}))
+        get = mock.Mock(side_effect=lambda url, **k: mock.Mock(json=lambda: scale if url.endswith("/dog/scale") else state))
+        root = _TMP / "follow-root"
+        (root / "ui").mkdir(parents=True, exist_ok=True)
+        (root / "ui" / "map.json").write_text(json.dumps({"path": [[300, 1400], [650, 1400]]}))   # the route it replays
+        if not (root / "wtdd").exists():
+            (root / "wtdd").symlink_to(Path(evals.__file__).resolve().parent)   # unsafe() reads the Hue zones there
+        with mock.patch.object(evals.config, "ROOT", root), mock.patch("requests.post", post), mock.patch("requests.get", get), \
+                contextlib.redirect_stderr(io.StringIO()):
+            res = evals.run_follow(1)
+        self.assertEqual(res[0]["grade"], "fail", res)
+        self.assertIn("without done", res[0]["why"], res)
+
+    def test_a_tilt_with_no_imu_pitch_is_graded_unverified_not_did_not_fire(self):
+        out = {"text": "a chair by the door", "fired": None, "pitch_deg": None, "person": False, "out_of_place": [], "vision_ms": 900}
+        with mock.patch("wtdd.tools.dog_say.look_and_see", return_value=out), contextlib.redirect_stderr(io.StringIO()):
+            res = evals.run_look(1, "chair", False)
+        self.assertEqual(res[0]["grade"], "fail", "an unverified nod never passes")
+        self.assertIn("unverified", res[0]["why"], res)
+        self.assertNotIn("did not fire", res[0]["why"], res)
+
+
 if __name__ == "__main__":
     unittest.main()
