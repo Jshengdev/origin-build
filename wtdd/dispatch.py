@@ -265,7 +265,7 @@ def approval(cam: str, trigger: str | None, by: str | None = None) -> str | None
                 return a.get("from")
             break
     ledger.append({"step": "dispatch.decided", "agent": "dispatch", "tool": "dispatch.decided", "app": "imessage",
-                   "args": {"cam": cam, "trigger": trigger, "shift_id": decide.shift_id(), "approved": True, "by": by},
+                   "args": {"cam": cam, "trigger": trigger, "shift_id": decide.shift_id(), "approved": True, "by": by, "auto": auto()},
                    "state_before": None, "state_after": None, "ok": False, "response_or_error": f"ValueError: {why}",
                    "latency_ms": round((time.perf_counter() - t0) * 1000)})
     ledger.log("dispatch", "dispatch.decided ok=False REFUSED", app="imessage", cam=cam, why=why[:120])

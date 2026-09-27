@@ -107,9 +107,10 @@ def ingest(cam_id: str, jpeg: bytes) -> dict:
     try:
         person = person_seen(cam_id, path, d["boxes"], boxed=Path(d["file"]))
     except Exception as e:  # noqa: BLE001  (the sighting never reached dispatch, e.g. its boxed copy: its row, this line and the reply say so; the cooldown holds)
+        from ..dispatch import auto   # WTDD_DISPATCH_AUTO, the same read as dispatch.run(): stamped on every dispatch.decided row
         err, boxed = f"{type(e).__name__}: {e}", Path(d["file"]).name
         append({"step": "dispatch.decided", "agent": "cam", "tool": "dispatch.decided", "app": "camera",
-                "args": {"cam": cam_id, "shift_id": sid, "file": boxed}, "state_before": None, "state_after": None, "ok": False,
+                "args": {"cam": cam_id, "shift_id": sid, "file": boxed, "auto": auto()}, "state_before": None, "state_after": None, "ok": False,
                 "response_or_error": f"{err}: the person at camera {cam_id} (boxed in {boxed}) never reached dispatch", "latency_ms": 0})
         log("cam", f"{cam_id}: dispatch hand-off FAILED", err=err[:120])
         return {"ok": False, "cam": cam_id, "frame": frame, "detect": detect, "person": {"asked": False, "why": f"FAILED {err}"[:200]}, "error": err}
