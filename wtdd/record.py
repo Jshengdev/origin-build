@@ -3,6 +3,7 @@
   python -m wtdd.record --shift <id> --html /tmp/record.html    the page (default shift: the run in force, shift.current())
   python -m wtdd.record --shift <id>                            the same record as JSON on stdout
   WTDD_LEDGER=wtdd/fixtures/ledger_shift.jsonl python -m wtdd.record --shift 2026-09-26 --html /tmp/record.html
+  GET /record?shift=<id>, GET /record/shifts (wtdd/api.py)     the same JSON over HTTP; shifts() newest first, the run in force
 
 On the page: the stops (each look, what the detector and the model said, whether a person was pinged, the post that
 confirmed it, the correction that fixes it), the flags with who resolved what and when (the reply's acked_ms, or
@@ -106,6 +107,11 @@ def _bind(shift_id: str, rows: list[dict]) -> tuple[list[dict], str | None]:
 def shift_rows(shift_id: str, rows: list[dict]) -> list[dict]:
     """The rows of one shift (the rule in this module's docstring); [] when no row is stamped with it."""
     return _bind(shift_id, rows)[0]
+
+
+def shifts(rows: list[dict]) -> list[str]:
+    """Every shift that has rows (_bind's rule: one row stamped with its id), newest first by its first stamped row."""
+    return list(dict.fromkeys(s for r in rows if (s := _shift(r)) is not None))[::-1]
 
 
 def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = None) -> dict[str, Any]:

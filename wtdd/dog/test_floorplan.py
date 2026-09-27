@@ -34,6 +34,9 @@ The contract under test (odometry metres; a cell's position is its corner, index
   DogSession.grid_clear(why)       the floor plan goes with its grid: GET serves nothing and says why
   DogSession.floorplan_px(threshold)  GET /dog/floorplan: the newest result {segments_px, classes, class_px, ms, ts,
                             threshold, source, why?} through occupancy.to_map_px; a read, no row
+                            S13 (the 2.5D toggle): plus segments_top_m [m per segments_px entry] and class_top_m {name: [m
+                            per class_px cell]}, the highest layer measured on the segment's cells / in the cell, rounded
+                            to 0.05; absent, never zeros, from a grid with no height profile (its `why` says so)
   python -m wtdd.dog.floorplan --replay <npz> --png <out> [--tall M] [--save <json>]   exit 0 with segments=N on stderr,
                             exit 2 with a WARN when no wall; a replay of a fixture never writes a row that says live
 """
@@ -130,10 +133,10 @@ def stop(s) -> None:
     s.loop.close()
 
 
-def closed_room(thick: int, angle: float):
+def closed_room(thick: int, angle: float, top: float = 1.5):
     """A 4 x 3 m room built from points through Grid.update, the way a live frame reaches the grid: four walls that
     meet at the corners, `thick` cells thick (grown outward from the inner face, the corners filled), from the floor to
-    1.5 m, and a 1.0 x 0.6 m table in the middle (a top at 0.7 m on four 0.1 m legs), the whole room turned `angle`
+    `top` m, and a 1.0 x 0.6 m table in the middle (a top at 0.7 m on four 0.1 m legs), the whole room turned `angle`
     degrees about its centre. Returns (grid, {wall: inner-face line (x0, y0, x1, y1) m}, wall cells, table cells), the
     cells as absolute lattice (gx, gy): the declared geometry rounded onto the lattice, never the code's output."""
     w, h, z0 = 4.0, 3.0, ff.ORIGINS[0][2]
@@ -149,7 +152,7 @@ def closed_room(thick: int, angle: float):
 
     for name, box, p, q in (("south", (-t, w + t, -t, 0), (0, 0), (w, 0)), ("east", (w, w + t, -t, h + t), (w, 0), (w, h)),
                             ("north", (-t, w + t, h, h + t), (w, h), (0, h)), ("west", (-t, 0, -t, h + t), (0, h), (0, 0))):
-        fill(box, 0.0, 1.5, wall)
+        fill(box, 0.0, top, wall)
         lines[name] = tuple(float(v) for v in (*turn(p), *turn(q)))
     fill((1.5, 2.5, 1.2, 1.8), 0.7, 0.7, table)
     for x in (1.5, 2.4):
@@ -535,6 +538,47 @@ class Serve(Base):
         self.assertEqual((out["ok"], out["source"], out["segments_px"]), (False, "ui/grid.json", []), out.get("why"))
         self.assertIn("FAILED", out["why"])
         self.assertIn("unreadable", out["why"])
+
+
+class Heights(Base):
+    """S13, the 2.5D toggle: GET /dog/floorplan serves every segment's top and every served cell's top in metres (z, the
+    z FLOOR, GROUND and TALL are in), read from the grid's own height profile: the highest layer measured, never
+    estimated. Truth: closed_room's declared heights (a 1.2 m wall, a 0.7 m table top on legs), within one layer."""
+
+    def test_a_1_2_m_wall_and_a_0_7_m_table_are_served_at_their_measured_tops(self):
+        g, _, _, table = closed_room(1, 0, top=1.2)
+        s = self.session(g)
+        s.floorplan(3)
+        r = s.floorplan_px(3)
+        self.assertIn("segments_top_m", r, r.get("why"))
+        self.assertEqual(len(r["segments_px"]), 4)
+        self.assertEqual(len(r["segments_top_m"]), len(r["segments_px"]), "one top per segment, in segments_px's order")
+        for v in r["segments_top_m"]:
+            self.assertAlmostEqual(v, 1.2, delta=RES + 1e-9, msg=f"a wall segment's top: {r['segments_top_m']}")
+        self.assertEqual({n: len(v) for n, v in r["class_top_m"].items()}, {n: len(v) for n, v in r["class_px"].items()},
+                         "one top per served cell, parallel to class_px")
+        grey = r["class_top_m"]["tall"] + r["class_top_m"]["slab"] + r["class_top_m"]["low"]
+        self.assertEqual(len(grey), len(table), "the grey cells are the table's, every one")
+        for v in grey:
+            self.assertAlmostEqual(v, 0.7, delta=RES + 1e-9, msg="a table cell's top (the top floats, the legs reach it)")
+        for v in r["class_top_m"]["wall"]:
+            self.assertAlmostEqual(v, 1.2, delta=RES + 1e-9)
+        self.assertTrue(all(round(v * 20) == v * 20 for v in r["segments_top_m"] + grey), "rounded to 0.05")
+        json.dumps(r)
+
+    def test_a_grid_saved_before_item_15_serves_no_heights_and_says_why(self):
+        g = closed_room(1, 0, top=1.2)[0]
+        d = g.to_dict()
+        d["cells"] = [c[:3] for c in d["cells"]]   # a 01-era ui/grid.json: [ix, iy, count] rows, no z_ref
+        d.pop("z_ref")
+        s = self.session(g)
+        s.floorplan(3)
+        self.assertIn("segments_top_m", s.floorplan_px(3), "the same room with its profile serves heights")
+        s.grid = occupancy.Grid.from_dict(d)
+        s.floorplan(3)
+        r = s.floorplan_px(3)
+        self.assertEqual([k for k in ("segments_top_m", "class_top_m") if k in r], [], "absent, never zeros")
+        self.assertIn("no height profile", r["why"])
 
 
 class Replay(Base):

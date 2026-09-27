@@ -26,7 +26,9 @@ ignored) and names the scale's source in one stderr line. Only the process that 
 A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
 calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
 The follower (S6, S6b; _follow) takes the dots in order from the first. The live LiDAR view decides, without the dog's
-own body (points within SELF_M of it); the grid is memory that only labels. Every leg, from where the dog stands to the
+own body (points within SELF_M of it); memory only labels, and memory is the map saved after a scan (S13, _memory:
+ui/grid.json, what was there before this walk), never the live session grid, which takes a new box within a second.
+Every leg, from where the dog stands to the
 next dot, is planned around the live view (plan.leg) and driven point by point; before each point the rest of the leg
 is checked against the newest view and re-planned from where the dog stands when it is now blocked (MAX_REPLANS per
 leg, then refused). A dot the view covers moves to free floor within plan.LIVE_SNAP_M; with none, the dog faces it,
@@ -315,7 +317,10 @@ class DogSession:
         frame, points_px, why?}; switching on hands every frame to the session grid (_on_frame). localize is the
         re-correction's {applied, rejected, unmatched, skipped, corr, last}. points_px is the newest frame's floor-to-head
         band in map pixels through the correction and the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
-        frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
+        frame yet, the stream is off, or the dog is not calibrated. known (S13, the memory toggle) is parallel to it:
+        True where the point's cell on the planner's lattice (plan.CELL map pixels) holds a wall of the saved map
+        (_memory: ui/grid.json at occupancy.THRESHOLD, what was there before), False where it is new; with no saved map
+        it is absent and `why` says how to set one. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if on is False:   # S7: the stream stopped: the pending summary is written
@@ -338,7 +343,15 @@ class DogSession:
             return {**out, "points_px": [], "why": "not calibrated"}
         xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
         x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
-        return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
+        out = {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
+        try:
+            mem = self._memory()
+        except Exception as e:  # noqa: BLE001  (an unreadable ui/grid.json: the dots are still drawn, the memory's failure named)
+            return {**out, "why": f"memory unreadable: ui/grid.json: {type(e).__name__}: {e}"}
+        if mem is None:
+            return {**out, "why": "no saved map: POST /dog/grid {save: true} after a scan sets the memory"}
+        cells = {(px // plan.CELL, py // plan.CELL) for px, py in mem.tolist()}   # S13 known: the planner's lattice, in map pixels
+        return {**out, "known": [(px // plan.CELL, py // plan.CELL) in cells for px, py in out["points_px"]]}
 
     # ---- the occupancy grid (wtdd/dog/occupancy.py): every LiDAR window this session, accumulated in odometry metres
     def _on_frame(self, d: dict) -> None:
@@ -454,16 +467,32 @@ class DogSession:
             # calibration saved with it (its cells are in the odometry frame of the power-on that made them; a planted
             # fixture has none and takes the session's). Live path: POST /dog/lidar {on: true}; the first frame starts the
             # session grid and `source` flips to "session".
-            if GRID_FILE.exists():
-                mt = GRID_FILE.stat().st_mtime
-                if self._grid_file is None or self._grid_file[0] != mt:
-                    g = occupancy.Grid.load(GRID_FILE)
-                    self._grid_file = (mt, g)
-                    log("dog", "grid loaded from file", file="ui/grid.json", frames=g.frames, cells=int((g.counts > 0).sum()), frame_id=g.frame_id,
-                        cal_at=g.cal.get("at") if g.cal else "none saved: drawn through the session's calibration")
-                fg = self._grid_file[1]
+            if (fg := self._saved()) is not None:
                 return {**occupancy.response(fg, fg.cal or self.cal, threshold, "ui/grid.json"), **errs}
         return {**occupancy.response(None, self.cal, threshold, None), **errs}
+
+    def _saved(self) -> occupancy.Grid | None:
+        """ui/grid.json as last saved, re-read when its mtime changes (one line per load); None when nothing was saved.
+        Under _grid_lock: grid_px and _memory share the cache."""
+        if not GRID_FILE.exists():
+            return None
+        mt = GRID_FILE.stat().st_mtime
+        if self._grid_file is None or self._grid_file[0] != mt:
+            g = occupancy.Grid.load(GRID_FILE)
+            self._grid_file = (mt, g)
+            log("dog", "grid loaded from file", file="ui/grid.json", frames=g.frames, cells=int((g.counts > 0).sum()), frame_id=g.frame_id,
+                cal_at=g.cal.get("at") if g.cal else "none saved: drawn through the session's calibration")
+        return self._grid_file[1]
+
+    def _memory(self) -> Any:
+        """S13: memory is what was there BEFORE (Johnny: "if it was there before maybe its permanent but if it wasnt maybe
+        its classified as an obstacle"): the map saved after a scan (ui/grid.json, POST /dog/grid {save: true}), its walls
+        at occupancy.THRESHOLD in map pixels (an (M, 2) int array), drawn as grid_px draws a saved grid (through the
+        calibration saved with it, else the session's). Never the live session grid: it takes a box set down now within
+        a second. None with no saved map. Not a DEMO_CACHE: the saved map is the memory itself; an unreadable file raises."""
+        with self._grid_lock:
+            fg = self._saved()
+        return None if fg is None else occupancy.to_map_px(fg.walls(occupancy.THRESHOLD), fg.cal or self.cal)
 
     def grid_save(self) -> dict[str, Any]:
         """POST /dog/grid {save: true}: the session grid to ui/grid.json, with the calibration it is drawn through (so a
@@ -621,13 +650,14 @@ class DogSession:
                 self._fp = ({"ok": False, "why": f"FAILED floor plan press: {type(e).__name__}: {str(e)[:120]}", "threshold": threshold,
                              "frames": g.frames if g is not None else 0, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}, source, None)
             raise
-        return {k: v for k, v in res.items() if k not in ("cls", "runs", "full", "origin", "resolution")}
+        return {k: v for k, v in res.items() if k not in ("cls", "runs", "full", "origin", "resolution", "top")}
 
     def floorplan_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/floorplan: the newest floor plan in map pixels (floorplan.to_px) through a file grid's saved
         calibration, else the session's, with the labels in force erased into it (16): {ok, threshold, frames, ms, ts,
-        source, cell_px, classes, segments_px, class_px, moved, why?}. A read: it never runs one and writes no row;
-        nothing yet, not calibrated, no wall, a FAILED tick and a result at another threshold each say why."""
+        source, cell_px, classes, segments_px, class_px, segments_top_m?, class_top_m?, moved, why?} (the heights, S13,
+        only from a grid with a height profile). A read: it never runs one and writes no row; nothing yet, not
+        calibrated, no wall, a FAILED tick and a result at another threshold each say why."""
         empty = {"segments_px": [], "classes": {}, "class_px": {}}
         if self._fp is None:
             return {**empty, "source": None, "why": "no floor plan yet: switch the LiDAR on and walk, or press floor plan (POST /dog/floorplan)"}
@@ -917,11 +947,11 @@ class DogSession:
 
     async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
         """Dot by dot from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume(). S6: the LIVE
-        view decides (the newest LiDAR window's band without the dog's own body, _view) and the grid is memory that only
-        labels a blocker permanent or new. S6b: each dot is reached by a planned leg (_leg); a dot on live blue with no free
-        floor near it is looked at, named and passed (_classify). No live view: one "unchecked" row and the dots are
-        followed as drawn. One dog.follow row at the end with the dots reached and passed, the re-plans, the stops skipped
-        and the error, if any. Never retries a dot."""
+        view decides (the newest LiDAR window's band without the dog's own body, _view) and memory only labels a blocker
+        permanent or new (S13: the saved map, _memory, never the live session grid). S6b: each dot is reached by a
+        planned leg (_leg); a dot on live blue with no free floor near it is looked at, named and passed (_classify). No
+        live view: one "unchecked" row and the dots are followed as drawn. One dog.follow row at the end with the dots
+        reached and passed, the re-plans, the stops skipped and the error, if any. Never retries a dot."""
         fs = self.follow_state
         args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
         try:
@@ -1015,11 +1045,11 @@ class DogSession:
                 if live is None:
                     return await self._as_drawn(i, path, stops, reach_px, fs, pose)
             target = path[i]
-            if (b := plan.blocker(target, live, self.grid, self.cal, lock=self._grid_lock)) is not None:
+            if (b := plan.blocker(target, live, self._memory())) is not None:   # S13: labelled against the saved map, never the live grid
                 if (sn := plan.snap(target, live)) is None:
                     await self._classify(i, path, stops, b, fs)
                     return False
-                (q, m), what = sn, f"{b['kind']}, {b['cells']} cells, {b['in_memory']} in memory"
+                (q, m), what = sn, f"{b['kind']}, {b['cells']} cells, {b['in_memory']} in memory" + (f" ({b['why']})" if "why" in b else "")
                 seen = (f"something new ({b['cells']} cells, not in my memory: a new obstacle)" if b["kind"] == "new obstacle"
                         else f"something I've seen here before ({b['cells']} cells, {b['in_memory']} in my memory: permanent)")
                 self._decided(i, "snapped", f"dot {i + 1} blocked by {what}: moved {m} m to free floor",
@@ -1064,7 +1094,8 @@ class DogSession:
         nxt = f"I'm moving on to dot {i + 2}." if i + 1 < len(path) else "It was the last dot, so I'm done."
         kind = "a new obstacle" if b["kind"] == "new obstacle" else "something my memory already had (permanent)"
         args = {"at": i, "action": "classified", "blocker": b, "passed": [i],
-                "reason": f"dot {i + 1} on live blue ({b['kind']}, {b['cells']} cells) with no free floor within {plan.LIVE_SNAP_M} m: looked and named"}
+                "reason": f"dot {i + 1} on live blue ({b['kind']}, {b['cells']} cells{', ' + b['why'] if 'why' in b else ''}) with no free floor "
+                          f"within {plan.LIVE_SNAP_M} m: looked and named"}
         try:
             with step("dog", "route.decided", "map", args, self.map_pose()) as r:
                 try:

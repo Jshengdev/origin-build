@@ -13,6 +13,9 @@
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)
   GET  /shift                     the run in force {shift_id, source: file | WTDD_SHIFT | date} (a read, no row; wtdd/shift.py)
   POST /shift {name}              start a "morning" or "night" run: <repo>/shift.json, one shift.started row; any other name is a 400
+  GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
+                                  force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
+  GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status); POST /dog/drive {x,y,z}, /dog/stop
@@ -21,19 +24,23 @@
   POST /dog/avoid {on}            the dog's obstacle avoidance on/off with read-back (the follower turns it on itself)
   POST /dog/record {on}           on: record the believed pose while driving; off: the trace becomes ui/map.json's path + stops
   POST /dog/mark {look?, say?, ask?}   a stop with its action (the look kind, post or not, ask = the intruder check) at the current believed position, while recording
-  GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, why?} (polled every 500 ms while
-                                  connected); POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
+  GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, known?, why?} (polled every 500 ms while
+                                  connected); known [bool per points_px entry]: its cell (the planner's lattice, map px) a wall of the SAVED map
+                                  (ui/grid.json at THRESHOLD, what was there before), absent with why "no saved map: ..." when nothing was saved;
+                                  POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
   GET  /dog/frame.jpg             the newest camera frame (no ledger row; the page's live view), 503 without a dog
   GET  /dog/scale                 the map scale in force {px_per_m, source: default | WTDD_PX_PER_M | dog_cal.json | page} (a read, no row)
   POST /dog/scale {px_per_m}      the page's slider: one dog.scale row, saved in dog_cal.json beside the tie; a bad value is a 400 naming it
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
-  GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
+  GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, hits, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog);
+                                  hits [int per cells_px entry]: the frames that cell was seen in, the count the threshold is applied to; absent with no grid
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
   GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
-  GET  /dog/floorplan?threshold=N the newest floor plan in map pixels {ok, segments_px, classes, class_px, cell_px, ms, ts, source, why?} (a read, no row; polled every 2 s)
+  GET  /dog/floorplan?threshold=N the newest floor plan in map pixels {ok, segments_px, classes, class_px, cell_px, ms, ts, source, why?} (a read, no row; polled every 2 s);
+                                  segments_top_m [m per segments_px entry] and class_top_m {name: [m per class_px cell]}, measured tops rounded to 0.05, absent from a grid with no height profile
   POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
   GET  /dog/blobs                 the newest blob labels pinned on the map {labels: [{blob_id, kind, label, p, model, geometry_verdict, erase, source, xy, pos_px, error?}], source, moved, why?} (a read, no row; polled every 2 s); erase and moved are GET /dog/floorplan's own erase at the read (newest plan, threshold now), not stamped at the press; WTDD_BLOBS=<file> serves planted labels (DEMO_CACHE)
   POST /dog/blobs {threshold?}    the press at a stop: one blob.labelled row per blob in the camera's view {labelled, skipped, failed, labels}; 500 with one failed row with no dog, pose, grid or field of view
@@ -121,6 +128,18 @@ class H(BaseHTTPRequestHandler):
             try:
                 return self._json(200, shift.read())
             except ValueError as e:
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path in ("/record", "/record/shifts"):   # item 10's record over HTTP, a read (no row); a malformed shift.json, ledger or ui/map.json is a 500 naming it
+            from . import record
+            try:
+                rs = rows()
+                if u.path == "/record/shifts":
+                    return self._json(200, {"shifts": record.shifts(rs), "current": shift.current()})
+                sid = (parse_qs(u.query).get("shift") or [None])[0] or shift.current()   # record.py's default: the run in force
+                if sid not in (ids := record.shifts(rs)):   # record.py's rule: no row stamped with it, no shift; never an empty record
+                    return self._json(404, {"error": f"no shift {sid}: no row is stamped with it; shifts: {', '.join(ids) or 'none'}"})
+                return self._json(200, record.build(sid, rs))   # what python -m wtdd.record --shift <id> prints
+            except Exception as e:  # noqa: BLE001  (reported, the page shows it)
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path == "/dog/state":
             from .dog.session import DogSession

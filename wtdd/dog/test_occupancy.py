@@ -22,7 +22,12 @@ The contract under test (the grid, in the odometry frame, metres):
                             driver's dispatcher; a frame the grid refuses is not counted in grid.frames
   to_map_px(xy, cal)        vectorised nav.to_map: map pixels through the same calibration as the dots
   response(grid, cal, threshold, source)   the GET /dog/grid JSON: {n, cells_px, cell_px, threshold, resolution,
-                            frames, extent_m, source, why?}; zero cells always says why
+                            frames, extent_m, source, why?}; zero cells always says why; S13 (the heat toggle): hits, each
+                            served cell's count in cells_px's order; absent with no grid
+  DogSession.lidar()        S13 (the memory toggle): beside points_px (unchanged), known, True where the point's map-pixel
+                            cell on the planner's lattice holds a wall of the SAVED map (ui/grid.json at THRESHOLD, through
+                            the calibration it was saved under), False where it is new, never the live session grid;
+                            absent with why "no saved map: ..." when nothing was saved
   python -m wtdd.dog.occupancy --replay <npz> --png <out> [--threshold N] [--save <json>]
                             the driver decoder on each stored blob -> grid -> a PNG (PNG_SCALE px per cell: white
                             background, grey below threshold, black walls) and one stderr line per frame
@@ -196,6 +201,24 @@ class Projection(unittest.TestCase):
         self.assertNotIn("why", r)
         json.dumps(r)   # what the API sends
 
+    def test_response_hits_line_up_with_cells_px_and_the_world_counts(self):
+        """S13, the heat toggle: hits[i] is cells_px[i]'s count, the one the threshold is applied to (the fixture's
+        declared world, not the grid's own output). No grid: absent, the existing why."""
+        g, world = accumulated(), fx.world_cells()
+        for t in (1, 2):
+            r = occupancy.response(g, CAL, threshold=t, source="session")
+            self.assertIn("hits", r)
+            w = g.walls(t)   # cells_px is walls(t) through the calibration, in that order
+            cells = [(int(round(x / fx.RES)), int(round(y / fx.RES))) for x, y in w]
+            self.assertEqual(r["cells_px"], occupancy.to_map_px(w, CAL).tolist())
+            self.assertEqual(r["hits"], [world[c] for c in cells], f"threshold {t}")
+            self.assertTrue(all(isinstance(h, int) for h in r["hits"]))
+        self.assertEqual(r["hits"][cells.index((40, 0))], 3, "wall A, in every frame")
+        self.assertNotIn((1, -19), cells, "the blob seen once is not served at threshold 2")
+        r0 = occupancy.response(None, CAL, threshold=2, source=None)
+        self.assertNotIn("hits", r0)
+        self.assertTrue(r0["why"].startswith("no grid"), r0["why"])
+
     def test_response_uncalibrated_says_so(self):
         r = occupancy.response(accumulated(), None, threshold=2, source="session")
         self.assertEqual((r["n"], r["cells_px"]), (0, []))
@@ -294,6 +317,59 @@ class Hook(unittest.TestCase):
         np.testing.assert_array_equal(s.grid.counts, accumulated().counts)
         self.assertEqual((s.grid.frames, lr["grid_frames"], lr["cb_errors"], lr["n"]), (3, 3, 1, 4))
         self.assertIn("grid started", self.err.getvalue())
+
+
+class Known(unittest.TestCase):
+    """S13, the memory toggle: GET /dog/lidar's `known`, parallel to points_px. Memory is what was there BEFORE (Johnny:
+    "if it was there before maybe its permanent but if it wasnt maybe its classified as an obstacle"): the map saved
+    after a scan (ui/grid.json), never the live session grid, which takes a box set down now within a second. The saved
+    scan is from another power-on, 1 m back along x, tied to the map by its own calibration; the live session grid has
+    the wall and a box set down after the save, each in 10 frames. A stub body hands the session one frame (lidar_points
+    and state, the two reads lidar() makes): points on the wall, on the box, on floor no scan saw."""
+
+    def setUp(self):
+        from .. import ledger
+        from . import session
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for mod, name in ((ledger, "LEDGER"), (session, "CAL_FILE"), (session, "GRID_FILE")):
+            self.enterContext(mock.patch.object(mod, name, tmp / name.lower()))
+        self.file = session.GRID_FILE
+        self.enterContext(redirect_stderr(io.StringIO()))
+        wall = [(x * fx.RES, 1.0, 0.5) for x in range(10)]                                         # x 0 .. 0.45 m
+        box = [(1.0 + x * fx.RES, 2.0 + y * fx.RES, 0.5) for x in range(4) for y in range(4)]      # x 1.0 .. 1.15 m
+        floor = [(2.0 + x * fx.RES, 3.0, 0.5) for x in range(10)]                                  # x 2.0 .. 2.45 m: top_down sorts by x
+        self.saved = occupancy.Grid(fx.RES, (0.0, 0.0), fx.FRAME_ID, -0.3)
+        for _ in range(occupancy.THRESHOLD):
+            self.saved.update(np.array([(x + 1.0, y, z) for x, y, z in wall]))   # its odometry frame: the dog booted 1 m back
+        self.saved.cal = {**CAL, "odom": [1.0, 0.0, 0.0], "at": "the scan saved before this walk"}
+        live = occupancy.Grid(fx.RES, (0.0, 0.0), fx.FRAME_ID, -0.3)
+        for _ in range(10):
+            live.update(np.array(wall + box))
+        self.assertGreaterEqual(live.cell(1.0, 2.0), 10, "the live grid took the box: 10 frames")
+        self.pts = np.array(wall + box + floor)
+        self.s = session.DogSession()
+        self.addCleanup(stop, self.s)
+        self.s.cal, self.s.grid = dict(CAL), live
+        self.s.body = mock.Mock(**{"lidar_points.return_value": {"on": True, "n": 1, "errors": 0, "cb_errors": 0, "age_ms": 5,
+                                                                 "frame": {"id": fx.FRAME_ID}, "utlidar_pose": None, "points": self.pts},
+                                   "state.return_value": {"position": [0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0]}})
+
+    def test_known_is_the_saved_map_a_box_set_down_after_it_is_new_after_10_live_frames(self):
+        self.saved.save(self.file)
+        r = self.s.lidar()
+        want_px = [[round(v) for v in nav.to_map(CAL, p[:2], 0.0)[:2]] for p in self.pts]
+        self.assertEqual(r["points_px"], want_px, "points_px unchanged")
+        self.assertIn("known", r, r.get("why"))
+        self.assertEqual(r["known"], [True] * 10 + [False] * 16 + [False] * 10, "wall known (through the saved calibration), box and floor new")
+        self.assertNotIn("why", r)
+
+    def test_no_saved_map_serves_no_known_and_says_why_until_one_is_saved(self):
+        r = self.s.lidar()
+        self.assertEqual(len(r["points_px"]), len(self.pts), "the dots are still drawn")
+        self.assertNotIn("known", r, "the live session grid is not memory")
+        self.assertEqual(r.get("why"), "no saved map: POST /dog/grid {save: true} after a scan sets the memory")
+        self.saved.save(self.file)
+        self.assertEqual(self.s.lidar().get("known"), [True] * 10 + [False] * 26, "a new save is read (its mtime changed)")
 
 
 class Replay(unittest.TestCase):

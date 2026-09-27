@@ -28,6 +28,11 @@ to its last cell, at cell CORNERS in odometry metres (index * res + origin, the 
 2 tall blob (grounded, off every run, top at or above TALL), 5 low blob (grounded, off every run, below TALL),
 3 floating slab, 0 empty. Numpy only; PIL only inside png().
 
+Heights (S13, the remote's 2.5D view). A classified cell's top is its highest layer at or above FLOOR in metres
+(z_ref + layer * resolution, the z FLOOR, GROUND and TALL are in: above the floor only where z = 0 is the floor,
+UNVERIFIED below); a segment's top is the highest over the cells it took. GET /dog/floorplan serves both rounded to
+0.05 (to_px). Measured layers only: a grid with no height profile (saved before item 15) serves none, never zeros.
+
 Known limit, ours by design: a shelf or a cabinet standing against a wall is grounded and straight, so it is a wall
 here (the fixture's 2 m shelf is class 1 and the tests say so). Only goal 16's label may move such a run to grey; a
 label never adds, moves or widens a cell or a line. For the same reason anything grounded within THICK of a wall's
@@ -152,7 +157,8 @@ def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
     """classes() and segments() in one pass: {cls, segments (odometry metres, 3 dp), runs, full, why?, dirs, peak}; runs[k]
     is segment k's cells as an int array (m, 2) of [ix, iy], every one class 1 (goal 16's erase greys a run by them);
     full[k] is True when any of them was seen at or above `tall` (a full-height wall: goal 16 never offers it to a model
-    and its erase never greys it)."""
+    and its erase never greys it). Plus, when the grid has a height profile, top (S13): float32 [iy, ix], each
+    classified cell's top in metres, NaN elsewhere (a segment's top is the highest over its runs[k], to_px)."""
     if threshold < 1:
         raise ValueError(f"threshold must be at least 1 frame, got {threshold}")
     cls = np.zeros(grid.counts.shape, dtype=np.uint8)
@@ -179,6 +185,9 @@ def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
                        for x0, y0, x1, y1, n in segs]
     out["runs"] = [np.column_stack([ix[grounded][t], iy[grounded][t]]) for t in takes]
     out["full"] = [bool(tallc[grounded][t].any()) for t in takes]
+    z = grid.z_ref + top * r   # each cell's highest measured layer in metres, the z FLOOR, GROUND and TALL are in
+    out["top"] = np.full(cls.shape, np.nan, dtype=np.float32)   # float32: served rounded to 0.05
+    out["top"][iy[has], ix[has]] = z[has]
     if not (cls == 1).any():
         out["why"] = f"no wall found: {len(ix)} cells, 0 grounded straight runs >= {RUN} m"
     return {**out, "dirs": dirs, "peak": peak}
@@ -207,8 +216,8 @@ def _line(counts: dict, p: dict, ms: float, threshold: int, source: str) -> None
 
 def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: float = TALL, grid_source: str = "session") -> dict[str, Any]:
     """One floor plan and one `dog.floorplan` row. Returns {ok, why?, threshold, frames, cells, classes, segments, ms, ts,
-    grid_source, cls, runs, full, origin, resolution}; no wall is ok=false with `why` (the row already says so); any other raise
-    propagates after its failed row."""
+    grid_source, cls, runs, full, origin, resolution, top?} (top only from a grid with a height profile); no wall is
+    ok=false with `why` (the row already says so); any other raise propagates after its failed row."""
     t0 = time.perf_counter()
     args = {"threshold": threshold, "constants": {"FLOOR": FLOOR, "GROUND": GROUND, "TALL": tall, "RUN": RUN, "GAP": GAP, "THICK": THICK},
             "grid_source": grid_source}
@@ -222,7 +231,8 @@ def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: flo
             p = _plan(grid, threshold, tall)
             counts, ms = _counts(p["cls"]), round((time.perf_counter() - t0) * 1000, 1)
             r["state_after"] = {"classes": counts, "segments": [list(s) for s in p["segments"]], "ms": ms}
-            out.update(classes=counts, segments=p["segments"], ms=ms, cls=p["cls"], runs=p["runs"], full=p["full"])
+            out.update(classes=counts, segments=p["segments"], ms=ms, cls=p["cls"], runs=p["runs"], full=p["full"],
+                       **({"top": p["top"]} if "top" in p else {}))
             _line(counts, p, ms, threshold, grid_source)
             if counts["wall"] == 0:
                 raise NoWall(p.get("why") or "no wall found")
@@ -235,12 +245,20 @@ def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: flo
 
 def to_px(res: dict[str, Any], cal: dict) -> dict[str, Any]:
     """A run()'s result in map pixels through a calibration (occupancy.to_map_px, the LiDAR dots' own projection):
-    {cell_px, segments_px [[x0, y0, x1, y1]], class_px {name: [[px, py]] cell corners}}."""
+    {cell_px, segments_px [[x0, y0, x1, y1]], class_px {name: [[px, py]] cell corners}}, and from a grid with a height
+    profile segments_top_m [m per segments_px entry, the highest over its runs[k], so 16's erase keeps them parallel]
+    and class_top_m {name: [m per class_px cell]}, rounded to 0.05."""
     r, o = res["resolution"], np.asarray(res["origin"], dtype=np.float64)
-    return {"cell_px": round(r * nav.PX_PER_M, 1),
-            "segments_px": [occupancy.to_map_px([s[:2], s[2:4]], cal).reshape(-1).tolist() for s in res["segments"]],
-            "class_px": {name: occupancy.to_map_px(np.argwhere(res["cls"] == v)[:, ::-1] * r + o, cal).tolist()
-                         for v, name in CLASS_NAMES.items()}}
+    out = {"cell_px": round(r * nav.PX_PER_M, 1),
+           "segments_px": [occupancy.to_map_px([s[:2], s[2:4]], cal).reshape(-1).tolist() for s in res["segments"]],
+           "class_px": {name: occupancy.to_map_px(np.argwhere(res["cls"] == v)[:, ::-1] * r + o, cal).tolist()
+                        for v, name in CLASS_NAMES.items()}}
+    if "top" in res:   # absent, never zeros, when the grid measured no heights (its why says so)
+        m = lambda a: (np.rint(np.asarray(a, dtype=np.float64) * 20) / 20).tolist()   # noqa: E731  (metres to 0.05)
+        out.update(segments_top_m=m([res["top"][c[:, 1], c[:, 0]].max() for c in res["runs"]]),   # runs[k]: [ix, iy] rows
+                   # a boolean mask reads in argwhere's order: parallel to class_px
+                   class_top_m={name: m(res["top"][res["cls"] == v]) for v, name in CLASS_NAMES.items()})
+    return out
 
 
 def png(grid: occupancy.Grid, cls: np.ndarray, segs: list[tuple], path) -> None:
