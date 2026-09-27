@@ -10,7 +10,7 @@ ARGS = {"text": {"type": "string", "default": "who dis?!", "doc": "who dis?! | o
 def run(text="who dis?!", volume=None):
     from .. import config
     level = int(volume) if isinstance(volume, float) and volume.is_integer() else volume   # 5.0 from JSON is 5; 5.5 is refused in the row
-    if config.maybe("WTDD_SAY_STUB"):   # DEMO_CACHE: the whole say on the recording stub (rows cached/stub, no dog, no API); unset WTDD_SAY_STUB for the dog's own speaker
+    if (config.maybe("WTDD_SAY_STUB") or "0").lower() not in ("0", "false", "no"):   # DEMO_CACHE: the whole say on the recording stub (rows cached/stub, no dog, no API); unset WTDD_SAY_STUB (or 0) for the dog's own speaker
         from ..dog import audio
         return audio.stub_say(text, level)
     from ..commands import _via_api
