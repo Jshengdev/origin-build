@@ -92,6 +92,10 @@ Review round 4 (the classes after StillMs, RED before their fixes):
   the committed fixture              compared with make_halt's output on stop.person's state_after keys too, so a
                                      fixture written before still_ms (or yaw_speed) existed fails instead of grading
                                      through the latency_ms fallback
+
+Review round 5 (the classes after WarnPerStretch, RED before their fixes):
+  "person watch tick FAILED"         once per stretch of movement, not once per process: a tick that keeps raising
+                                     through a second hand-drive says so again, as the no-person-watch WARN does
 """
 from __future__ import annotations
 import asyncio
@@ -1379,6 +1383,28 @@ class WarnPerStretch(Dry):
                 self.s.person_tick()   # idle
             warns.append([l for l in buf.getvalue().splitlines() if "WARN no person watch" in l and "stale" in l])
         self.assertEqual([len(w) for w in warns], [1, 1], warns)
+        self.assertEqual(of("stop.person"), [])
+
+
+class TickFailPerStretch(Dry):
+    """A person-watch tick that keeps raising through two separate hand-drives: each stretch says FAILED on stderr once,
+    not only the first one this process saw. Runs on the real 'person-watch' thread, where the raise is caught."""
+
+    def test_each_stretch_of_movement_logs_its_own_tick_failed(self):
+        fails = []
+        for _ in range(2):
+            self.plant([{"name": "person", "conf": 0.9}], t=time.time())   # a box without xyxy: near() raises in the tick
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                wait_for(lambda: (self.s.drive(0.3, 0.0, 0.0), "person watch tick FAILED" in buf.getvalue())[1], 3.0)
+                end = time.monotonic() + 3 / halt.HZ   # a few more failing ticks in the same stretch: no repeat
+                while time.monotonic() < end:
+                    self.s.drive(0.3, 0.0, 0.0)
+                    time.sleep(0.05)
+                self.s.stop()                  # the key let go
+                time.sleep(3 / halt.HZ)        # idle ticks end the stretch
+            fails.append([l for l in buf.getvalue().splitlines() if "person watch tick FAILED" in l])
+        self.assertEqual([len(f) for f in fails], [1, 1], fails)
         self.assertEqual(of("stop.person"), [])
 
 
