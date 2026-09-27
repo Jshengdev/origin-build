@@ -67,6 +67,11 @@
   .occ { fill: rgba(38,35,35,.6); stroke: none; pointer-events: none; }   /* one square per grid cell (not ".grid": that is the page layout) */
   .occlbl { opacity: .85; }
   /* 01 · occupancy · end */
+  /* 04 · nogo · start */
+  .nogo { fill: rgba(220,38,38,.16); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+  .nogo-draft { fill: rgba(220,38,38,.08); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 2 4; pointer-events: none; }
+  .lbl.nogo-lbl { fill: #dc2626; }
+  /* 04 · nogo · end */
 </style>
 </head>
 <body>
@@ -83,6 +88,7 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
 function App() {
@@ -92,6 +98,7 @@ function App() {
   const [busy, setBusy] = useState(null);
   const [last, setLast] = useState(null);
   const [mode, setMode] = useState(null);          // null | "path" | "dot" | "line"
+  const [nogoDraft, setNogoDraft] = useState([]);   // 04 · nogo: the corners clicked so far in "nogo" mode
   const [placing, setPlacing] = useState(null);
   const [pending, setPending] = useState(null);
   const [dot, setDot] = useState(null);
@@ -118,7 +125,7 @@ function App() {
   const run = async (name, args) => { setBusy(name); const out = await call(name, args); setLast(out); setBusy(null); if (name === "lights_status" && out.ok) setStatus(out.result); return out; };
   const toMap = e => { const svg = svgRef.current, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse()); return [Math.round(p.x), Math.round(p.y)]; };
   const withRooms = m => ({ ...m, lights: (m.lights || []).map(L => ({ ...L, room: roomOf(L.kind === "line" ? [(L.pts[0][0] + L.pts[1][0]) / 2, (L.pts[0][1] + L.pts[1][1]) / 2] : L.pts[0], m.rooms) })) });
-  const saveMap = async () => { const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays
+  const saveMap = async () => { if (mode === "nogo" && nogoDraft.length) { setLast({ ok: false, tool: "save map", error: "not saved: a no-go zone is still being drawn: press close zone (or clear), then save" }); return; } const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays
   const setEnt = (k, v) => setMap({ ...map, entity: { ...map.entity, [k]: v } });
 
   // ---------- the dog: hold-to-drive (W A S D, Q E to turn) and the looks. Velocities refresh every 200 ms while a key
@@ -182,6 +189,7 @@ function App() {
     if (mode === "here") { setMode(null); post("/dog/calibrate", { p, heading_deg: dog?.map?.heading_deg ?? 0 }).then(r => r.json()).then(setLast); }
     if (mode === "dot" && placing) placeLight("dot", [p]);
     if (mode === "line" && placing) { if (!pending) setPending(p); else placeLight("line", [pending, p]); }
+    if (mode === "nogo") setNogoDraft([...nogoDraft, p]);
   };
   const placeLight = (kind, pts) => { setMap({ ...map, lights: [...(map.lights || []).filter(l => l.id !== placing.id), { ...placing, kind, pts }] }); setPending(null); setPlacing(null); setMode(null); };
   const onDown = (kind, li, pi) => e => { e.stopPropagation(); drag.current = { kind, li, pi }; moved.current = false; e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId); };
@@ -229,12 +237,13 @@ function App() {
         <div class="panel">
           <h2>The castle · first floor</h2>
           <div class="row">
-            <button class="key" onClick=${play} disabled=${!map || (map.path || []).length < 2 || dot !== null}>${dot ? "walking…" : dog?.calibrated ? "▶ walk the path · the dog drives" : "▶ walk the path · simulated"}</button>
+            <button class="key" onClick=${() => play()} disabled=${!map || (map.path || []).length < 2 || dot !== null}>${dot ? "walking…" : dog?.calibrated ? "▶ walk the path · the dog drives" : "▶ walk the path · simulated"}</button>
             ${dot && html`<button onClick=${() => { post("/field/stop"); post("/dog/stop"); }}>stop</button>`}
             ${!dot && dog?.calibrated && dog?.connected && html`<button class="small" title="the proximity field on the dog's believed position while you drive it with the controller; no route, no stops; 'stop' ends it" onClick=${() => { fetch("/tools/walk_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: "dog", follower: false, act: false }) }).then(r => r.json()).then(setLast); }}>lights follow the dog</button>`}
             ${dog?.calibrated && dog?.connected && !dog?.avoid && !dot && html`<button class="small" style=${{ color: "var(--bad)" }} title="the dog's obstacle-avoidance service is not answering; this drives the route without it, by your choice, and the row says so" onClick=${() => play(false)}>walk WITHOUT avoidance</button>`}
             <button class=${mode === "path" ? "on" : ""} onClick=${() => { setMode(mode === "path" ? null : "path"); setPlacing(null); }}>${mode === "path" ? "drawing path (click to add)" : "draw path"}</button>
             ${mode === "path" && html`<button onClick=${() => setMap({ ...map, path: [], stops: [] })}>clear path</button>`}
+            ${map && html`<${NoGoButtons} mode=${mode} setMode=${setMode} draft=${nogoDraft} setDraft=${setNogoDraft} map=${map} setMap=${setMap}/>`}
             <button class=${mode === "here" ? "on" : ""} onClick=${() => { setMode(mode === "here" ? null : "here"); setPlacing(null); }}>${mode === "here" ? "click where the dog is" : "dog is here…"}</button>
             <button class="small" title="ui/route-saved.json back into the map" onClick=${() => post("/map/restore", {}).then(r => r.json()).then(o => { setLast({ ...o, tool: "restore route" }); fetch("/map").then(r => r.json()).then(setMap); })}>restore saved route</button>
             <button class="key" onClick=${saveMap}>save</button>
@@ -256,6 +265,7 @@ function App() {
           ${map && html`<svg ref=${svgRef} class=${"map" + (mode ? " placing" : "")} viewBox="0 0 1060 1540" onClick=${onMapClick} onPointerMove=${onMove} onPointerUp=${onUp} onPointerLeave=${onUp}>
             <image href="house.svg" x="0" y="0" width="1060" height="1540"/>
             ${(map.rooms || []).map(r => html`<polygon key=${r.name} class=${"room" + (here === r.name ? " here" : "")} points=${r.poly.map(p => p.join(",")).join(" ")}/>`)}
+            <${NoGoLayer} map=${map} draft=${mode === "nogo" ? nogoDraft : []}/>
             ${mode === "path" && guide?.path && html`<polyline class="guide" points=${guide.path.map(p => p.join(",")).join(" ")}/>`}
             <polyline class="path" points=${map.path.map(p => p.join(",")).join(" ")}/>
             ${map.path.map((p, i) => { const st = (map.stops || []).includes(i); return html`<g key=${"p" + i}>
@@ -395,6 +405,30 @@ function GridLayer() {
     <text class="lbl occlbl" x="12" y="28">grid · ${g ? `${c.length} cells seen ${g.threshold ?? "?"}+ times` : "…"}${g?.frames ? ` · ${g.frames} frames` : ""}${g?.source ? ` · ${g.source}` : ""}${g?.why ? ` · ${g.why}` : ""}${g?.error ? ` · FAILED ${g.error}` : ""}${g?.cb_errors ? ` · FAILED to take ${g.cb_errors} frames` : ""}</text></g>`;
 }
 // 01 · occupancy · end
+// 04 · nogo · start
+// No-go zones: map.zones entries with nogo: true (wtdd/nogo.py). The planner blocks them; the walk and the follower refuse a
+// route that touches one and write route.refused. Zones without nogo (a, b, c: the lighting zones) are not drawn here.
+// Drawing: "draw no-go", click the corners on the floor, "close zone", then the page's "save" (POST /map, the whole map).
+function NoGoLayer({ map, draft }) {
+  const pts = poly => poly.map(p => p.join(",")).join(" ");
+  const mid = poly => [0, 1].map(k => poly.reduce((s, p) => s + p[k], 0) / poly.length);   // the corners' mean: where the label sits
+  return html`<g>
+    ${(map.zones || []).filter(z => z.nogo === true).map(z => { const [x, y] = mid(z.poly); return html`<g key=${z.name}>
+      <polygon class="nogo" points=${pts(z.poly)}/><text class="lbl nogo-lbl" x=${x} y=${y} text-anchor="middle">${z.label || z.name}${/no-go/.test(z.label || "") ? "" : " · no-go"}</text></g>`; })}
+    ${draft.length >= 2 && html`<polygon class="nogo-draft" points=${pts(draft)}/>`}
+    ${draft.map((p, i) => html`<circle key=${"d" + i} class="nogo-draft" cx=${p[0]} cy=${p[1]} r="6"/>`)}
+  </g>`;
+}
+function NoGoButtons({ mode, setMode, draft, setDraft, map, setMap }) {
+  const zones = map.zones || [];
+  let n = zones.filter(z => z.nogo === true).length + 1;
+  while (zones.some(z => z.name === `nogo-${n}`)) n++;   // a hand-edited map may skip a number: the name stays unique (it is the refusal row's zone)
+  const close = () => { setMap({ ...map, zones: [...zones, { name: `nogo-${n}`, label: `no-go ${n}`, poly: draft, nogo: true }] }); setDraft([]); setMode(null); };
+  return html`<button class=${mode === "nogo" ? "on" : ""} title="a zone the dog must never enter: the planner routes around it, a route through it is refused and logged" onClick=${() => { setMode(mode === "nogo" ? null : "nogo"); setDraft([]); }}>${mode === "nogo" ? "drawing no-go (click corners)" : "draw no-go"}</button>
+    ${mode === "nogo" && draft.length >= 3 && html`<button onClick=${close}>close zone</button>`}
+    ${mode === "nogo" && draft.length > 0 && html`<button onClick=${() => setDraft([])}>clear</button>`}`;
+}
+// 04 · nogo · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
