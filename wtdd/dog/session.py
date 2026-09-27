@@ -13,7 +13,8 @@ MOVE_HZ and sends StopMove 0.6 s after the last refresh or on stop(). Speeds are
 Where it thinks it is: calibrate(p, heading) ties the odometry pose now to a map point (wtdd/dog/nav.py); state() then
 carries "map": {p, heading_deg}. follow(path, stops) switches the dog's obstacle avoidance on (read back, refused
 otherwise) and is a task that feeds nav.steer velocities into the same drive loop, waypoint by waypoint, pausing at the
-map's stops until resume(); stop() cancels it. With avoidance on, the drive loop sends velocities through the
+map's stops until resume(); stop() cancels it. Every connect (and every reconnect) also switches avoidance on and
+reads it back (S3); a refusal is a FAILED dog.avoid row and a WARN, never a failed connect. With avoidance on, the drive loop sends velocities through the
 OBSTACLES_AVOID service (MOVE 1003, no ack) instead of SPORT Move; the state read-back is the receipt. record(True)
 records the believed pose while Johnny drives, mark(look, say) adds a stop at the current spot with the action to
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
@@ -154,6 +155,11 @@ class DogSession:
             self._unreachable = None
             self.body = b
             self._driver = self.loop.create_task(self._drive_loop())
+            try:   # S3: the dog's own obstacle avoidance on at every connect, read back (its own dog.avoid row)
+                await b.avoid(True)
+            except Exception as e:  # noqa: BLE001  (loud, not fatal: the row is FAILED, the chip shows OFF, the dog stays usable)
+                log("dog", "WARN avoidance NOT on after connect: hold-to-drive goes through the sport service until it answers",
+                    err=f"{type(e).__name__}: {str(e)[:120]}")
         return self.body
 
     async def with_body(self, fn: Callable[[Body], Awaitable[Any]]) -> Any:
