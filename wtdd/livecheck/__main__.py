@@ -3,7 +3,8 @@
   python -m wtdd.livecheck --step 01.3 [--ledger F] [--log F] [--timeout S] [--from-start] [--out F]   live: exit 0 / 1 / 2
   python -m wtdd.livecheck --step 01.3 --replay --ledger <fixture.jsonl> --log <fixture.log>              dry: the same verdicts
   python -m wtdd.livecheck --list                                    the table, one line per step; a WARN per item with no checked step
-  python -m wtdd.livecheck --from-prs [--draft-out F]                open PRs' Needs-the-dog lines -> steps.draft.json (rows empty)
+  python -m wtdd.livecheck --from-prs [--draft-out F]                open PRs' Needs-the-dog lines -> steps.draft.json (rows empty;
+                                                                     a step key drafted twice is one WARN naming each PR and title)
 A usage error prints `FAIL usage · <message>` and exits 1: argparse's own exit 2 is UNSAFE's code. It writes no livecheck.json.
 UNVERIFIED on the real dog: as the package says; this file only parses arguments and prints.
 """
@@ -37,14 +38,21 @@ def _from_prs(out: Path) -> int:
         return 1
     if not prs:
         lc.say("WARN --from-prs · zero open PRs")
-    for p in prs:
-        if not lc.needs_the_dog_lines(p["body"]):
-            lc.say(f"WARN #{p['number']} {p['title']}: no numbered Needs-the-dog lines")
     steps = lc.draft(prs)
+    by: dict[str, list[dict]] = {}
+    for s in steps:
+        by.setdefault(s["step"], []).append(s)
+    for p in prs:
+        if not any(s["pr"] == p["number"] for s in steps):
+            lc.say(f"WARN #{p['number']} {p['title']}: no numbered Needs-the-dog lines")
+    dups = {k: ss for k, ss in by.items() if len(ss) > 1}
+    for k, ss in dups.items():   # two numbered lists in one section (PR #19's prechecks, then its 21.k): load_steps refuses both
+        lc.say(f"WARN --from-prs · {k} drafted {len(ss)} times, rename all but one before it goes in steps.json: "
+               + " | ".join(f'#{s["pr"]} "{s["title"][:80]}"' for s in ss))
     lc._write(out, {"note": "Drafted by python -m wtdd.livecheck --from-prs from every open PR's numbered Needs-the-dog lines; "
                             "rows are empty (unchecked, cannot PASS) until a person fills them and moves the entry into steps.json.",
                     "steps": steps})
-    lc.say(f"--from-prs · {len(prs)} PRs · {len(steps)} steps · wrote {out}")
+    lc.say(f"--from-prs · {len(prs)} PRs · {len(steps)} steps · {len(dups)} duplicate step keys · wrote {out}")
     print(out)
     return 0
 

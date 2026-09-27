@@ -374,14 +374,17 @@ def exit_code(v: dict) -> int:
 START = re.compile(r"^\s*(\*\*Needs the dog|#{1,3} Needs the dog)", re.I)
 END = re.compile(r"^\s*(\*\*[^*]+\*\*\s*$|#{1,3} )")
 ITEM = re.compile(r"^(?:- )?\(?(\d+|[a-z])[.)] (.*)$")
-BOLD = re.compile(r"^(?:- )?\*\*(?:\d+[a-z]?\.)?(\d+|[a-z])\b(?: ·)?\s*([^*]*?)\s*\*\*\s*(.*)$")   # **1 · text** / - **26.1** text
+BOLD = re.compile(r"^(?:- )?\*\*(?:\d+[a-z]?\.)?(\d+[a-z]?|[a-z])\b(?!\.\w)\s*([^*]*?)\s*\*\*\s*(.*)$")   # **1 · text** / - **21.1b: text**
+NUMBOLD = re.compile(r"^(?:- )?\*\*\s*\d")   # a bold line opening with a number: a step, or a WARN when BOLD cannot read it
 
 
-def needs_the_dog_lines(body: str) -> list[tuple[str, str]]:
+def needs_the_dog_lines(body: str, who: str = "") -> list[tuple[str, str]]:
     """[(k, the line's text verbatim)] for the numbered lines of the body's Needs-the-dog section only: `1.` / `a)` / `- (a)`,
-    and a step numbered inside bold, `**1 · text** more` / `- **24.1 · text**` / `- **26.1** text` (k is the number after
-    any `<item>.`; the text is the line with that bold's two `**` dropped). A bold line that starts with a step number is a
-    step; any other bold-only line or heading ends the section."""
+    and a step numbered inside bold, `**1 · text** more` / `- **24.1 · text**` / `- **26.1** text` / `- **21.1b: text**` (k is
+    the number, with its letter, after any `<item>.`; the text is the line with that bold's two `**` and a leading `:` or `·`
+    dropped). A bold line that starts with a step number is a step; one whose number cannot be read whole (`**21.1.2 ·`,
+    `**21.1bc:`) is a WARN naming `who` and the line, never read as a shorter number; any other bold-only line or heading
+    ends the section."""
     out, on = [], False
     for l in body.splitlines():
         if not on:
@@ -389,7 +392,9 @@ def needs_the_dog_lines(body: str) -> list[tuple[str, str]]:
         elif m := ITEM.match(l):
             out.append((m.group(1), m.group(2)))
         elif m := BOLD.match(l):
-            out.append((m.group(1), " ".join(t for t in m.group(2, 3) if t)))
+            out.append((m.group(1), " ".join(t for t in m.group(2, 3) if t).lstrip(":· ")))
+        elif NUMBOLD.match(l):
+            say(f"WARN {who or 'Needs the dog'} · a bold line opens with a number that is not a step number read whole, not drafted: {l.strip()[:160]}")
         elif END.match(l):
             break
     return out
@@ -400,7 +405,7 @@ def draft(prs: list[dict]) -> list[dict]:
     return [{"item": p["title"].split(" · ", 1)[0].strip(), "step": f"{p['title'].split(' · ', 1)[0].strip()}.{k}", "pr": p["number"],
              "title": text, "do": "", "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
              "note": "drafted by --from-prs: rows empty (unchecked, cannot PASS) until a person fills them"}
-            for p in prs for k, text in needs_the_dog_lines(p["body"])]
+            for p in prs for k, text in needs_the_dog_lines(p["body"], f"#{p['number']}")]
 
 
 def open_prs() -> list[dict]:
