@@ -628,6 +628,30 @@ class Feed(Base):
         self.assertNotIn("error", st, "a feed past the threshold and the map clears it")
         self.assertEqual(st["n"], 1, "the placed objects were not taken by the failed feed: asked now")
 
+    def test_a_ledger_write_that_raises_mid_feed_leaves_the_untaken_things_for_the_next_feed(self):
+        # fix round 3: every candidate went into `handled` before the loop, so a raise on o1's row left o2 handled, never
+        # asked, and named nowhere once the error cleared. A thing is taken when the loop reaches it: o1 (its call was
+        # made) is not asked again and stays a failed line; o2 is asked by the next feed.
+        down = {"on": True}
+
+        def append(r):
+            if down["on"] and r["tool"] == "zone.decided":
+                raise OSError("disk full (test)")
+            self.rows.append(r)
+        p = scout_zones.Proposals(append=append, decide=scout_zones.decide_stub, photo_dir=self.pics, map_path=self.map)
+        with self.assertRaises(OSError):
+            self.feed(p)
+        st = p.state()
+        self.assertIn("disk full", st.get("error") or "", st)
+        down["on"] = False
+        self.feed(p)
+        self.assertEqual([r["args"]["object_id"] for r in self.tool("zone.decided")], ["o2"],
+                         "o2 asked once by the next feed, o1 not asked twice")
+        st = p.state()
+        self.assertNotIn("error", st)
+        self.assertEqual([(f["object_id"], "disk full" in f["error"]) for f in st["failed"]], [("o1", True)],
+                         "the thing in flight when the feed raised stays named after the error clears; o2 was never reached")
+
     def test_placed_objects_waiting_for_a_pose_say_so(self):
         p = self.props()
         p.feed(self.store.to_list(), frame(), None, self.g, CAL, FOV, threshold=THR)
