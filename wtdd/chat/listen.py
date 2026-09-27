@@ -56,7 +56,12 @@ acked_ms per flag: the verdict row after a hold carries closed_ms instead, and a
 first reply's time. A verdict read by the DEMO_CACHE stub (no JEV_API_KEY) is a cached/stub row, like its reply.decided
 row; an unread one is not. pending.json holds one question, so a held flag lasts until the next stop's question
 replaces it (one WARN naming it) or PENDING_WINDOW_S after its post (then logged as "no answer in time", though it was
-answered). UNVERIFIED until the first live run: the re-ask's answer read by Jev, and a hold across two stops."""
+answered). Only the chat that was asked answers: the group's "not sure" names the group (dog_say's, which names no chat,
+is the group's), so the on-call person's "handled" about a held flag never answers the group's question. A reply whose
+chat.db time is before the open question's confirmed post was typed about an earlier flag: one WARN, not read, the
+question stays open (a dry or failed post cannot prove this, and reads as before). UNVERIFIED until the first live run:
+the re-ask's answer read by Jev, a hold across two stops, and that a live reply's chat.db time is never before the post
+it answers."""
 from __future__ import annotations
 import json
 import re
@@ -212,7 +217,7 @@ class Listener:
             line = ask_line(dec)
             self.say(f"decide:{k}", line, seen.get("file"))
             self._open({"kind": "decide", "t": time.time(), "file": seen.get("file"), "seconds": 5,
-                        "trigger": f"decide:{k}", "classes": (seen.get("detector") or {}).get("classes"),
+                        "trigger": f"decide:{k}", "chat": self.guid, "classes": (seen.get("detector") or {}).get("classes"),
                         "decision": dec, "question": line})
             self.await_verdict(VERDICT_WAIT_S)
 
@@ -310,7 +315,9 @@ class Listener:
         WTDD_REPLY_THRESHOLD: one re-ask (the pending's question becomes it, and keeps this reply's acked fields), no
         verdict row yet, then stand down as unclear. After a hold, acked_ms is the hold row's; this row gets closed_ms.
         Rows read by the stub say cached/stub. A failed reading is posted as its error and stands down (verdict unread),
-        never the regex. A halt (00) is never read here."""
+        never the regex. A halt (00) is never read here. Only the chat that was asked answers (a decide question with no
+        chat is dog_say's, posted to the group). A reply stamped before the question's confirmed post answers an earlier
+        flag: one WARN, not read, the question stays open. The question read is the one posted, never a guess."""
         if not PENDING.exists():
             return False
         pend = json.loads(PENDING.read_text())
@@ -319,18 +326,28 @@ class Listener:
             log("chat", "who dis: no answer in time, standing down")
             return False
         chat = m.get("chat") or self.guid
-        if pend.get("chat") and chat != pend["chat"]:   # only the chat that was asked answers (the on-call person, not the group)
+        kind = pend.get("kind")
+        asked_in = pend.get("chat") or (self.guid if kind == "decide" else None)   # dog_say's decide names none: it posted to the group
+        if asked_in and chat != asked_in:   # only the chat that was asked answers (the on-call person, not the group, and back)
             return False
-        if pend.get("kind") == "halt":   # item 00's local stop: resumed by its own word or button, never by a model reading
+        if kind == "halt":   # item 00's local stop: resumed by its own word or button, never by a model reading
             return False
         from .. import tools
-        from ..decide import read_reply
-        kind = pend.get("kind")
+        from ..decide import ask_line, read_reply
+        if kind == "who_dis" and "question" not in pend:
+            asked = "who dis?!"   # intruder_alarm's pending names none; this is what it posted (intruder_alarm.ASK)
+        elif kind == "decide" and "question" not in pend:
+            asked = ask_line(pend["decision"])   # dog_say.run's pending names none; this is the line it posted (dog_say.py:214)
+        else:
+            asked = pend["question"]   # listen names it on every kind it opens; none here is a KeyError, never a guessed question
         now = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
+        if (now.get("acked_error") or "").startswith("ValueError: clock fault"):   # typed before this question's confirmed post:
+            log("chat", "WARN a reply older than the open question is not its answer", trigger=pend.get("trigger"),
+                reply=m["guid"], why=now["acked_error"][:120])   # it answers an earlier flag; this one stays open
+            return False
         # one acked_ms per flag (numbers.py and 10's record count every one): after a hold, the hold's row has it and this
         # reply's time from the flag is closed_ms; after a re-ask, the first reply's time stands (the person answered then)
         acked = {k.replace("acked_", "closed_"): v for k, v in now.items()} if pend.get("acknowledged") else (pend.get("acked") or now)
-        asked = pend.get("question") or ("who dis?!" if kind == "who_dis" else "what is it?")   # intruder_alarm's pending names none
         stub = not config.maybe("JEV_API_KEY")   # read_reply's own test: its DEMO_CACHE reading labels this verdict row too
 
         def row(verdict: str, meaning: str | None, p: float | None, did: str) -> None:

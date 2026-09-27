@@ -420,8 +420,9 @@ class ListenAsk(unittest.TestCase):
         self.assertTrue(decide.ask_line({"label": "out_of_place", "p": 0.42}).startswith(self.L.OWN_OPENERS))
 
     def _answer(self, kind, trigger, text):
+        ask = {"question": decide.ask_line({"label": "other", "p": 0.6})} if kind == "decide" else {}   # as look_and_say writes it
         self.pending.write_text(json.dumps({"kind": kind, "t": time.time(), "file": "/tmp/look-down-boxed.jpg", "seconds": 5,
-                                            "trigger": trigger}))
+                                            "trigger": trigger, **ask}))
         with mock.patch.object(self.L, "PENDING", self.pending), \
                 mock.patch("wtdd.tools.call", return_value={"signaled": [], "errors": []}) as call:
             self.assertTrue(self.l.verdict({"guid": "r1", "sender": "someone", "text": text}))

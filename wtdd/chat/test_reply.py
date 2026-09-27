@@ -239,8 +239,9 @@ class Verdict(unittest.TestCase):
         self.addCleanup(lambda: self.pend.unlink(missing_ok=True))
 
     def _ask(self, kind: str) -> None:
+        # as the writers write it: listen's heads_up names its question; a who_dis without one is intruder_alarm's
         self.pend.write_text(json.dumps({"kind": kind, "t": time.time(), "file": "/tmp/f.jpg", "seconds": 5,
-                                         "trigger": self.trigger, "chat": ONCALL}))
+                                         "trigger": self.trigger, "chat": ONCALL, **({"question": HEADS} if kind == "heads_up" else {})}))
 
     def _m(self, text: str, n: int = 1, ts: str = "2026-09-27 12:18:22") -> dict:
         return {"rowid": n, "guid": f"R-{self._testMethodName}-{n}", "text": text, "is_from_me": 0, "sender": HANDLE,
