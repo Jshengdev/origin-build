@@ -166,12 +166,13 @@ def _stub(state: str, choices: list[str]) -> tuple[str, float, str, str]:
     return label, p, "stub", f"stub: {label}; eyes {'disagree' if disagree else 'agree'}"
 
 
-def _jev(state: str, choices: list[str]) -> tuple[str, float, str, str]:
-    """One System One Choice request over the labels; the reply's chosen label and the probability it gives that label."""
+def _jev(state: str, choices: list[str], describe: dict[str, str] | None = None, instructions: str | None = None) -> tuple[str, float, str, str]:
+    """One System One Choice request over the labels; the reply's chosen label and the probability it gives that label.
+    describe/instructions default to a stop's (DESCRIBE, INSTRUCTIONS); wtdd/dispatch.py passes its own three choices."""
     model = config.maybe("JEV_MODEL") or DEFAULT_MODEL
     body = {"state": state, "model": model,
-            "questions": {"stop": {"type": "choice", "instructions": INSTRUCTIONS,
-                                   "criteria": {c: DESCRIBE.get(c, c.replace("_", " ")) for c in choices}}}}
+            "questions": {"stop": {"type": "choice", "instructions": instructions or INSTRUCTIONS,
+                                   "criteria": {c: (describe or DESCRIBE).get(c, c.replace("_", " ")) for c in choices}}}}
     resp = requests.post(JEV_URL, headers={"Authorization": f"Bearer {config.get('JEV_API_KEY')}", "Content-Type": "application/json"},
                          json=body, timeout=JEV_TIMEOUT_S)
     if resp.status_code != 200:
