@@ -335,5 +335,41 @@ class Streams(unittest.TestCase):
             self.assertFalse(s[t]["seen"])
 
 
+# DEMO_CACHE: the dry screenshots (docs/evidence/night-2/28-remote.png, 28-failed.png) are drawn from rows this harness
+# writes with stub messages through stub_body(), not from the dog; every row says cached=True, source="stub", and the page
+# tags them "stub" and UNVERIFIED. Live: python -m wtdd.api on the dog (from the repo checkout, never a worktree), then
+# python -m wtdd sniff topic=rt/lf/sportmodestate seconds=5, and the rest of the tool's Needs-the-dog order.
+def plant(path: Path, fail: bool) -> None:
+    """Writes the stub's dog.sniff rows into `path`, never a file inside the repo: rt/lf/sportmodestate at 20 Hz (SPORT,
+    the stand-in) and rt/lf/lowstate at 10 Hz (the UNVERIFIED fixture), 2 s each; with fail, also a silent
+    rt/utlidar/lidar_state for 5 s, so its row reads "0 messages in 5 s" with the decoder-trap why."""
+    import sys
+    from wtdd.config import ROOT
+    path = path.resolve()
+    if ROOT in path.parents:
+        raise SystemExit(f"refusing to write stub rows inside the repo: {path}")
+    ledger.LEDGER = path
+    b = stub_body()
+    run_sniff(b, T["LF_SPORT_MOD_STATE"], 2, data=SPORT, n=38, hz=20.0)
+    run_sniff(b, T["LOW_STATE"], 2, data=LOW["data"], n=19, hz=10.0)
+    if fail:
+        try:
+            run_sniff(b, T["ULIDAR_STATE"], 5)
+        except RuntimeError as e:
+            print(f"planted the failed row: {e}", file=sys.stderr)
+        else:
+            raise SystemExit("the silent topic did not fail")
+    print(f"{len(sniff_rows())} dog.sniff rows in {path}", file=sys.stderr)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(description="the tests; with --rows, the stub's dog.sniff rows for the dry screenshots")
+    ap.add_argument("--rows", type=Path, help="a scratch ledger outside the repo, e.g. /tmp/night1/28/ok.jsonl")
+    ap.add_argument("--fail", action="store_true", help="also plant the silent utlidar sniff (the 0-messages row)")
+    a, rest = ap.parse_known_args()
+    if a.rows:
+        plant(a.rows, a.fail)
+    else:
+        unittest.main(argv=sys.argv[:1] + rest)
