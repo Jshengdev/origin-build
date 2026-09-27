@@ -26,7 +26,8 @@ run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written at
      a model's dispatch is demoted to ask: always while auto is off ("auto off"), below WTDD_DISPATCH_THRESHOLD while it
      is on ("below threshold 0.7"). A live failure is the FAILED row, never the stub. Phase `decided`.
   5. dry: stop here. ignore: a stderr line (phase `ignored`). ask: ask_line with the camera's frame, pending.json
-     {kind: dispatch} (phase `asked`). dispatch: DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
+     {kind: dispatch} (phase `asked`); a question that opened since step 2 (looked for again just before the post and
+     just before pending.json) wins and this one is refused, its pending.json untouched. dispatch: DogSession.follow(path, [], from_nearest=False, avoid=True), bounded by
      len(path) * session.WP_TIMEOUT_S then stop() (phase `following`); on arrival a level look (dog_say.look_and_see) and
      one post with the photo, or the existing who-dis ask when the DETECTOR boxed a person (phase `arrived`); a failed
      detector is never "no person": the post says "detector FAILED" and the page's error carries it. Never STRANGER
@@ -425,21 +426,35 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
             ledger.log("dispatch", f"ignore p={d['p']}: nothing posted, nothing moved", cam=cam, trigger=trigger)
             return _publish(page, phase="ignored")
         if d["choice"] == "ask":
-            return _ask(page, c, trigger, file)
+            return _ask(page, c, trigger, file, refuse)
         return _walk(page, s, c, trigger)
     finally:
         _lock.release()
 
 
-def _ask(page: dict, c: dict, trigger: str, file: str | None) -> dict:
+def _ask(page: dict, c: dict, trigger: str, file: str | None, refuse) -> dict:
+    """The question with the camera's frame, then pending.json {kind: dispatch}. One question at a time holds through
+    the post itself (about 3 s: gate, claim, send, read-back): a question that opened since run() looked (the dog's own
+    who-dis, most likely) is looked for just before the post and again just before pending.json is written, and wins:
+    its pending.json is never overwritten; run()'s refusal writes the FAILED row, the failed page and the text."""
     from .tools import chat_post
     frame = file or _frame(c["id"])
+
+    def hold(when: str) -> None:
+        pend = _open_question()
+        if pend:
+            ledger.log("dispatch", f"WARN a question opened {when}: no dispatch question on top of it", kind=pend.get("kind"),
+                       asked=pend.get("trigger"))
+            refuse(f"question open: {pend.get('kind')} {pend.get('trigger') or ''} opened {when}; one question at a time, "
+                   "the dog's own eye wins", frame=False)
+    hold("before the ask was posted")
     try:
         chat_post.run(text=ask_line(c), file=frame, trigger=trigger)
-        PENDING.write_text(json.dumps({"kind": "dispatch", "t": time.time(), "cam": c["id"], "trigger": trigger, "file": frame}))
     except Exception as e:  # noqa: BLE001  (its chat.* rows have it; drawn and re-raised)
         _publish(page, phase="failed", error=f"the ask was not posted: {type(e).__name__}: {e}")
         raise
+    hold("while the ask was posted")
+    PENDING.write_text(json.dumps({"kind": "dispatch", "t": time.time(), "cam": c["id"], "trigger": trigger, "file": frame}))
     return _publish(page, phase="asked", ask_to=config.maybe("WTDD_ON_CALL_NAME") or "the group")
 
 
