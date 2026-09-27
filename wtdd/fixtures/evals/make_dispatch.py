@@ -1,6 +1,7 @@
 """Builds the dry ledger behind wtdd/dispatch.py's grade() (item 18, dispatch): dispatch.jsonl, one good run of the
-filmed ask-first path, the rows exactly as the parents write them, so the grader is exercised on the real shapes
-without a dog, a person, a camera or a model. Committed BEFORE the grader exists (CLAUDE.md: evals, RED first); re-run
+filmed ask-first path, the rows in the order and shapes the parents write them (plus args.shift_id on chat.post and
+intruder.verdict, the convention of 11's helper below), so the grader is exercised on the real shapes without a dog, a
+person, a camera or a model. Committed BEFORE the grader exists (CLAUDE.md: evals, RED first); re-run
 after a parent changes a row: python wtdd/fixtures/evals/make_dispatch.py (stdlib only; rewrites the file next to this
 script). wtdd/test_dispatch.py mutates copies of these rows in memory for the fail and unsafe cases; nothing else is
 written here.
@@ -9,8 +10,9 @@ written here.
                    from the dog's believed pose to the camera's arrival point) -> dispatch.decided (18, app stub: the
                    DEMO_CACHE stub says ask, never dispatch) -> the ask with the boxed frame ("person at camera ... send
                    the dog? yes / no", kind dispatch) -> the on-call reply (intruder.verdict, verdict approved, asked =
-                   the trigger) -> "on it" -> dispatch.decided (app imessage, args.by, choice dispatch, no p: the person
-                   decided) -> plan.route again from the current pose -> dog.follow (reached == of, the end pose within
+                   the trigger) -> "on it" (key go:<reply guid>, listen.verdict's) -> plan.route again from the current
+                   pose (dispatch.run plans before it decides, the approved run too) -> dispatch.decided (app imessage,
+                   args.by, choice dispatch, no p: the person decided) -> dog.follow (reached == of, the end pose within
                    reach_px of the arrival) -> dog.look level -> watch.boxes -> llm.generate -> vision.check -> decided
                    (02's, from look_and_see) -> the arrival post with the photo, read back.
 
@@ -112,12 +114,13 @@ def dispatch() -> Path:
     l.row("intruder.verdict", "central", "imessage",
           {"from": HOUSEMATE, "text": "yes", "guid": "FIX-REPLY-1", "asked": TRIGGER, "shift_id": SHIFT},
           after={"verdict": "approved"}, secs=0)
-    l.post("dispatch-go:FIX-REPLY-1", "listen", f"on it: sending the dog to camera {CAM['id']}")
-    # the approved run: the person decided (app imessage, args.by, no p), re-planned from the current pose, then the walk
+    l.post("go:FIX-REPLY-1", "listen", f"on it: sending the dog to camera {CAM['id']}")   # listen.verdict's say(f"go:{guid}")
+    # the approved run: re-planned from the current pose FIRST (run() plans before it decides), then the person's decision
+    # (app imessage, args.by, no p), then the walk
+    l.route(DOG0["p"])
     l.row("dispatch.decided", "dispatch", "imessage", l.decided_args(by=HOUSEMATE, approved=True), before={"dog": dog},
           after={"choice": "dispatch", "p": None, "probabilities": None, "demoted": None, "model": None},
           err="approved by the person on call", ms=1)
-    l.route(DOG0["p"])
     l.row("dog.follow", "dog", "map", {"n": 3, "start": 0, "stops": [], "reach_px": 30.0, "avoid": True}, before=DOG0,
           after={"reached": [0, 1, 2], "of": 3, "seconds": 20.3, "map": END, "replans": 0, "skipped_stops": []}, ms=20300, secs=21)
     # on arrival: a level look, the detector's boxes (the local stop), the sentence, 02's decision, one post with the photo
