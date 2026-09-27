@@ -338,7 +338,8 @@ class DogSession:
         return self.map_pose(st)
 
     # ---- following the drawn path
-    def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
+    def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True,
+               why: str | None = None) -> dict[str, Any]:
         if self.cal is None:
             raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
         if self.scout_state["active"]:   # 14: the scout holds the velocity; two tasks must not fight over _set_vel
@@ -358,7 +359,7 @@ class DogSession:
         log("dog", "follow from waypoint", start=start, n=len(path), near_start=near_start, dist_to_start_px=round(math.dist(path[0], pose["p"])))
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
                              "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid)}
-        self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
+        self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start, why), self.loop)
         return dict(self.follow_state)
 
     def resume(self) -> dict[str, Any]:
@@ -368,11 +369,12 @@ class DogSession:
     def _set_vel(self, x: float, y: float, z: float) -> None:
         self.vel, self.vel_t = (x, y, z), time.monotonic()   # the drive loop publishes it and stops 0.6 s after the last refresh
 
-    async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
+    async def _follow(self, path: list, stops: list[int], reach_px: float, start: int, why: str | None = None) -> None:
         """Waypoint by waypoint from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume().
-        One dog.follow row at the end with the waypoints reached and the error, if any. Never retries a waypoint."""
+        One dog.follow row at the end with the waypoints reached and the error, if any. Never retries a waypoint.
+        why (14): "rooms off: WTDD_NO_PLAN" on the row when the room rule would have refused this path."""
         fs = self.follow_state
-        args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
+        args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid), **({"why": why} if why else {})}
         try:
             with step("dog", "dog.follow", "map", args, self.map_pose()) as r:
                 try:

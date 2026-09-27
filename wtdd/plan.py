@@ -3,6 +3,8 @@ room polygons, walkable where a cell centre is inside any room, shrunk by the do
 the grid path in map pixels, ready to be the map's `path`. Limit, stated: ui/house.svg draws rooms as rectangles with
 no walls or doors between them, so a planned route can cross a shared wall; the demo's route is recorded by driving
 (wtdd/dog/session.py record), and this planner is for point-to-point routes inside a room or across drawn doorways.
+Under WTDD_NO_PLAN=1 (item 14, a site with no floor plan) the drawn rooms are the house's, so plan() refuses: one
+plan.route row with ok false naming it, raised; the route is recorded by driving or drawn on the dog's own grid.
 
   python -m wtdd plan_path from=448,455 to=436,586           the waypoints, nothing written
   python -m wtdd plan_path from=448,455 to=436,586 save=true  also written as the map's path (stops cleared)
@@ -13,7 +15,7 @@ import math
 from typing import Any
 
 from .config import ROOT
-from .field import MAP, inside
+from .field import MAP, inside, no_plan
 from .ledger import log, step
 
 CELL = 10            # px per grid cell, about 9 cm
@@ -47,6 +49,8 @@ def plan(a, b) -> dict[str, Any]:
     from pathfinding.finder.a_star import AStarFinder
     m = json.loads(MAP.read_text())
     with step("plan", "plan.route", "map", {"from": list(a), "to": list(b), "cell_px": CELL}) as r:
+        if no_plan():   # 14 · re-placed at 06's rebase: this is the rooms path; the grid path (06, 21) is not on this base
+            raise RuntimeError("no session grid under WTDD_NO_PLAN: the drawn rooms are the house's, not this site's; record or draw the route on the dog's map")
         g = Grid(matrix=grid(m["rooms"]))
         start, end = g.node(int(a[0]) // CELL, int(a[1]) // CELL), g.node(int(b[0]) // CELL, int(b[1]) // CELL)
         if not start.walkable or not end.walkable:
