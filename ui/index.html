@@ -63,6 +63,10 @@
   .hint { font-size: 11.5px; opacity: .7; margin: var(--gap-in) 0 var(--gap-group); }
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
+  /* 30 · dog-says-the-ask · start */
+  .stat.say .sq { background: var(--idle, #b9b4aa); } .stat.say.on .sq { background: var(--ok); } .stat.say.failed .sq { background: var(--bad); }
+  .say-stub { margin-left: auto; padding: 1px 6px; border-radius: var(--r-pill); background: var(--warn); color: var(--ink, #262323); font-size: 10px; }
+  /* 30 · dog-says-the-ask · end */
 </style>
 </head>
 <body>
@@ -191,7 +195,7 @@ function App() {
 
   const cmd = (label, name, args, opts = {}) => html`<span><button class=${opts.key ? "key" : ""} title=${opts.title || ""} disabled=${busy !== null || dot !== null} onClick=${() => run(name, args)}>${busy === name ? "…" : label}</button></span>`;   // a live walk (dot) owns the lights
   const cli = (name, args) => `python -m wtdd ${name}${Object.entries(args).map(([k, v]) => ` ${k}=${v}`).join("")}`;
-  const palette = status ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
+  const palette = Array.isArray(status?.hue) ? [...status.hue.filter(l => l.room === "Living room").map(l => ({ id: l.id, name: l.name, label: l.name, device: "hue" })), { id: "strip", name: "strip", label: "LED strip", device: "strip" }] : (map?.lights || []);
   const ent = map?.entity || {};
 
   return html`<div class="wrap">
@@ -208,6 +212,7 @@ function App() {
           <div class=${"stat " + (chatOn ? "on" : "")}><span class="sq"></span><b>group chat</b><span>${chat ? (chatOn ? `${chat.group} · ${chat.pending ? "waiting for who dis" : chat.armed ? "armed" : "listening"}` : "listener down") : "…"}</span></div>
           <div class=${"stat " + (watchOn ? "on" : "")}><span class="sq"></span><b>detector</b><span>${watchOn ? `live · ${watch.ms} ms` : "off"}${watch?.intruder ? " · intruder watch armed" : ""}</span></div>`;
       })()}
+      <${SayBadge} dog=${dog} />
     </div>
     <div class="grid">
       <div>
@@ -357,7 +362,7 @@ function App() {
           <div class="cmd">${cli("light_show", {})}</div>
           ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
         </div>
-        ${status && html`<div class="panel"><h2>State · read back</h2><div class="status">
+        ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
           <div><b>strip</b> · ${status.strip.error ? status.strip.error : `${status.strip.on ? "on" : "off"} · ${status.strip.brightness_pct}% · temp ${status.strip.temp_pct}%`}</div>
         </div></div>`}`}
@@ -365,6 +370,18 @@ function App() {
     </div>
   </div>`;
 }
+// 30 · dog-says-the-ask · start
+// The dog's speaker (wtdd/dog/audio.py), under the dog card: GET /dog/state .say as served (age_s and speaking are the
+// API's). Green while speaking, grey once said, red with the error when the play failed (the chat post already landed).
+function SayBadge({ dog }) {
+  const s = dog?.say, stub = dog?.source === "stub" || s?.source === "stub";
+  const line = !s ? "nothing said yet"
+    : s.error ? html`<span class="bad">say FAILED · ${s.error}</span> · posted · speaker failed`
+    : s.speaking ? `speaking · ${s.text} · code ${s.code} · ${s.ms} ms${s.player_state === "no read-back" ? " · no read-back" : ""}`
+    : `said · ${s.text} · ${s.age_s} s ago · code ${s.code}`;
+  return html`<div class=${"stat say" + (s?.error ? " failed" : s?.speaking ? " on" : "")}><span class="sq"></span><b>speaker</b><span>${line}</span>${stub && html`<span class="say-stub">stub</span>`}</div>`;
+}
+// 30 · dog-says-the-ask · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
