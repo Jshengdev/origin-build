@@ -310,13 +310,16 @@ class DogSession:
 
     def grid_clear(self, why: str) -> dict[str, Any]:
         """POST /dog/grid {clear: true, why}: drops the session grid (after a power cycle the odometry frame reset, so the
-        old counts belong to another frame). One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
+        old counts belong to another frame). One dog.grid_clear row, also with no grid. ui/grid.json is left as it is.
+        The floor plan goes with its grid: its walls belong to the same old frame."""
         with self._grid_lock:
             g = self.grid
             before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0}
             with step("dog", "dog.grid_clear", "map", {"why": why, **before}) as r:
                 self.grid = None
                 r["state_after"] = {"cleared": True}
+        with self._fp_lock:   # after a run in flight on the old grid has landed, so its result is dropped too
+            self._fp = self._fp_t = self._fp_frames = None
         return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- the floor plan (wtdd/dog/floorplan.py): walls and furniture from the grid's height profile, off the dispatcher
