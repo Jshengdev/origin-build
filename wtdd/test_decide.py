@@ -31,6 +31,8 @@ _TMP = tempfile.mkdtemp(prefix="wtdd-decide-test-")
 os.environ["WTDD_LEDGER"] = str(Path(_TMP) / "ledger.jsonl")
 for _k in ("JEV_API_KEY", "JEV_MODEL", "JEV_LIVE", "WTDD_DECIDE_THRESHOLD", "WTDD_SHIFT"):
     os.environ[_k] = ""                   # the stub path and the defaults; config.maybe() reads an empty value as unset
+os.environ["WTDD_ON_CALL_NAME"] = "Sam Stand-in"      # 03 merged beside 02: "who dis?!" goes through escalate() to the on-call 1:1,
+os.environ["WTDD_ON_CALL_HANDLE"] = "+15550002222"   # so the listener checks need a (fake, E.164-shaped) person or every flag fails
 
 from wtdd import config, decide, ledger  # noqa: E402
 
