@@ -157,7 +157,7 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     if problems:
         raise ValueError("the path cannot be run: " + "; ".join(problems))
     from .nogo import refuse                       # lazy: nogo imports this module
-    refuse(pts, "field", m)                        # a route through a drawn no-go zone: one route.refused row, then ValueError; nothing moves, nothing published
+    refuse(pts, "field", m, dots_only=True)        # a dot inside a drawn no-go zone (S12: a line crossing one is routed around): one route.refused row, then ValueError; nothing moves, nothing published
     stops = sorted({int(i) for i in m.get("stops", []) if 0 <= int(i) < len(pts)})
     if FIELD.exists() and time.time() - FIELD.stat().st_mtime < BUSY_S:   # another process's walk is live: refuse, never interleave
         raise RuntimeError(f"a walk is already running ({FIELD.name} written {round(time.time() - FIELD.stat().st_mtime, 1)} s ago)")

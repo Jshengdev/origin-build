@@ -8,6 +8,7 @@ ledger row sourced to the map, one stderr line, then ValueError. The only place 
                              any other nogo value or a poly under 3 points raises: a malformed zone, never a silently inert one
   hit(path, zs)              the first place the route touches a zone, or None: {zone, waypoint: [x, y], index}
   refuse(path, agent, m)     no hit: one stderr line, returns; a hit: the row, the line, then ValueError
+  refuse(..., dots_only=True) the dog's walk and follow (S12): only a dot inside a zone is refused; a line crossing one is routed around (S6b)
 
 The waypoint/index rule: every path POINT is checked first (the first one inside a zone is the waypoint, index = its
 path index); only when none is inside are the segments sampled every STEP_PX (interior points only) and the first
@@ -43,11 +44,13 @@ def zones(m: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def hit(path: list, zs: list[dict[str, Any]]) -> dict[str, Any] | None:
+def hit(path: list, zs: list[dict[str, Any]], dots_only: bool = False) -> dict[str, Any] | None:
     for i, p in enumerate(path):
         for z in zs:
             if inside(p, z["poly"]):
                 return {"zone": z["name"], "waypoint": [int(p[0]), int(p[1])], "index": i, "crosses": False}
+    if dots_only:   # S12: the dog's walk and follow check the dots; a line between free dots is S6b's to route around
+        return None
     for i in range(1, len(path)):
         (ax, ay), (bx, by) = path[i - 1], path[i]
         n = max(1, math.ceil(math.dist((ax, ay), (bx, by)) / STEP_PX))
@@ -59,10 +62,10 @@ def hit(path: list, zs: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def refuse(path: list, agent: str, m: dict[str, Any] | None = None) -> None:
+def refuse(path: list, agent: str, m: dict[str, Any] | None = None, dots_only: bool = False) -> None:
     m = json.loads(MAP.read_text()) if m is None else m
     zs = zones(m)
-    h = hit(path, zs)
+    h = hit(path, zs, dots_only)
     if h is None:
         log("nogo", "route clear" if zs else "WARN no no-go zones on the map: the route is checked against none", zones=len(zs), pts=len(path), by=agent)
         return
