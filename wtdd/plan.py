@@ -27,7 +27,9 @@ into equal steps so the joined path passes check_path's jump rule, stops = the i
 default a stop gets (DEFAULT_ACTION, what POST /dog/mark writes). zones given = the confirmed no-go set instead of
 the map's, checked up front: a malformed one fails the route's row by name, never as a leg. A leg with no route: a
 ValueError naming "leg k of n" and carrying .failed_leg {leg, of, from, to, error} for the page's red dashed line, the
-plan.multistop row ok false with args.failed_leg, and no partial route returned. One plan.multistop row per call,
+plan.multistop row ok false with args.failed_leg, and no partial route returned; a leg whose two ends share one lattice
+cell (a double tap) fails the same way, since its stop would repeat the last one (its plan.route row is ok: A* found
+the one cell). One plan.multistop row per call,
 after the legs' rows: args {points, legs, cell_px, shift_id, cost_map, why?, grid_source?, failed_leg?}, state_after
 {legs, stops, length_m, waypoints}, cached with that source when the grid is not the session's (plan()'s rule).
 route() writes no map; wtdd/tools/plan_route.py save=true does, through POST /map's rules.
@@ -292,6 +294,8 @@ def route(points, grid=None, cal: dict | None = None, zones: list[dict[str, Any]
             a, b = pts[k - 1], pts[k]
             try:
                 out = plan(a, b, grid, cal, threshold, lock, grid_source, zones=zones, extra={"leg": k, "legs": n, "shift_id": shift})
+                if len(out["path"]) < 2:   # both ends in one lattice cell: the stop would repeat the last (or be index 0)
+                    raise ValueError(f"stop {k} is in the same {CELL} px cell as the point before it (a double tap?): nothing to route")
             except ValueError as e:
                 r["args"]["failed_leg"] = {"leg": k, "of": n, "from": a, "to": b, "error": str(e)}
                 err = ValueError(f"leg {k} of {n} ({a[0]},{a[1]} -> {b[0]},{b[1]}): {e}")
