@@ -228,8 +228,8 @@ class Play(Base):
         self.assertEqual(b.say_state["player_state"], "no read-back")
 
     def test_a_play_mode_that_is_not_json_is_kept_raw_and_the_accepted_play_stays_ok(self):
-        """GET_PLAY_MODE's payload shape is UNVERIFIED: a 1010 answering code 0 with a plain string (not JSON) is kept
-        raw on state_after, and the dog's code-0 answer to 1002 stays the row's response: never a FAILED row, never red."""
+        # GET_PLAY_MODE's payload shape is UNVERIFIED: a 1010 answering code 0 with a plain string (not JSON) is kept
+        # raw on state_after, and the dog's code-0 answer to 1002 stays the row's response: never a FAILED row, never red.
         a, b = self.a, stub_body(player=False)
         self.plant()
         ps, raw = b.conn.datachannel.pub_sub, {}
