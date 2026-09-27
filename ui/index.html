@@ -68,11 +68,13 @@
   .occlbl { opacity: .85; }
   /* 01 · occupancy · end */
   /* 15 · floorplan · start */
-  .fp-wall { fill: #262323; } .fp-slab { fill: #aaa59d; } .fp-low { fill: #d6d1c7; }   /* opaque: they cover the grid's dark squares under them */
-  .fp-tall { fill: #fbfaf7; stroke: #262323; stroke-width: 1.2; }
+  .fp-wall { fill: #262323; } .fp-slab { fill: #aaa59d; } .fp-low { fill: #d6d1c7; }
+  .fp-wall, .fp-slab, .fp-low { fill-opacity: .55; }   /* translucent like 01's .occ: a lamp, the strip, the route or a stop label under a cell still shows */
+  .fp-tall { fill: none; stroke: #262323; stroke-width: 1.2; }   /* an outline only: nothing under a tall cell is hidden */
   .fp-seg { stroke: var(--live, #0b0dc4); stroke-width: 4; stroke-linecap: round; }
-  .fp-key { fill: rgba(251,250,247,.97); }   /* the legend's band: the house's top wall runs right under it */
-  .fp-wall, .fp-slab, .fp-low, .fp-tall, .fp-seg, .fp-key { pointer-events: none; }
+  .fp-key { flood-color: #fbfaf7; flood-opacity: .9; }   /* the legend's box: each line's own width, not a band across the map; the house's top wall shows past it */
+  .fplbl { filter: url(#fp-key); }
+  .fp-wall, .fp-slab, .fp-low, .fp-tall, .fp-seg { pointer-events: none; }
   .fplbl .fp-zero { fill: var(--warn); } .fplbl .bad { fill: var(--bad); }
   .fplbl .fp-run { fill: var(--live, #0b0dc4); pointer-events: all; cursor: pointer; }
   /* 15 · floorplan · end */
@@ -396,9 +398,11 @@ function GridLayer() {
 // 01 · occupancy · end
 // 15 · floorplan · start
 // The floor plan (GET /dog/floorplan, wtdd/dog/floorplan.py): cells coloured by class (wall ink, slab grey, low light
-// grey, tall outlined; opaque, so they cover the grid's squares under them) and the wall runs as lines over them, each
-// cell one square centred on its corner pixel like GridLayer's. Its own 2 s poll, with or without a dog. The legend
-// always draws: a zero is yellow; a run with no wall, a FAILED tick and a failed read or press are red with the reason.
+// grey, all translucent like 01's squares, since this layer mounts over the lamps, the strip and the route; tall only
+// outlined) and the wall runs as lines over them, each cell one square centred on its corner pixel like GridLayer's.
+// Its own 2 s poll, with or without a dog. The legend always draws, each line on a light box its own width (the
+// filter), not a band across the map: a zero is yellow; a run with no wall, a FAILED tick and a failed read or press
+// are red with the reason.
 // "▶ floor plan" is the button (POST /dog/floorplan: one run, one row per press). The page computes nothing.
 function FloorPlanLayer() {
   const [f, setF] = useState(null);
@@ -413,7 +417,7 @@ function FloorPlanLayer() {
   return html`<g>
     ${["slab", "low", "tall", "wall"].map(n => (px[n] || []).length > 0 && html`<path key=${n} class=${"fp-" + n} data-cells=${px[n].length} d=${sq(n)}/>`)}
     ${(f?.segments_px || []).map((p, i) => html`<line key=${"s" + i} class="fp-seg" x1=${p[0]} y1=${p[1]} x2=${p[2]} y2=${p[3]}/>`)}
-    <rect class="fp-key" x="0" y="35" width="1060" height=${f?.why || f?.error ? 72 : 48}/>
+    <defs><filter id="fp-key" x="0" y="0" width="1" height="1"><feFlood class="fp-key"/><feComposite in="SourceGraphic"/></filter></defs>
     <text class="lbl fplbl" x="12" y="52">${f && "wall" in k ? html`${z(runs, `walls · ${runs} runs`)} · ${z((k.slab || 0) + (k.low || 0), `furniture · ${(k.slab || 0) + (k.low || 0)} cells`)} · ${z(k.tall, `tall · ${k.tall}`)} · ${f.ms} ms · ${f.source}` : `floor plan · ${f ? "none" : "…"}`} · <tspan class="fp-run" onClick=${press}>▶ floor plan</tspan></text>
     <text class="lbl fplbl" x="12" y="76">from the LiDAR's own cells; a label only moves a run to grey</text>
     ${(f?.why || f?.error) && html`<text class="lbl fplbl" x="12" y="100">${f.why ? (f.ok === false ? html`<tspan class="bad">${f.why}</tspan>` : f.why) : ""}${f.error ? html`${f.why ? " · " : ""}<tspan class="bad">FAILED ${f.error}</tspan>` : ""}</text>`}</g>`;
