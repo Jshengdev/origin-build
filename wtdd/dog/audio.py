@@ -24,10 +24,11 @@ uploaded once, and its uuid cached in <repo>/say.json (both gitignored, per dog;
 line the dog already lists is never uploaded again. say() plays by uuid: one dog.say {text, uuid, via: "audiohub"} row,
 response_or_error the raw 1002 response, state_after the next rt/audiohub/player/state message (Body._on_player,
 subscribed at connect) plus the sport state, or, when that topic is silent for PLAYER_WAIT_S, the literal "no read-back"
-plus GET_PLAY_MODE and a fresh sport state, never a default. A non-zero code is a FAILED row. Body.say_state is the last
-play, published at the ack (its player_state joins after the read-back); served() adds age_s and speaking for GET
-/dog/state .say. speaking is the ack (code 0) plus the line's own length
-(the WAV's seconds) until 30.3 pastes the player-state shape here; the row always carries the raw player state or
+plus GET_PLAY_MODE (its raw response, never parsed; a refusal is a WARN) and a fresh sport state, never a default.
+A non-zero play code is a FAILED row. Body.say_state is the last play, published at the ack (its player_state joins
+after the read-back); served() adds age_s and speaking for GET /dog/state .say. speaking is the ack (code 0) plus
+the line's own length (the WAV's seconds) until 30.3 pastes the player-state shape here; the row always carries the raw
+player state or
 "no read-back". after(text) is the one hook line an ask calls after its chat post: a thread, so the text lands in the
 thread first and a failed say is only its own row, .say.error (the red badge) and one WARN line.
 
@@ -238,8 +239,10 @@ async def say(body, text: str, cache: Path | None = None) -> dict:
                               "seconds": seconds(wav) if wav.exists() else None, **({"source": "stub"} if stub else {})}
             player = await _next_player(body, n0)
             if player == NO_READ_BACK:
-                pc, pd = await request(body, TOPIC, PLAY_MODE, {})
-                r["state_after"] = {"player_state": player, "play_mode": {"code": pc, "data": _payload(pd) if pc == 0 else pd},
+                pc, pd = await request(body, TOPIC, PLAY_MODE, {})   # raw: its payload shape is UNVERIFIED, never parsed
+                if pc != 0:
+                    log("dog", "WARN GET_PLAY_MODE refused after an accepted play", code=pc)
+                r["state_after"] = {"player_state": player, "play_mode": {"code": pc, "data": pd},
                                     "sport": await body.fresh_state()}
             else:
                 r["state_after"] = {"player_state": player, "sport": body.state()}
