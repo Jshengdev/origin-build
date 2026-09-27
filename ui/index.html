@@ -54,6 +54,8 @@
   .cone { fill: rgba(232,89,12,.14); stroke: rgba(232,89,12,.6); stroke-width: 2; } .conetip { fill: #fff; stroke: #e8590c; stroke-width: 3; cursor: grab; }
   .trace { fill: none; stroke: #e8590c; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .8; } .mark { fill: #e8590c; stroke: #fff; stroke-width: 2; }
   .lidar { fill: none; stroke: rgba(11,13,196,.5); stroke-width: 6; stroke-linecap: round; pointer-events: none; }   /* one dot per "M x y h0" */
+  .planned { fill: none; stroke: #0a7f5a; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }   /* S6b: follow.planned, every leg */
+  .actual { fill: none; stroke: #e8590c; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; opacity: .9; pointer-events: none; }   /* S6b: follow.trace, where it went */
   .lbl { font-family: 'IBM Plex Mono', monospace; font-size: 17px; fill: #262323; paint-order: stroke; stroke: #fbfaf7; stroke-width: 5px; user-select: none; pointer-events: none; }
   .levels { font-family: var(--mono); font-size: 10.5px; line-height: 1.7; }
   .bar { display: inline-block; height: 7px; background: #ffcc44; border-radius: 4px; vertical-align: middle; margin-left: 8px; transition: width .2s; }
@@ -302,6 +304,9 @@ function App() {
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
+            ${dog?.follow?.planned?.length > 0 && html`<g>${dog.follow.planned.map((l, i) => html`<polyline key=${"leg" + i} class="planned" points=${l.map(p => p.join(",")).join(" ")}/>`)}
+              <polyline class="actual" points=${(dog?.follow?.trace || []).map(p => p.join(",")).join(" ")}/>
+              <g transform="translate(12 70)"><line class="planned" x1="0" y1="0" x2="40" y2="0"/><text class="lbl" x="48" y="6">planned</text><line class="actual" x1="150" y1="0" x2="190" y2="0"/><text class="lbl" x="198" y="6">actual</text></g></g>`}
             <${ObjectsLayer}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
