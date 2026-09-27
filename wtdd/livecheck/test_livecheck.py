@@ -16,7 +16,10 @@ cached true / source stub) and the table wtdd/livecheck/steps.json:
            step with no fatal_warns needs no API log at all.
   Draft    needs_the_dog_lines() on the four PR-body shapes (`**Needs the dog**` and `## Needs the dog` with `1.` lines,
            fixtures trimmed from PRs #5 and #4; steps numbered inside bold, `**<k> · text**` and `- **<item>.<k>** text`,
-           trimmed from PRs #14 and #15) yields the numbered lines of that section only; draft() makes steps with empty
+           trimmed from PRs #14 and #15; prechecks `1.`-`4.` then `- **21.1: text**` / `- **21.1b: text**`, trimmed from
+           PR #19, where k 1b is read whole, the colon is not the title's, the keys drafted twice are each one WARN naming
+           the PR and both titles, and a bold step number that cannot be read whole is a WARN, never read as a shorter one)
+           yields the numbered lines of that section only; draft() makes steps with empty
            rows; the table's titles for 01 and 04 are those lines verbatim; `--from-prs` (gh stubbed at open_prs) writes
            the draft, WARNs on a PR with no section, and fails loud when gh fails; a usage error exits 1 (FAIL), never 2
            (UNSAFE's code).
@@ -378,6 +381,41 @@ class Draft(unittest.TestCase):
         self.assertEqual(livecheck.needs_the_dog_lines(body), [("0", "before every step:"), ("1", "the six keys and the state line.")])
         steps = livecheck.draft([{"number": 15, "title": "26 · Every row has a tick ...", "body": (FIX / "pr-body-26.md").read_text()}])
         self.assertEqual([s["step"] for s in steps], [f"26.{k}" for k in range(1, 6)])
+
+    def test_prechecks_then_bold_steps_with_a_letter(self):
+        """PR #19 (item 21) numbers four prechecks `1.`-`4.`, then the goal's steps inside bold with the item, a colon and a
+        letter suffix: `- **21.1: text**`, `- **21.1b: text**`. k 1b is read whole, the colon is not part of the title, and each
+        key the two lists share (21.1 21.2 21.3) is one WARN naming the PR and both titles, never a silent duplicate."""
+        body = (FIX / "pr-body-21.md").read_text()
+        lines = livecheck.needs_the_dog_lines(body)
+        self.assertEqual([k for k, _ in lines], ["1", "2", "3", "4", "1", "1b", "2", "3"])
+        self.assertEqual(lines[4][1], "three taps on the session grid at the house. With the dog calibrated, the start is its believed pose, "
+                                      "so three taps make three legs and three stops (the dry fixture's \"2 stops\" is the no-pose case).")
+        self.assertTrue(lines[5][1].startswith("run this early (the round-3 reviewer's live risk). A believed pose within 40 px"), lines[5])
+        self.assertTrue(lines[6][1].startswith("one tap behind the zone. Confirm a detour is drawn"), lines[6])
+        self.assertEqual([t for _, t in lines if t[:1] in ":·."], [], "a separator is not part of a title")
+        prs = [{"number": 19, "title": "21 · A route is planned over the session grid ...", "body": body}]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(livecheck, "open_prs", return_value=prs):
+            outp = Path(d) / "steps.draft.json"
+            rc, out, err = cli(["--from-prs", "--draft-out", str(outp)])
+            steps = json.loads(outp.read_text())["steps"]
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual([s["step"] for s in steps], ["21.1", "21.2", "21.3", "21.4", "21.1", "21.1b", "21.2", "21.3"])
+        warns = [l for l in err.splitlines() if "WARN" in l and "drafted 2 times" in l]
+        self.assertEqual([re.search(r" (21\.\w+) drafted", l).group(1) for l in warns], ["21.1", "21.2", "21.3"], err)
+        self.assertTrue(all(l.count("#19 ") == 2 for l in warns), err)
+        self.assertIn("The voxel origin under a pure turn", warns[0])
+        self.assertIn("three taps on the session grid", warns[0])
+        self.assertIn("3 duplicate step keys", err.strip().splitlines()[-1])
+
+    def test_a_bold_step_number_that_cannot_be_read_is_loud(self):
+        body = "## Needs the dog\n- **21.1.2 · a nested number**\n- **21.1bc: two letters**\n1. a step\n## Cut\n"
+        with redirect_stderr(io.StringIO()) as err:
+            lines = livecheck.needs_the_dog_lines(body, "#99")
+        self.assertEqual(lines, [("1", "a step")], "a number that cannot be read whole is not read as a shorter one")
+        warns = [l for l in err.getvalue().splitlines() if l.startswith("[wtdd:livecheck] WARN #99 ") and "step number" in l]
+        self.assertEqual(len(warns), 2, err.getvalue())
+        self.assertIn("**21.1bc: two letters**", warns[1])
 
     def test_a_usage_error_is_a_fail_not_an_unsafe(self):
         """argparse exits 2 on a usage error, UNSAFE's code: a typo must read as a FAIL (1)."""
