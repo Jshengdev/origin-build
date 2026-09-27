@@ -19,7 +19,8 @@ row; the person's yes (wtdd/chat/listen.py verdict, pending kind "dispatch") run
 
 run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written atomically, the full KEYS every time):
   1. One dispatch at a time: a module lock, taken without waiting; a second one is refused, never queued.
-  2. Refusals, before any plan: no person seen (`unseen`, not dry: the local detector has not boxed one at this camera
+  2. Refusals, before any plan: not armed (not dry, a person's yes included: intruder.on, the file the camera hook
+     reads, is absent; the post is text only), no person seen (`unseen`, not dry: the local detector has not boxed one at this camera
      in the last COOLDOWN_S; the post is text only), not calibrated (no calibration or believed pose, or
      DogSession.recheck: loaded from disk or kept across a reconnect and not confirmed by a drag), following,
      recording, a question open (pending.json
@@ -418,6 +419,10 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         before["dog"] = {"p": pose and pose["p"], "heading_deg": pose and pose["heading_deg"],
                          "calibrated": cal is not None and pose is not None and confirmed,
                          "following": bool(s and s.follow_state.get("active")), "recording": bool(s and s.rec), "pending": bool(pend)}
+        from . import cam as fixedcam
+        if not dry and not fixedcam.ARMED.exists():   # the arming stays a human switch: the camera hook's gate, held for every way in (a yes too)
+            refuse("not armed: the intruder watch is off (the remote's intruder watch, POST /intruder {on})",
+                   own_page=(pend or {}).get("kind") != "dispatch", frame=False)
         if unseen and (not dry or unseen.startswith("FAILED")):   # the device's sighting first: nothing plans, asks a model or the thread about nobody
             refuse(f"no person seen at camera {cam}: {unseen}", own_page=(pend or {}).get("kind") != "dispatch", frame=False)
         if not before["dog"]["calibrated"]:
@@ -447,8 +452,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
             route["why"] = str(e)
         args["route"] = {k: route[k] for k in ("exists", "length_m", "nogo")}
         dog = {**before["dog"], "avoid": getattr(getattr(s, "body", None), "_avoid", None)}
-        from . import cam as fixedcam
-        state = state_for_dispatch(c, fixedcam.ARMED.exists(), dog, route, False, seen=not unseen)
+        state =state_for_dispatch(c, fixedcam.ARMED.exists(), dog, route, False, seen=not unseen)
         args["state_chars"], page["state"] = len(state), state
         if not route["exists"]:
             args["choices"] = ["ask", "ignore"]
