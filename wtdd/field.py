@@ -25,7 +25,10 @@ of path point indices (double-click a path point on the remote); at each one the
 point, room), the lights hold, then it resumes. The chat's wake sequence passes its look-and-say as on_stop; with no
 stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=dog in the chat): the entity is the
 real dog's calibrated odometry pose from the API, the follower (POST /dog/follow) drives it and pauses at the stops,
-and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. Measured on the live wake demo
+and the walk ends when the follower ends; a failed follow raises with the lights' numbers in the message. While GET
+/dog/state says halted (goal 00, a person in the dog's frame), the walk holds on the dog's spot instead of ending, so the
+lights stay where it stopped, and calls on_hold() each tick (the chat reads its resume word there); after the named
+resume the cancelled follow's error ends it. Measured on the live wake demo
 (2026-09-13): dark start 1.46 s, walk 63.6 s across four rooms (seven crossings, five lights), 67 writes, 0 errors.
 """
 from __future__ import annotations
@@ -133,7 +136,7 @@ def _dog() -> dict[str, Any]:
 
 
 def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | None], Any] | None = None,
-         source: str = "entity", follower: bool = True) -> dict[str, Any]:
+         source: str = "entity", follower: bool = True, on_hold: Callable[[], Any] | None = None) -> dict[str, Any]:
     """Runs the entity along the map's path in real time and drives the real lights (see the module doc for the order).
     At each of the map's stops (path point indices) the entity pauses, on_stop(index, point, room) runs to completion
     (the chat's look-and-say; the lights hold), then the walk resumes from the same spot. Returns seconds, dark_ms,
@@ -142,7 +145,9 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     follower must be running: POST /dog/follow first), the stops are where the follower pauses (on_stop runs, then
     POST /dog/resume), and the walk ends when the follower is done or failed (the error is in the row).
     source="dog", follower=False: the lights simply follow the dog wherever it is driven (the controller, the keys),
-    no route and no stops, until POST /field/stop (or STOP appears); the row says how long and how many writes."""
+    no route and no stops, until POST /field/stop (or STOP appears); the row says how long and how many writes.
+    on_hold() runs once per tick while the walk holds on a person halt (goal 00): the chat's round passes its reader of
+    the resume word, because the listener is inside this walk and reads nothing else until it ends."""
     if source not in ("entity", "dog"):
         raise ValueError(f"source must be entity or dog, got {source!r}")
     m = json.loads(MAP.read_text())
@@ -204,13 +209,14 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
         stops_done: list[int] = []
         pending_stops = list(stops)
         follow_error: str | None = None
+        held = False   # 00: logged once when a person halt holds the walk on the spot
         try:
           while True:
             if source == "dog":
                 d = _dog()
                 p = tuple(d["map"]["p"])
                 f = d.get("follow") or {}
-                if follower and not f.get("active") and not stops_done and not f.get("done") and not f.get("error"):
+                if follower and not f.get("active") and not stops_done and not f.get("done") and not f.get("error") and not d.get("halted"):   # 00: a halt's cancel is not 'not running'
                     raise RuntimeError("the dog's follower is not running (POST /dog/follow first)")
                 s = cum[min(int(f.get("i", 0)), len(cum) - 1)]
             else:
@@ -258,7 +264,13 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
                 log("field", "stopped by request", after_s=round(time.monotonic() - t0, 1))
                 break
             if source == "dog" and follower:
-                if not f.get("active"):
+                if d.get("halted"):   # 00: a person halt; the lights hold on the dog's spot until a named resume
+                    if not held:
+                        log("field", "halted: holding the lights on the dog's spot", x=int(p[0]), y=int(p[1]), was=d["halted"].get("was"))
+                    held = True
+                    if on_hold is not None:   # the chat's round reads its resume word here
+                        on_hold()
+                elif not f.get("active"):
                     follow_error = f.get("error")
                     break
             elif source == "entity" and s >= total:

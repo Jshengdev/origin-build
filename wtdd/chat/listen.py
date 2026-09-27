@@ -13,8 +13,12 @@ own posts are refused by confirmed guid and by the opening words of its replies.
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" from intruder_alarm opens a question (pending.json):
 the next answer within PENDING_WINDOW_S decides, "idk" and its kin = "STRANGER DANGER!!!" x3 + light_alarm, anything
-else = "ok, standing down"; no answer = stood down quietly. A housemate's reply that starts like a
-correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
+else = "ok, standing down"; no answer = stood down quietly. Goal 00: a message that is exactly WTDD_RESUME_WORD
+(default "resume"; case and surrounding spaces forgiven) from an allowed sender ends a person halt through POST
+/dog/resume {by: the sender, via: "imessage"}; it is matched before verdict() and its regex, also while holding for a
+verdict and while the chat's own round holds on the halt (read_resume, field.walk's on_hold; other messages read
+there are counted on a WARN line and not acted on), and nothing else in the chat resumes the body. A housemate's
+reply that starts like a correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
 it (the vision model is told what the housemates said it got wrong). WTDD_ROUND=dog makes the round the
 real dog's: the wake starts the API's path follower (the dog must be calibrated on the remote first) and the field
@@ -66,6 +70,7 @@ class Listener:
         self.armed_by: str | None = None
         self.last = db.max_rowid()          # no replay at boot
         self._warned = False
+        self._held_read = 0.0               # 00: when read_resume last read the chat while the round held on a halt
 
     @property
     def armed(self) -> bool:
@@ -135,6 +140,8 @@ class Listener:
                 memory.store(self.guid, msgs)
                 self.last = msgs[-1]["rowid"]
                 for m in msgs:
+                    if m.get("text") and self.allowed(m) and self.resume_word(m):   # 00: the word never reaches verdict(); the hold keeps waiting
+                        continue
                     if m.get("text") and self.allowed(m) and self.verdict(m):
                         return True
             time.sleep(1.0)
@@ -166,7 +173,7 @@ class Listener:
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})
-            out = walk(on_stop=lambda i, p, here: self.look_and_say(m, i), source=source)
+            out = walk(on_stop=lambda i, p, here: self.look_and_say(m, i), source=source, on_hold=self.read_resume)
             stops = out.get("stops", [])
             log("chat", "walked", seconds=out["seconds"], writes=out["writes"], errors=out["errors"], stops=len(stops), rooms=",".join(out["rooms"]))
             if out.get("errors"):
@@ -203,6 +210,49 @@ class Listener:
         log("chat", "CORRECTION", by=entry["by"], text=m["text"][:60], corrects=entry["corrects"]["said"][:40] if entry["corrects"]["said"] else "")
         self.say(f"fix:{m['guid']}", f"noted: {m['text'][:120]}")
         return True
+
+    def resume_word(self, m: dict[str, Any]) -> bool:
+        """Goal 00: a message that is exactly the one resume word (WTDD_RESUME_WORD, default "resume"; case and spaces
+        forgiven, nothing else) ends a person halt: POST /dog/resume {by: the sender, via: "imessage"}, one stop.resumed
+        row on the API. No model and no regex reads it. A refused or unreachable resume is posted as "couldn't resume:
+        ..."; typed from the dog's own account (WTDD_ALLOW_SELF, sender '' in chat.db) it is still sent and refused as
+        nameless, and the reply names the missing handle. When 03's on-call 1:1 lands, the word is also required to come
+        from that chat (one condition here)."""
+        from ..dog.halt import is_word
+        if not is_word(m.get("text") or ""):
+            return False
+        import requests
+        try:
+            out = requests.post("http://127.0.0.1:7788/dog/resume", json={"by": m["sender"], "via": "imessage"}, timeout=5).json()
+        except Exception as e:  # noqa: BLE001  (the API is down: said in the chat and logged, the halt stands)
+            out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if not out.get("ok"):
+            why = str(out.get("error"))[:160]
+            if not str(m.get("sender") or "").strip():   # is_from_me: chat/db.py gives sender ''; "no name" is not the cause
+                why = ("this message has no sender handle in chat.db (the dog's own account); resume from the page with your "
+                       "name, or type it from another phone")
+            log("chat", f"WARN resume word refused: {why}", by=hname(m["sender"]), err=str(out.get("error"))[:120])
+            self.say(f"halt-fail:{m['guid']}", f"couldn't resume: {why}")
+            return True
+        log("chat", "RESUME", by=hname(m["sender"]))
+        self.say(f"halt:{m['guid']}", f"resumed by {hname(m['sender'])}")
+        return True
+
+    def read_resume(self) -> None:
+        """Goal 00: field.walk's on_hold while the chat's own round holds on a person halt. The listener is inside that
+        walk, so it reads the chat here, about once a second (await_verdict's pattern at a who-dis stop): the resume word
+        from an allowed sender resumes the body; any other message is read, counted on a WARN line, and not acted on."""
+        if time.monotonic() - self._held_read < 1.0:
+            return
+        self._held_read = time.monotonic()
+        msgs = db.new_messages(self.guid, self.last)
+        if not msgs:
+            return
+        memory.store(self.guid, msgs)
+        self.last = msgs[-1]["rowid"]
+        n = sum(1 for m in msgs if m.get("text") and self.allowed(m) and self.resume_word(m))
+        if n < len(msgs):
+            log("chat", "WARN halted: read while the round holds, not the resume word, not acted on", n=len(msgs) - n)
 
     def verdict(self, m: dict[str, Any]) -> bool:
         """The chat answering "who dis?!" (intruder_alarm): "idk" and its kin mean a stranger, so "STRANGER DANGER!!!"
@@ -258,6 +308,8 @@ class Listener:
     def handle(self, m: dict[str, Any]) -> None:
         text = m["text"]
         if not text or not self.allowed(m):
+            return
+        if self.resume_word(m):   # 00: before verdict() and its IDK regex
             return
         if self.verdict(m):
             return

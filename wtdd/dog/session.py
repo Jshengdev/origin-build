@@ -31,9 +31,28 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+
+The person halt (goal 00, wtdd/dog/halt.py): the first drive, follow or recording starts the 'person-watch' thread,
+which runs person_tick() at halt.HZ. While a task moves the body (activity(): follow, or drive for a held key or a
+recording; 14 and 18a add scout and dispatch there; a follower paused at a stop is still, so the stop's own look is
+never inside a halt), a fresh <repo>/watch.json with a person box inside the band halts
+it on local code, no model: the follower cancelled as stop() cancels it and waited for (its dog.follow row lands
+first), _halt(), then one stop.person row. `halted` gates _set_vel and the drive loop, and drive, follow, the tilt
+and sit looks and any cmd outside halt.STILL_CMDS raise (the level look, BalanceStand and a frame, stays: the armed
+intruder alarm calls it) until resume_halt(by, via) (POST /dog/resume {by}, or the one word in the chat)
+writes stop.resumed; a halt read back from the ledger survives an API restart. A stale or missing watch.json, a frame
+the tick cannot read, or a tick that raises is one WARN line per change and state().person_watch for the page's
+chip, never a silent no-halt. UNVERIFIED on the dog:
+halt.NEAR_FRAC and halt.HALT_MS (00.1, 00.2); the frame read after watch.json can be one 4 Hz frame newer than its
+boxes (frame_sha names the bytes read); that the zero through the avoidance service stops a walking dog, and
+halt.STILL_MPS, halt.STILL_RADPS and halt.SETTLE_S, the read-back that decides it did (00.3: the velocity above
+STILL_MPS or |yaw_speed| above STILL_RADPS after the settle, or no velocity or yaw_speed in the read-back at all,
+stop.person is ok false and the halt stands; state_after.still_ms times the read-back that said still, and the eval's
+ceiling is on it).
 """
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import math
 import threading
@@ -41,8 +60,8 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from ..ledger import log, step
-from . import lidar, nav
+from ..ledger import log, rows, step
+from . import halt, lidar, nav
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -81,6 +100,7 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
             self.cal = json.loads(CAL_FILE.read_text())
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
@@ -89,6 +109,11 @@ class DogSession:
         self._follower: asyncio.Task | None = None
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
+        self.halted: dict[str, Any] | None = halt.last_halt(rows())   # 00: an unresumed stop.person in the ledger stands; a restart is not a named person
+        self._person_lock = threading.Lock()         # one person tick (or resume) at a time: the thread and a direct call
+        self._person_thread: threading.Thread | None = None
+        self._pw_last: str | None = None             # the last person-watch WARN, so it is logged once per change
+        self._pw_fail: str | None = None             # the tick's own failure (a frame it cannot read, a raise): freshness alone would say fresh
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -130,11 +155,15 @@ class DogSession:
 
     def state(self) -> dict[str, Any]:
         st = self.body.state() if self.body else None
+        pw = halt.freshness(halt.WATCH)
+        if pw["fresh"] and self._pw_fail:   # 00: a watch.json that is fresh but a tick that could not use it is no person watch
+            pw = {**pw, "fresh": False, "why": self._pw_fail}
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
-                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
+                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None,
+                "halted": self.halted, "person_watch": pw}   # 00: the page's STOPPED line and stale chip
 
     # ---- recording a route by driving (the trace of where it thinks it is becomes the map's path)
     def record(self, on: bool) -> dict[str, Any]:
@@ -151,6 +180,7 @@ class DogSession:
                 raise RuntimeError("no pose yet")
             self.rec = {"points": [pose["p"]], "marks": [], "started": time.time()}
             self._recorder = asyncio.run_coroutine_threadsafe(self._record(), self.loop)
+            self.person_watch()
             log("dog", "recording route", start=pose["p"])
             return {"active": True, "n": 1}
         if not self.rec:
@@ -247,6 +277,7 @@ class DogSession:
 
     # ---- following the drawn path
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
+        self._refuse_if_halted("follow")
         if self.cal is None:
             raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
         if self._follower and not self._follower.done():
@@ -265,6 +296,7 @@ class DogSession:
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
                              "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid)}
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
+        self.person_watch()
         return dict(self.follow_state)
 
     def resume(self) -> dict[str, Any]:
@@ -272,6 +304,8 @@ class DogSession:
         return dict(self.follow_state)
 
     def _set_vel(self, x: float, y: float, z: float) -> None:
+        if self.halted:   # 00: a follower tick racing the person halt must not re-arm the drive loop
+            return
         self.vel, self.vel_t = (x, y, z), time.monotonic()   # the drive loop publishes it and stops 0.6 s after the last refresh
 
     async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
@@ -329,6 +363,8 @@ class DogSession:
 
     # ---- commands
     def cmd(self, name: str, parameter: Any = None) -> int:
+        if name not in halt.STILL_CMDS:   # 00: a stop is always allowed, a move never while halted
+            self._refuse_if_halted(name)
         return self.run(self.with_body(lambda b: b.cmd(name, parameter)))
 
     def snapshot(self) -> bytes:
@@ -337,11 +373,13 @@ class DogSession:
 
     # ---- hold-to-move
     def drive(self, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict[str, Any]:
+        self._refuse_if_halted("drive")
         clamp = lambda v, k: max(-DRIVE_MAX[k], min(DRIVE_MAX[k], float(v)))  # noqa: E731
         self.vel = (clamp(x, "x"), clamp(y, "y"), clamp(z, "z"))
         self.vel_t = time.monotonic()
         if self.body is None:
             self.run(self._ensure())
+        self.person_watch()
         return {"vel": list(self.vel), "hold_s": DRIVE_HOLD_S}
 
     def stop(self) -> dict[str, Any]:
@@ -364,14 +402,16 @@ class DogSession:
         code = await b.cmd("StopMove")
         self.moving = False
         st = await b.fresh_state(required=True)
+        t = time.time()   # the read-back's wall clock: stop.person's latency_ms is this minus watch.json's own t
         v = st.get("velocity") or [0, 0, 0]
         log("dog", "halt", stop_code=code, avoid=bool(b._avoid), velocity=[round(x, 2) for x in v])
-        return {"stop_code": code, "velocity": v}
+        return {"stop_code": code, "velocity": v, "range_obstacle": st.get("range_obstacle"), "t": t,
+                "velocity_read": st.get("velocity"), "yaw_read": st.get("yaw_speed")}   # 00: as sent (None when none); person_tick judges on them
 
     async def _drive_loop(self) -> None:
         while True:
             try:
-                fresh = time.monotonic() - self.vel_t < DRIVE_HOLD_S and any(abs(v) > 0 for v in self.vel)
+                fresh = time.monotonic() - self.vel_t < DRIVE_HOLD_S and any(abs(v) > 0 for v in self.vel) and not self.halted
                 if fresh:
                     await self.body._tick("avoid" if self.body._avoid else "sport", *self.vel)
                     self.moving = True
@@ -388,6 +428,8 @@ class DogSession:
 
     # ---- the looks
     def look(self, kind: str = "tilt") -> dict[str, Any]:
+        if kind != "level":   # 00: level is BalanceStand and a frame, still; the armed intruder alarm calls it near a person
+            self._refuse_if_halted(f"look {kind}")
         if kind not in LOOKS:
             raise ValueError(f"look must be one of {LOOKS}, got {kind!r}")
         return self.run(self.with_body(lambda b: self._look(b, kind)))
@@ -450,3 +492,152 @@ class DogSession:
         raw = b.raw() or {}
         rpy = (raw.get("imu_state") or {}).get("rpy") or [0, 0, 0]
         return round(math.degrees(rpy[1]), 1)
+
+    # ---- the person halt (goal 00, wtdd/dog/halt.py): local code, no model in or out
+    def activity(self) -> str | None:
+        """What moves the body now, for the person watch: follow, or drive (a held key, or a route being recorded by
+        driving). 14 adds scout and 18a adds dispatch here, one line each. None = idle: nothing to halt. A follower
+        paused at a stop is not moving (vel 0 until the field's resume; a who-dis stop has a person in frame by design):
+        the tick after resume() halts it if the person is still in the band."""
+        if self._follower and not self._follower.done() and self.follow_state.get("stopped_at") is None:
+            return "follow"
+        if self.rec or (time.monotonic() - self.vel_t < DRIVE_HOLD_S and any(abs(v) > 0 for v in self.vel)):
+            return "drive"
+        return None
+
+    def _refuse_if_halted(self, what: str) -> None:
+        if self.halted:
+            raise RuntimeError(f"halted: person in frame (was {self.halted.get('was')}); {what} refused; POST /dog/resume {{by}} first")
+
+    def person_watch(self) -> None:
+        """Starts the 'person-watch' thread once (07's objects-thread pattern): person_tick at halt.HZ until the session
+        loop is closed; a raise is logged once per change in each stretch of movement and is state().person_watch's
+        why, never silent, never fatal."""
+        with DogSession._lock:   # several HTTP threads may start it at once: one thread
+            if self._person_thread is None:
+                self._person_thread = threading.Thread(target=self._person_loop, name="person-watch", daemon=True)
+                self._person_thread.start()
+
+    def _person_loop(self) -> None:
+        while not self.loop.is_closed():
+            try:
+                self.person_tick()
+            except Exception as e:  # noqa: BLE001  (logged once per change in each stretch and on the page; the next tick tries again)
+                err = f"person watch tick FAILED: {type(e).__name__}: {str(e)[:120]}"
+                if err != self._pw_last:   # _pw_last, which an idle tick clears: each stretch of movement logs its own
+                    log("halt", "WARN " + err)
+                self._pw_fail = self._pw_last = err
+            time.sleep(1 / halt.HZ)
+
+    def person_tick(self) -> dict[str, Any] | None:
+        """One tick: while activity() moves the body, a fresh watch.json with a person box in the band (halt.near) halts
+        it: halted set first (it gates _set_vel), the follower cancelled as stop() does and waited for, the velocity
+        zeroed, then _halt() inside ONE stop.person row. Idle, already halted, far or no person: nothing. Stale or missing
+        watch.json: one WARN line per change in each stretch of movement, and nothing (the page shows the chip). A frame
+        it cannot read, or a raise, is also the chip (_pw_fail) until a tick gets through. A failed _halt is the row's ok
+        false and the halt stays set; so is a body whose read-back velocity is still above halt.STILL_MPS, or
+        |yaw_speed| above halt.STILL_RADPS (a halt mid-turn), halt.SETTLE_S after the first read-back
+        (state_after.velocity_settled, yaw_speed_settled), or whose read-backs carry no velocity or no yaw_speed: ok is
+        what the device says, not that _halt() returned. state_after.velocity and yaw_speed are as read (None when none
+        came, never main's default); state_after.still_ms is the read-back that said still minus watch.json's t (the
+        settle read when one ran)."""
+        with self._person_lock:
+            was = self.activity()
+            if was is None:
+                self._pw_last = None   # idle ends a stretch: the next stretch of movement logs its own WARN
+            if self.halted or was is None:
+                return None
+            fr = halt.freshness(halt.WATCH)
+            why = fr["why"]
+            if not fr["fresh"]:
+                if why != self._pw_last:
+                    log("halt", "WARN no person watch: " + why, age_ms=fr["age_ms"], was=was)
+                self._pw_last = why
+                return None
+            d: dict[str, Any] = {}
+            try:
+                d = json.loads(halt.WATCH.read_text())
+                data, W, H = halt.frame(d["file"])
+            except Exception as e:  # noqa: BLE001  (no frame is no person watch: WARN once per change and the page's chip, never a silent no-halt)
+                why = f"frame unreadable: {Path(str(d.get('file') or halt.WATCH)).name}: {type(e).__name__}"   # the file named; the full text is on the log line
+                if why != self._pw_last:
+                    log("halt", "WARN no person watch: " + why, err=str(e)[:120], was=was)
+                self._pw_last = self._pw_fail = why
+                return None
+            box = halt.near(d.get("boxes") or [], W, H)   # a raise here is _person_loop's FAILED, on the page too
+            if self._pw_last or self._pw_fail:
+                log("halt", "person watch back", age_ms=fr["age_ms"], was=was)
+            self._pw_last = self._pw_fail = None
+            if box is None:
+                return None
+            self.halted = {"was": was, "pending": True}   # first: from here no tick re-arms the drive loop
+            sha = hashlib.sha256(data).hexdigest()
+            fs = self.follow_state
+            cancelled = bool(self._follower and not self._follower.done())
+            if cancelled:   # exactly as stop() cancels it (a follower paused at a stop too, when a held key is the drive)
+                self._follower.cancel()
+            self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
+            if cancelled:   # its own finally halts and writes its dog.follow row; that row lands before stop.person
+                t0 = time.monotonic()
+                while not (fs.get("error") or fs.get("done")) and time.monotonic() - t0 < 3.0:
+                    time.sleep(0.01)
+                if not (fs.get("error") or fs.get("done")):
+                    log("halt", "WARN the follower did not end in 3 s; halting anyway")
+            copy = halt.PICTURES / f"stop-person-{sha[:12]}.jpg"
+            args = {"box": box, "frame_sha": sha, "file": str(copy), "t_watch": d["t"],
+                    "band": {"near_frac": halt.NEAR_FRAC, "h_frac": round((box["xyxy"][3] - box["xyxy"][1]) / H, 3)},
+                    "was": was, "shift_id": halt.shift_id()}
+            r: dict[str, Any] = {}
+            try:
+                with step("dog", "stop.person", "local", args, self.body.state() if self.body else None) as r:
+                    h = self.run(self._halt(), timeout=10)
+                    r["state_after"] = {"latency_ms": round((h["t"] - d["t"]) * 1000), "range_obstacle": h["range_obstacle"],
+                                        "velocity": h["velocity_read"], "yaw_speed": h["yaw_read"], "stop_code": h["stop_code"],
+                                        "map": self.map_pose()}
+                    try:   # the page's thumbnail: the frame the halt was decided on; ok stays what the read-back said
+                        copy.parent.mkdir(parents=True, exist_ok=True)
+                        copy.write_bytes(data)
+                    except Exception as e:  # noqa: BLE001  (the body is stopped, only the picture failed: on the row, the log line and the page)
+                        r["state_after"]["file_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+                        log("halt", "WARN thumbnail not written", err=r["state_after"]["file_error"])
+                    v, w, t_still = h["velocity_read"], h["yaw_read"], h["t"]   # 00.3: ok only when both read back still; none is not
+                    if v is None or w is None or max(abs(x) for x in v) > halt.STILL_MPS or abs(w) > halt.STILL_RADPS:
+                        time.sleep(halt.SETTLE_S)
+                        st = self.run(self.body.fresh_state(required=True), timeout=10)
+                        v, w, t_still = st.get("velocity"), st.get("yaw_speed"), time.time()
+                        r["state_after"]["velocity_settled"], r["state_after"]["yaw_speed_settled"] = v, w
+                        if v is None:
+                            raise RuntimeError(f"no velocity in the read-back: the body never said it is still (first read-back "
+                                               f"{h['velocity_read']}, again {halt.SETTLE_S} s later)")
+                        if w is None:
+                            raise RuntimeError(f"no yaw_speed in the read-back: the body never said it stopped turning (first "
+                                               f"read-back {h['yaw_read']}, again {halt.SETTLE_S} s later)")
+                        if max(abs(x) for x in v) > halt.STILL_MPS:
+                            raise RuntimeError(f"body still moving after the halt: velocity {v} above STILL_MPS {halt.STILL_MPS} m/s "
+                                               f"{halt.SETTLE_S} s after the first read-back {h['velocity_read']}")
+                        if abs(w) > halt.STILL_RADPS:
+                            raise RuntimeError(f"body still turning after the halt: yaw_speed {w} above STILL_RADPS {halt.STILL_RADPS} "
+                                               f"rad/s {halt.SETTLE_S} s after the first read-back {h['yaw_read']}")
+                    r["state_after"]["still_ms"] = round((t_still - d["t"]) * 1000)   # read back still: the eval's clock
+            except Exception as e:  # noqa: BLE001  (the row has it; the halt stays set, the page shows it FAILED)
+                log("halt", "stop.person FAILED: the halt stays set", err=f"{type(e).__name__}: {str(e)[:120]}")
+            self.halted = halt.summary(r)
+            log("halt", "STOPPED: person in frame", was=was, latency_ms=self.halted["latency_ms"], still_ms=self.halted["still_ms"],
+                h_frac=args["band"]["h_frac"], ok=self.halted["ok"])
+            return self.halted
+
+    def resume_halt(self, by: str, via: str = "page") -> dict[str, Any]:
+        """The only way out of a halt: a named person on the page (via page) or the one word in the chat (via imessage,
+        by = the sender). One stop.resumed row, refused ones too (blank name, another path, no halt). Moving again is
+        the person's next act; the cancelled task is not continued."""
+        with self._person_lock, step("dog", "stop.resumed", "local", {"by": by, "via": via, "shift_id": halt.shift_id()}, self.halted) as r:
+            if via not in halt.VIA:
+                raise ValueError(f"a halt resumes only via {' or '.join(halt.VIA)}, not {via!r}")
+            if not str(by or "").strip():
+                raise ValueError("a halt resumes only with a person's name")
+            if not self.halted:
+                raise RuntimeError("not halted: nothing to resume")
+            self.halted = None
+            r["state_after"] = {"halted": False}
+        log("halt", "resumed", by=by, via=via)
+        return {"halted": False, "by": by, "via": via}
