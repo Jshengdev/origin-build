@@ -23,7 +23,8 @@ The contract under test:
                     no_plan that GET added is never written into ui/map.json; without the flag it is refused (400)
   POST /dog/follow  under the flag the room rule does not refuse (the next refusal is the session's "not calibrated");
                     without the flag it is refused naming the room
-  ui/index.html     the house.svg layer is conditioned on no_plan, and the `no plan · site` chip is on the page
+  ui/index.html     the house.svg layer is conditioned on no_plan, and the `no plan · site` chip is on the page;
+                    roomOf is defined, so the page's save sends POST /map at all (night-1 contracts F patch 2)
 """
 from __future__ import annotations
 import io
@@ -223,6 +224,12 @@ class Page(unittest.TestCase):
         img = [l for l in html.splitlines() if 'href="house.svg"' in l]
         self.assertEqual(len(img), 1, img)
         self.assertIn("no_plan", img[0], "house.svg is drawn only when GET /map carries no no_plan")
+
+    def test_the_page_save_can_send_post_map(self):
+        html = (config.ROOT / "ui" / "index.html").read_text()
+        self.assertIn("roomOf(", html, "the page's save (withRooms) calls roomOf")
+        self.assertTrue("const roomOf = " in html, "roomOf is defined, else save throws ReferenceError and no POST /map is sent "
+                      "(Needs the dog 14.6: a zone saved on the no-plan site)")
 
 
 if __name__ == "__main__":

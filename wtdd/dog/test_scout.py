@@ -32,7 +32,8 @@ The contract under test:
   POST /dog/scout {z?, target_deg?, timeout_s?}   {ok, scout: the live state}; a refusal is a 500 with the error;
                             POST /dog/stop cancels it
   DogSession.scout_state / state()["scout"]   {active, turned_deg, frames, cells_added, seconds, ranges, error}; present
-                            (active false) before any scout, so the page can always read it
+                            (active false) before any scout, so the page can always read it, on a fresh session with
+                            no dog_cal.json too (GET /dog/state 200: night-1 contracts F patch 3, nothing preset here)
   stderr                    one `[wtdd:dog] scout <turned> of <target> ...` line per second of spin, with frames and cells
   DogSession.calibrate(p, heading, source="tap")   the page's tie carries args.source "tap"; the scout's "dropoff"
   DogSession.stop()         cancels a running scout like the follower; its row says stopped
@@ -50,7 +51,8 @@ The contract under test:
                             and `why` both saying "not closed".
   ui/index.html             one component between `// 14 · scout-spin · start` and `// 14 · scout-spin · end`: the
                             'scout: spin and draw' button (POST /dog/scout) with the honest title ("the LiDAR sees 360
-                            already ..."), the `scout · ...` / `scouted · ...` / `scout FAILED: ...` status fragment
+                            already ..."), the `scout · ...` / `scouted · ...` / `scout FAILED: ...` status fragment;
+                            the button does not wait for dog.connected (the press connects, like the drive keys)
   python -m wtdd.dog.scout --replay <npz> --png <out> [--threshold N] [--save <json>] [--frames N]
                             the driver decoder on each stored blob -> one grid from ONE origin -> a PNG; one
                             `[wtdd:scout] frame <k> ... cells=+<added>` stderr line per frame; a summary naming every
@@ -62,6 +64,7 @@ The contract under test:
 from __future__ import annotations
 import asyncio
 import concurrent.futures
+import http.client
 import inspect
 import io
 import json
@@ -590,6 +593,28 @@ class Api(Harness):
         self.assertEqual(tuple(s.vel), (0.0, 0.0, 0.0))
 
 
+class Fresh(Harness):
+    """Beat 1.1 as the page meets it: a fresh API at drop-off, no dog_cal.json, nothing preset on the session."""
+
+    def test_a_fresh_session_with_no_tie_answers_get_dog_state(self):
+        self.assertFalse(session.CAL_FILE.exists(), "the drop-off case: no tie on disk")
+        s = session.DogSession()
+        s.body = FakeBody(frames=self.frames)
+        self.s = s
+        self.stack.enter_context(mock.patch.object(session.DogSession, "_inst", s))
+        base = self.serve()
+        try:
+            with urllib.request.urlopen(base + "/dog/state", timeout=10) as r:
+                code, d = r.status, json.loads(r.read())
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as e:
+            self.fail(f"GET /dog/state gave the page no answer on a fresh API with no tie: {e!r}")
+        self.assertEqual(code, 200, d)
+        self.assertEqual((d["calibrated"], d["recheck"]), (False, False), "nothing tied, so nothing to re-check")
+        self.assertTrue(PAGE <= set(d["scout"]), sorted(d["scout"]))
+        self.assertFalse(d["scout"]["active"])
+        self.assertFalse(s.state()["scout"]["active"])
+
+
 class Page(unittest.TestCase):
     def test_the_button_and_its_honest_title_are_on_the_remote(self):
         html = (ROOT / "ui" / "index.html").read_text()
@@ -597,6 +622,12 @@ class Page(unittest.TestCase):
                        "the LiDAR sees 360 already", "/dog/scout", "scouted · ", "scout FAILED"):
             self.assertTrue(needle in html, f"ui/index.html lacks {needle!r}")
         self.assertFalse("maps the room" in html, "never say the spin maps the room")
+
+    def test_the_button_does_not_wait_for_another_command_to_connect(self):
+        html = (ROOT / "ui" / "index.html").read_text()
+        block = html.split("// 14 · scout-spin · start")[1].split("// 14 · scout-spin · end")[0]
+        self.assertFalse("dog?.connected" in block, "POST /dog/scout connects itself (a connect failure is its FAILED row): "
+                         "one press at drop-off, not a second command first")
 
 
 class Fixture(unittest.TestCase):
