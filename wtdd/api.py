@@ -27,6 +27,7 @@
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
   POST /cam/<id>/frame  raw image/jpeg   a fixed camera's frame (python -m wtdd.cam): saved, detected out of process, cam.frame + cam.detect rows, the who-dis ask when armed
   GET  /cam                       every fixed camera's newest detections {<id>: {classes, boxes, ms, t, age_ms, error?}}; GET /cam/<id>/frame.jpg its raw frame
+  POST /map cameras[] (23)        each camera validated (unique postable id, pt inside 1060x1540), zone recomputed from pt (null + WARN in no drawn zone), 400 on a bad camera; one map.camera_placed row per new or moved camera
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -169,11 +170,28 @@ class H(BaseHTTPRequestHandler):
             if problems and data.get("path"):   # an unrunnable path is refused, with the points named; the page keeps the edit
                 log("api", "map NOT saved", problems=len(problems))
                 return self._json(400, {"ok": False, "error": "not saved: " + "; ".join(problems)})
+            # 23 · camera-placement · start
+            from . import cam
+            before = []
+            if "cameras" in data:   # 09's cameras[]: every id and pt checked, every zone recomputed from its pt; a bad camera saves nothing
+                try:
+                    data["cameras"] = cam.validate_cameras(data["cameras"], data.get("zones", []))
+                except ValueError as e:
+                    log("api", "map NOT saved", camera=str(e))
+                    return self._json(400, {"ok": False, "error": f"not saved: {e}"})
+                before = (json.loads(MAP.read_text()).get("cameras") or []) if MAP.exists() else []
+            # 23 · camera-placement · end
             if MAP.exists():
                 MAP.with_name("map.prev.json").write_text(MAP.read_text())   # the previous route survives one overwrite
             MAP.write_text(json.dumps(data, indent=2) + "\n")
             log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])))
-            return self._json(200, {"ok": True, "_version": int(MAP.stat().st_mtime)})
+            if "cameras" in data:   # 23 · camera-placement: the receipt for each camera the save moved
+                try:
+                    cam.placed(before, data["cameras"], MAP)
+                except Exception as e:  # noqa: BLE001  (the map is saved; the missing receipt is reported, never hidden)
+                    log("api", "map saved, placement row FAILED", err=f"{type(e).__name__}: {str(e)[:100]}")
+                    return self._json(500, {"ok": False, "error": f"saved, but the placement row failed: {type(e).__name__}: {e}"})
+            return self._json(200, {"ok": True, "_version": int(MAP.stat().st_mtime), **({"cameras": data["cameras"]} if "cameras" in data else {})})
         if u.path in ("/dog/drive", "/dog/stop", "/dog/calibrate", "/dog/follow", "/dog/resume", "/dog/avoid", "/dog/record", "/dog/mark", "/dog/lidar"):
             import math
             from .dog import nav

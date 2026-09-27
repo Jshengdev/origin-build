@@ -10,6 +10,11 @@ The contract is wtdd/cam/test_cam.py; the laptop side is wtdd/cam/__main__.py (p
   detect_file(frame, out)  the detector subprocess, dog_say.boxed's handshake, keeping the boxes
   person_seen(...)         the who-dis hook: None without a person box; else asked, or why not (disarmed, cooldown)
   read_all()               every camera's newest <id>.json plus age_ms (GET /cam)
+  zone_of(pt, zones)       the first drawn zone without nogo: true that holds pt (field.inside), else None (item 23)
+  validate_cameras(cameras, zones)   ui/map.json cameras[] as POST /map saves it: ids unique and postable (ID), pt a
+                           pair inside VIEW, zone recomputed from pt; ValueError naming the camera or the zone (zones a
+                           list of {name, poly}: never a TypeError the API would drop); no zone = None + one WARN
+  placed(before, cameras, path)   after the save: one map.camera_placed row per camera whose pt is new or moved
 
 Rows. cam.frame {cam, shift_id, bytes} -> state_after {file}; FAILED on a bad id or bytes that are not a JPEG (no
 detector run, no cam.detect row). cam.detect {cam, shift_id, model, classes, boxes (at most 12)} -> state_after
@@ -19,10 +24,16 @@ is a two-second event. shift_id is WTDD_SHIFT or today's date. A person raises a
 camera per COOLDOWN_S, keyed cam:<id>:<epoch> so the chat's claim refuses a second post on the same key; the cooldown
 starts before the ask (wtdd/watch.py's order), so a failed ask waits for the next window instead of re-firing every frame.
 The hook is the one call in person_seen(): when item 02's decide path lands, it is re-pointed there in one line.
+A camera is placed on the map from the remote like a lamp (item 23, wtdd/cam/test_place.py): one map.camera_placed row
+{id, pt, zone, shift_id} per camera whose pt is new or moved, state_before {pt, zone} of that id on the previous
+ui/map.json (None for a new camera, or when that file's cameras are null or lack an id), state_after {pt, zone} read
+back from the saved file inside the step (a failed read-back is an ok=False row, then the API's 500); none when no pt
+moved (a zone-only change included), none on a refused save. 08's roster reads the zone.
 
 UNVERIFIED: nothing here has met a real laptop or the real detector on a real frame (the unit test stubs the
 subprocess; test_cam's LiveDetector runs it only where yolo11n.pt sits). The detector's latency per frame on the Mac
-under the API's load, and whether 0.5 Hz keeps up, are what the first live run measures."""
+under the API's load, and whether 0.5 Hz keeps up, are what the first live run measures. A camera's pt is a click on
+the plan, not a measurement; where the Mac really sits is confirmed on Sunday."""
 from __future__ import annotations
 import json
 import os
@@ -39,6 +50,7 @@ from ..config import ROOT, maybe
 
 ARMED = ROOT / "intruder.on"            # the file wtdd/watch.py and POST /intruder use: the remote's intruder watch arms both eyes
 ID = re.compile(r"[a-z0-9_-]{1,32}")    # the id becomes a file name
+VIEW = (1060, 1540)                      # the remote's map viewBox and house.svg's size: a camera's pt lives inside it
 _last: dict[str, float] = {}             # camera id -> when it last asked
 _lock = threading.Lock()                 # the API serves posts on threads
 
@@ -138,4 +150,72 @@ def read_all() -> dict:
     out = {}
     for f in sorted(cams().glob("*.json")):
         out[f.stem] = {**json.loads(f.read_text()), "age_ms": round((time.time() - f.stat().st_mtime) * 1000)}
+    return out
+
+
+def zone_of(pt, zones) -> str | None:
+    """The first drawn zone without nogo: true that holds pt under field.inside, else None: a no-go zone never holds a camera."""
+    from ..field import inside   # field imports the ledger: inside the function, the 09-2 import order
+    return next((z["name"] for z in zones if not z.get("nogo") and inside(pt, z["poly"])), None)
+
+
+def _pair(v) -> bool:
+    """[x, y]: two numbers (a bool is not one)."""
+    return isinstance(v, (list, tuple)) and len(v) == 2 and all(type(x) in (int, float) for x in v)
+
+
+def validate_cameras(cameras, zones) -> list[dict]:
+    """cameras[] as POST /map saves it, or ValueError naming the first bad zone or camera (then nothing is saved). The
+    zone is always recomputed from pt, whatever the page sent; a camera in no zone is kept with zone None and one WARN
+    line, written only once the whole list has passed (08's roster refuses it later, loud)."""
+    from ..ledger import log
+    if not isinstance(zones, list):   # zone_of walks every zone: a malformed one is a named 400, never a crash that drops the socket
+        raise ValueError(f"zones is a {type(zones).__name__}, not a list")
+    for n, z in enumerate(zones, 1):
+        if not isinstance(z, dict) or not isinstance(z.get("name"), str) or not z["name"]:
+            raise ValueError(f"zone {n} has no name")
+        if not isinstance(z.get("poly"), list) or not all(map(_pair, z["poly"])):
+            raise ValueError(f"zone {z['name']}: poly must be a list of [x, y] pairs")
+    if not isinstance(cameras, list):
+        raise ValueError(f"cameras is a {type(cameras).__name__}, not a list")
+    seen: set[str] = set()
+    for n, c in enumerate(cameras, 1):
+        if not isinstance(c, dict):
+            raise ValueError(f"camera {n} is not an object")
+        cid, pt = c.get("id"), c.get("pt")
+        if not isinstance(cid, str) or not cid:
+            raise ValueError(f"camera {n} has no id")
+        if not ID.fullmatch(cid):
+            raise ValueError(f"camera {cid[:64]!r}: id must match [a-z0-9_-]{{1,32}} (POST /cam/<id>/frame would refuse it)")
+        if cid in seen:
+            raise ValueError(f"camera {cid}: duplicate id")
+        seen.add(cid)
+        if not _pair(pt):
+            raise ValueError(f"camera {cid}: pt must be [x, y], two numbers (got {json.dumps(pt)[:40]})")
+        if not (0 <= pt[0] <= VIEW[0] and 0 <= pt[1] <= VIEW[1]):
+            raise ValueError(f"camera {cid}: pt {json.dumps(pt)} is outside the map (0..{VIEW[0]}, 0..{VIEW[1]})")
+    out = [{**c, "pt": list(c["pt"]), "zone": zone_of(c["pt"], zones)} for c in cameras]
+    for c in out:
+        if c["zone"] is None:
+            log("cam", f"camera {c['id']} placed in no zone: the roster will refuse")
+    return out
+
+
+def placed(before, cameras: list[dict], path: Path) -> list[dict]:
+    """After POST /map wrote `path` from `cameras` (validate_cameras' list): one map.camera_placed row per camera whose pt
+    is new or moved against `before` (the previous file's cameras as it held them; a hand-added camera with no id there
+    is no camera to compare against), each read back from the saved file inside its own step, so a failed read-back is
+    an ok=False row before the API's 500. A save that moves no camera writes no row."""
+    from ..ledger import step
+    old = {c.get("id"): c for c in before if isinstance(c, dict)} if isinstance(before, list) else {}
+    out = []
+    for c in cameras:
+        was = old.get(c["id"])
+        if was is not None and was.get("pt") == c["pt"]:
+            continue
+        with step("map", "map.camera_placed", "api", {"id": c["id"], "pt": c["pt"], "zone": c["zone"], "shift_id": shift_id()},
+                  None if was is None else {"pt": was.get("pt"), "zone": was.get("zone")}) as r:
+            saved = {x["id"]: x for x in json.loads(path.read_text())["cameras"]}[c["id"]]   # the receipt is what the file says
+            r["state_after"] = {"pt": saved["pt"], "zone": saved["zone"]}
+        out.append(r)
     return out
