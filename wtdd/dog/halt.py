@@ -18,9 +18,9 @@ state read back), one stop.person row whose latency_ms is the read-back's wall c
 
 UNVERIFIED on the real dog: NEAR_FRAC (a box-height proxy for distance, not a range; a tape at 1 m and 2 m sets it,
 00.1), HALT_MS (the eval's ceiling, 00.2), STILL_MPS and SETTLE_S (what a stopped body reads back, 00.3: the session
-fails the stop.person row when the velocity is still above STILL_MPS SETTLE_S after the first read-back). watch.py
-rewrites watch.jpg about 4 times a second, so the frame read right after watch.json can be one frame newer than the
-boxes (frame_sha names the bytes actually read). The detector writes watch.detect only after its HOLD frames, so a
+fails the stop.person row when the velocity is still above STILL_MPS SETTLE_S after the first read-back, or when no
+read-back carries a velocity). watch.py rewrites watch.jpg about 4 times a second, so the frame read right after
+watch.json can be one frame newer than the boxes (frame_sha names the bytes actually read). The detector writes watch.detect only after its HOLD frames, so a
 person who enters already near can be halted before that row lands, and the eval then grades fail: the gate as
 written, not loosened.
 """
