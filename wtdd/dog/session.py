@@ -307,7 +307,9 @@ class DogSession:
         frame, points_px, why?}; switching on hands every frame to the session grid (_on_frame). localize is the
         re-correction's {applied, rejected, unmatched, skipped, corr, last}. points_px is the newest frame's floor-to-head
         band in map pixels through the correction and the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
-        frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
+        frame yet, the stream is off, or the dog is not calibrated. known (S13, the memory toggle) is parallel to it:
+        True where the point's grid cell is already a wall (seen occupancy.THRESHOLD+ times, this frame included), False
+        where it is new; with no session grid it is absent and `why` says so. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if on is False:   # S7: the stream stopped: the pending summary is written
@@ -330,7 +332,11 @@ class DogSession:
             return {**out, "points_px": [], "why": "not calibrated"}
         xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
         x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
-        return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
+        out = {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
+        with self._grid_lock:   # S13 known: the grid's own cell for each point to_map_points kept (its stride), in the corrected frame both are drawn from
+            if (g := self.grid) is None:
+                return {**out, "why": "no grid: nothing remembered to tell a known wall from a new one"}
+            return {**out, "known": [g.cell(*p) >= occupancy.THRESHOLD for p in xy[::max(1, -(-len(xy) // lidar.MAX_POINTS))]]}
 
     # ---- the occupancy grid (wtdd/dog/occupancy.py): every LiDAR window this session, accumulated in odometry metres
     def _on_frame(self, d: dict) -> None:

@@ -21,8 +21,9 @@
   POST /dog/avoid {on}            the dog's obstacle avoidance on/off with read-back (the follower turns it on itself)
   POST /dog/record {on}           on: record the believed pose while driving; off: the trace becomes ui/map.json's path + stops
   POST /dog/mark {look?, say?, ask?}   a stop with its action (the look kind, post or not, ask = the intruder check) at the current believed position, while recording
-  GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, why?} (polled every 500 ms while
-                                  connected); POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
+  GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, known?, why?} (polled every 500 ms while
+                                  connected); known [bool per points_px entry]: its cell already a wall in the session grid at THRESHOLD, absent
+                                  with a why when there is no grid; POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
   GET  /dog/frame.jpg             the newest camera frame (no ledger row; the page's live view), 503 without a dog
   GET  /dog/scale                 the map scale in force {px_per_m, source: default | WTDD_PX_PER_M | dog_cal.json | page} (a read, no row)
   POST /dog/scale {px_per_m}      the page's slider: one dog.scale row, saved in dog_cal.json beside the tie; a bad value is a 400 naming it
