@@ -45,6 +45,8 @@ Fix round 5 (the independent review's probes):
                  the walk before s.follow: one FAILED dispatch.decided naming it, no follow, its pending.json untouched.
   AutoStamped    WTDD_DISPATCH_AUTO is on every dispatch.decided row (N2-D), including approval()'s refusal and the
                  camera hook's FAILED hand-off (probe 5).
+  OneMount       the remote mounts Dispatch once (the route inside the map and the block under it), so the page asks
+                 GET /dispatch once a second, not twice.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -508,6 +510,12 @@ class AutoStamped(Fresh):
             self.assertFalse(out["ok"], out)
             (r,) = td.rows_since(n0, "dispatch.decided")
             self.assertIs(r["args"].get("auto"), True, r["args"])
+
+
+class OneMount(unittest.TestCase):
+    def test_the_remote_mounts_dispatch_once(self):
+        page = (td.ROOT / "ui" / "index.html").read_text()
+        self.assertEqual(page.count("<${Dispatch}"), 1, "one mount: one GET /dispatch a second")
 
 
 if __name__ == "__main__":
