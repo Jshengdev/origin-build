@@ -1,0 +1,1370 @@
+{
+ "what": "detector outputs on five real Go2 frames: boxes and numbers only, never the frames",
+ "generated_at": "2026-09-26T16:48:53",
+ "generated_by": "docs/evidence/night-2/detectors.py",
+ "wording": "regenerated 2026-09-26 on this Mac by docs/evidence/night-2/detectors.py from the scratch bench weights of the same day (/tmp/ovworld, /tmp/ovbench; not committed) on five real Go2 frames of 2026-09-13 (~/Pictures/wtdd; identified by sha256, not committed). A scratch bench on this Mac, not a run on the dog.",
+ "machine": {
+  "platform": "macOS-26.4-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "python": "3.13.13",
+  "ultralytics": "8.4.163",
+  "torch": "2.14.0",
+  "mps_available": true
+ },
+ "detect": {
+  "function": "wtdd.watch.detect",
+  "conf": 0.35,
+  "box_keys": [
+   "name",
+   "conf",
+   "xyxy"
+  ],
+  "timing": "one timed predict per frame after one warm-up"
+ },
+ "frames": [
+  {
+   "name": "look-tilt",
+   "sha256": "02494854aa098bdd2e96db867d0696e747a197f1c2d7f7ac6d1d6eda6f8941be",
+   "bytes": 83152,
+   "width": 1280,
+   "height": 720
+  },
+  {
+   "name": "look-down",
+   "sha256": "668381a51647b58de8589d884eadfbe0d78a3ffb9e3a136b5a9701ab8da1afef",
+   "bytes": 78664,
+   "width": 1280,
+   "height": 720
+  },
+  {
+   "name": "dog-live",
+   "sha256": "72317fe803564ff7c367bf5f7b31997f6e55aba6cdb254bc5218fbfe38ebe962",
+   "bytes": 164323,
+   "width": 1280,
+   "height": 720
+  },
+  {
+   "name": "look-level",
+   "sha256": "a6a64bbb79ecbe308a095c83499a0d26ae676a66800f28cb81ee1f582a06fb6d",
+   "bytes": 76557,
+   "width": 1280,
+   "height": 720
+  },
+  {
+   "name": "dog-sit-look",
+   "sha256": "2323c2e7eb5db73d1bd89e1f2cd112f715d077843e1afadbe89a225053973482",
+   "bytes": 75794,
+   "width": 1280,
+   "height": 720
+  }
+ ],
+ "models": [
+  {
+   "key": "yolo11n",
+   "file": "yolo11n.pt",
+   "what": "COCO-80, the shipped detector (wtdd/watch.py MODEL)",
+   "present": true,
+   "bytes": 5613764,
+   "sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
+   "load_ms": 21,
+   "names_n": 80,
+   "names": [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush"
+   ],
+   "warmup_ms": 916,
+   "device": "cpu",
+   "loaded": true
+  },
+  {
+   "key": "yoloe-11s-site",
+   "file": "yoloe-11s-site.pt",
+   "what": "YOLOE-11s-seg, the site list baked in (scratch bench 2026-09-26)",
+   "present": true,
+   "bytes": 27831432,
+   "sha256": "cde05cb977e9107d42dc30fea2bf42051f6f40b188a7dcecba82c28bc170b910",
+   "load_ms": 21,
+   "names_n": 14,
+   "names": [
+    "person",
+    "traffic cone",
+    "ladder",
+    "pallet",
+    "cable",
+    "spill",
+    "open manhole",
+    "trench",
+    "fire extinguisher",
+    "hard hat",
+    "shovel",
+    "hose",
+    "barrier tape",
+    "puddle"
+   ],
+   "warmup_ms": 79,
+   "device": "cpu",
+   "loaded": true
+  },
+  {
+   "key": "yoloe-11s-house",
+   "file": "yoloe-11s-house.pt",
+   "what": "YOLOE-11s-seg, the house list baked in (scratch bench 2026-09-26)",
+   "present": true,
+   "bytes": 27829985,
+   "sha256": "2fcebfaa5a8fb39d1b1cd1c8f771507b2f19db15750bfb3057c14d0c9a972581",
+   "load_ms": 21,
+   "names_n": 13,
+   "names": [
+    "person",
+    "cup",
+    "sock",
+    "clothes",
+    "backpack",
+    "bag",
+    "chair",
+    "couch",
+    "laptop",
+    "bottle",
+    "blanket",
+    "trash",
+    "cat"
+   ],
+   "warmup_ms": 69,
+   "device": "cpu",
+   "loaded": true
+  },
+  {
+   "key": "yolov8s-world-site",
+   "file": "yolov8s-world-site.pt",
+   "what": "YOLOv8s-worldv2, the site list baked in (scratch bench 2026-09-26)",
+   "present": true,
+   "bytes": 328514705,
+   "sha256": "255a8a8cbda6fbae5281b3f023df2e97ebc57b55d8ec188a253d7c9e4fc6ef4d",
+   "load_ms": 161,
+   "names_n": 14,
+   "names": [
+    "person",
+    "traffic cone",
+    "ladder",
+    "pallet",
+    "cable",
+    "spill",
+    "open manhole",
+    "trench",
+    "fire extinguisher",
+    "hard hat",
+    "shovel",
+    "hose",
+    "barrier tape",
+    "puddle"
+   ],
+   "warmup_ms": 106,
+   "device": "cpu",
+   "loaded": true
+  },
+  {
+   "key": "yolov8s-world-house",
+   "file": "yolov8s-world-house.pt",
+   "what": "YOLOv8s-worldv2, the house list baked in (scratch bench 2026-09-26)",
+   "present": true,
+   "bytes": 328513319,
+   "sha256": "3da2cb43c2e5539c2280fcf14845124d30f46cf8a8fe6067f9fa64526f2aa3cd",
+   "load_ms": 101,
+   "names_n": 13,
+   "names": [
+    "person",
+    "cup",
+    "sock",
+    "clothes",
+    "backpack",
+    "bag",
+    "chair",
+    "couch",
+    "laptop",
+    "bottle",
+    "blanket",
+    "trash",
+    "cat"
+   ],
+   "warmup_ms": 83,
+   "device": "cpu",
+   "loaded": true
+  },
+  {
+   "key": "yoloe-11s-pf",
+   "file": "yoloe-11s-seg-pf.pt",
+   "what": "YOLOE-11s-seg prompt-free, LVIS+Objects365 names (scratch bench 2026-09-26)",
+   "present": true,
+   "bytes": 27948751,
+   "sha256": "292bdf157a9ec7315f34b567cb93467c5043cd1889a1cc18abbfdeb88d7a948d",
+   "load_ms": 31,
+   "names_n": 4585,
+   "names": "4585 names (not listed)",
+   "warmup_ms": 95,
+   "device": "cpu",
+   "loaded": true
+  }
+ ],
+ "person_recall": {
+  "yolo11n": {
+   "frames_with_person": 5,
+   "of": 5,
+   "person_conf_by_frame": {
+    "look-tilt": 0.91,
+    "look-down": 0.81,
+    "dog-live": 0.91,
+    "look-level": 0.5,
+    "dog-sit-look": 0.9
+   },
+   "rule": "a box named exactly 'person' at conf >= 0.35 (wtdd/watch.py CONF); the alarm keys on that name"
+  },
+  "yoloe-11s-site": {
+   "frames_with_person": 3,
+   "of": 5,
+   "person_conf_by_frame": {
+    "look-tilt": null,
+    "look-down": 0.73,
+    "dog-live": 0.88,
+    "look-level": null,
+    "dog-sit-look": 0.91
+   },
+   "rule": "a box named exactly 'person' at conf >= 0.35 (wtdd/watch.py CONF); the alarm keys on that name"
+  },
+  "yoloe-11s-house": {
+   "frames_with_person": 3,
+   "of": 5,
+   "person_conf_by_frame": {
+    "look-tilt": null,
+    "look-down": 0.73,
+    "dog-live": 0.88,
+    "look-level": null,
+    "dog-sit-look": 0.91
+   },
+   "rule": "a box named exactly 'person' at conf >= 0.35 (wtdd/watch.py CONF); the alarm keys on that name"
+  },
+  "yolov8s-world-site": {
+   "frames_with_person": 4,
+   "of": 5,
+   "person_conf_by_frame": {
+    "look-tilt": 0.65,
+    "look-down": 0.85,
+    "dog-live": 0.81,
+    "look-level": null,
+    "dog-sit-look": 0.81
+   },
+   "rule": "a box named exactly 'person' at conf >= 0.35 (wtdd/watch.py CONF); the alarm keys on that name"
+  },
+  "yolov8s-world-house": {
+   "frames_with_person": 3,
+   "of": 5,
+   "person_conf_by_frame": {
+    "look-tilt": null,
+    "look-down": 0.73,
+    "dog-live": 0.57,
+    "look-level": null,
+    "dog-sit-look": 0.57
+   },
+   "rule": "a box named exactly 'person' at conf >= 0.35 (wtdd/watch.py CONF); the alarm keys on that name"
+  },
+  "yoloe-11s-pf": {
+   "frames_with_person": 3,
+   "of": 5,
+   "person_conf_by_frame": {
+    "look-tilt": null,
+    "look-down": 0.73,
+    "dog-live": 0.88,
+    "look-level": null,
+    "dog-sit-look": 0.91
+   },
+   "rule": "a box named exactly 'person' at conf >= 0.35 (wtdd/watch.py CONF); the alarm keys on that name"
+  }
+ },
+ "detections": {
+  "yolo11n": {
+   "look-tilt": {
+    "ms": 15,
+    "n": 4,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.91,
+      "xyxy": [
+       625,
+       185,
+       1245,
+       709
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.86,
+      "xyxy": [
+       970,
+       170,
+       1279,
+       710
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.58,
+      "xyxy": [
+       154,
+       1,
+       565,
+       459
+      ]
+     },
+     {
+      "name": "cup",
+      "conf": 0.36,
+      "xyxy": [
+       850,
+       343,
+       921,
+       464
+      ]
+     }
+    ]
+   },
+   "look-down": {
+    "ms": 16,
+    "n": 3,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.81,
+      "xyxy": [
+       28,
+       4,
+       641,
+       542
+      ]
+     },
+     {
+      "name": "couch",
+      "conf": 0.48,
+      "xyxy": [
+       23,
+       3,
+       1280,
+       538
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.39,
+      "xyxy": [
+       68,
+       4,
+       1246,
+       543
+      ]
+     }
+    ]
+   },
+   "dog-live": {
+    "ms": 16,
+    "n": 6,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.91,
+      "xyxy": [
+       838,
+       2,
+       1280,
+       458
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.88,
+      "xyxy": [
+       720,
+       0,
+       1127,
+       639
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.76,
+      "xyxy": [
+       38,
+       40,
+       337,
+       601
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.54,
+      "xyxy": [
+       605,
+       297,
+       704,
+       418
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.41,
+      "xyxy": [
+       396,
+       331,
+       599,
+       506
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.39,
+      "xyxy": [
+       395,
+       217,
+       603,
+       505
+      ]
+     }
+    ]
+   },
+   "look-level": {
+    "ms": 15,
+    "n": 3,
+    "boxes": [
+     {
+      "name": "chair",
+      "conf": 0.64,
+      "xyxy": [
+       695,
+       199,
+       851,
+       471
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.5,
+      "xyxy": [
+       917,
+       149,
+       1143,
+       431
+      ]
+     },
+     {
+      "name": "dining table",
+      "conf": 0.41,
+      "xyxy": [
+       392,
+       198,
+       815,
+       447
+      ]
+     }
+    ]
+   },
+   "dog-sit-look": {
+    "ms": 15,
+    "n": 2,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.9,
+      "xyxy": [
+       629,
+       503,
+       867,
+       719
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.48,
+      "xyxy": [
+       497,
+       630,
+       589,
+       720
+      ]
+     }
+    ]
+   }
+  },
+  "yoloe-11s-site": {
+   "look-tilt": {
+    "ms": 34,
+    "n": 0,
+    "boxes": []
+   },
+   "look-down": {
+    "ms": 34,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.73,
+      "xyxy": [
+       30,
+       0,
+       648,
+       539
+      ]
+     }
+    ]
+   },
+   "dog-live": {
+    "ms": 34,
+    "n": 3,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.88,
+      "xyxy": [
+       841,
+       0,
+       1280,
+       465
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.64,
+      "xyxy": [
+       0,
+       0,
+       143,
+       329
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.61,
+      "xyxy": [
+       69,
+       1,
+       326,
+       339
+      ]
+     }
+    ]
+   },
+   "look-level": {
+    "ms": 33,
+    "n": 0,
+    "boxes": []
+   },
+   "dog-sit-look": {
+    "ms": 34,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.91,
+      "xyxy": [
+       627,
+       504,
+       866,
+       718
+      ]
+     }
+    ]
+   }
+  },
+  "yoloe-11s-house": {
+   "look-tilt": {
+    "ms": 33,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "couch",
+      "conf": 0.39,
+      "xyxy": [
+       26,
+       392,
+       1237,
+       718
+      ]
+     }
+    ]
+   },
+   "look-down": {
+    "ms": 33,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.73,
+      "xyxy": [
+       30,
+       0,
+       648,
+       539
+      ]
+     }
+    ]
+   },
+   "dog-live": {
+    "ms": 33,
+    "n": 6,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.88,
+      "xyxy": [
+       841,
+       0,
+       1280,
+       465
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.81,
+      "xyxy": [
+       48,
+       66,
+       336,
+       600
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.7,
+      "xyxy": [
+       734,
+       0,
+       1120,
+       635
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.68,
+      "xyxy": [
+       627,
+       297,
+       703,
+       417
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.64,
+      "xyxy": [
+       0,
+       0,
+       143,
+       329
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.61,
+      "xyxy": [
+       69,
+       1,
+       326,
+       339
+      ]
+     }
+    ]
+   },
+   "look-level": {
+    "ms": 32,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "chair",
+      "conf": 0.42,
+      "xyxy": [
+       705,
+       200,
+       848,
+       449
+      ]
+     }
+    ]
+   },
+   "dog-sit-look": {
+    "ms": 32,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.91,
+      "xyxy": [
+       627,
+       504,
+       866,
+       718
+      ]
+     }
+    ]
+   }
+  },
+  "yolov8s-world-site": {
+   "look-tilt": {
+    "ms": 25,
+    "n": 3,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.65,
+      "xyxy": [
+       960,
+       169,
+       1280,
+       720
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.51,
+      "xyxy": [
+       632,
+       187,
+       1238,
+       720
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.45,
+      "xyxy": [
+       41,
+       0,
+       710,
+       720
+      ]
+     }
+    ]
+   },
+   "look-down": {
+    "ms": 24,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.85,
+      "xyxy": [
+       19,
+       0,
+       653,
+       548
+      ]
+     }
+    ]
+   },
+   "dog-live": {
+    "ms": 24,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.81,
+      "xyxy": [
+       829,
+       0,
+       1280,
+       551
+      ]
+     }
+    ]
+   },
+   "look-level": {
+    "ms": 25,
+    "n": 0,
+    "boxes": []
+   },
+   "dog-sit-look": {
+    "ms": 25,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.81,
+      "xyxy": [
+       625,
+       496,
+       875,
+       720
+      ]
+     }
+    ]
+   }
+  },
+  "yolov8s-world-house": {
+   "look-tilt": {
+    "ms": 27,
+    "n": 2,
+    "boxes": [
+     {
+      "name": "couch",
+      "conf": 0.53,
+      "xyxy": [
+       12,
+       377,
+       1275,
+       718
+      ]
+     },
+     {
+      "name": "cup",
+      "conf": 0.43,
+      "xyxy": [
+       840,
+       342,
+       912,
+       461
+      ]
+     }
+    ]
+   },
+   "look-down": {
+    "ms": 27,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.73,
+      "xyxy": [
+       24,
+       1,
+       654,
+       544
+      ]
+     }
+    ]
+   },
+   "dog-live": {
+    "ms": 26,
+    "n": 4,
+    "boxes": [
+     {
+      "name": "chair",
+      "conf": 0.71,
+      "xyxy": [
+       7,
+       83,
+       336,
+       617
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.7,
+      "xyxy": [
+       730,
+       10,
+       1134,
+       640
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.57,
+      "xyxy": [
+       829,
+       0,
+       1280,
+       550
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.47,
+      "xyxy": [
+       396,
+       219,
+       596,
+       506
+      ]
+     }
+    ]
+   },
+   "look-level": {
+    "ms": 28,
+    "n": 0,
+    "boxes": []
+   },
+   "dog-sit-look": {
+    "ms": 25,
+    "n": 1,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.57,
+      "xyxy": [
+       623,
+       496,
+       878,
+       720
+      ]
+     }
+    ]
+   }
+  },
+  "yoloe-11s-pf": {
+   "look-tilt": {
+    "ms": 40,
+    "n": 8,
+    "boxes": [
+     {
+      "name": "lace dress",
+      "conf": 0.71,
+      "xyxy": [
+       99,
+       380,
+       659,
+       718
+      ]
+     },
+     {
+      "name": "hassock",
+      "conf": 0.46,
+      "xyxy": [
+       628,
+       569,
+       998,
+       717
+      ]
+     },
+     {
+      "name": "friendship",
+      "conf": 0.43,
+      "xyxy": [
+       945,
+       171,
+       1280,
+       718
+      ]
+     },
+     {
+      "name": "makeup artist",
+      "conf": 0.42,
+      "xyxy": [
+       161,
+       0,
+       561,
+       465
+      ]
+     },
+     {
+      "name": "couch",
+      "conf": 0.39,
+      "xyxy": [
+       26,
+       392,
+       1237,
+       718
+      ]
+     },
+     {
+      "name": "friendship",
+      "conf": 0.38,
+      "xyxy": [
+       633,
+       190,
+       1247,
+       717
+      ]
+     },
+     {
+      "name": "bracelet",
+      "conf": 0.36,
+      "xyxy": [
+       1180,
+       285,
+       1208,
+       315
+      ]
+     },
+     {
+      "name": "evening dress",
+      "conf": 0.35,
+      "xyxy": [
+       924,
+       284,
+       1209,
+       647
+      ]
+     }
+    ]
+   },
+   "look-down": {
+    "ms": 38,
+    "n": 5,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.73,
+      "xyxy": [
+       30,
+       0,
+       648,
+       539
+      ]
+     },
+     {
+      "name": "crayon",
+      "conf": 0.52,
+      "xyxy": [
+       148,
+       312,
+       241,
+       540
+      ]
+     },
+     {
+      "name": "leather shoe",
+      "conf": 0.45,
+      "xyxy": [
+       1093,
+       178,
+       1279,
+       448
+      ]
+     },
+     {
+      "name": "martial arts gym",
+      "conf": 0.44,
+      "xyxy": [
+       5,
+       0,
+       1277,
+       682
+      ]
+     },
+     {
+      "name": "diaper",
+      "conf": 0.39,
+      "xyxy": [
+       92,
+       1,
+       450,
+       357
+      ]
+     }
+    ]
+   },
+   "dog-live": {
+    "ms": 45,
+    "n": 11,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.88,
+      "xyxy": [
+       841,
+       0,
+       1280,
+       465
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.81,
+      "xyxy": [
+       48,
+       66,
+       336,
+       600
+      ]
+     },
+     {
+      "name": "carpet",
+      "conf": 0.75,
+      "xyxy": [
+       44,
+       502,
+       842,
+       718
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.7,
+      "xyxy": [
+       734,
+       0,
+       1120,
+       635
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.68,
+      "xyxy": [
+       627,
+       297,
+       703,
+       417
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.64,
+      "xyxy": [
+       0,
+       0,
+       143,
+       329
+      ]
+     },
+     {
+      "name": "computer tower",
+      "conf": 0.63,
+      "xyxy": [
+       287,
+       330,
+       358,
+       472
+      ]
+     },
+     {
+      "name": "person",
+      "conf": 0.61,
+      "xyxy": [
+       69,
+       1,
+       326,
+       339
+      ]
+     },
+     {
+      "name": "computer chair",
+      "conf": 0.5,
+      "xyxy": [
+       426,
+       222,
+       584,
+       498
+      ]
+     },
+     {
+      "name": "carpet",
+      "conf": 0.46,
+      "xyxy": [
+       59,
+       477,
+       1280,
+       719
+      ]
+     },
+     {
+      "name": "music stool",
+      "conf": 0.36,
+      "xyxy": [
+       401,
+       337,
+       591,
+       502
+      ]
+     }
+    ]
+   },
+   "look-level": {
+    "ms": 50,
+    "n": 6,
+    "boxes": [
+     {
+      "name": "carpet",
+      "conf": 0.81,
+      "xyxy": [
+       79,
+       405,
+       1117,
+       561
+      ]
+     },
+     {
+      "name": "bank vault",
+      "conf": 0.77,
+      "xyxy": [
+       100,
+       64,
+       360,
+       444
+      ]
+     },
+     {
+      "name": "home interior",
+      "conf": 0.77,
+      "xyxy": [
+       60,
+       1,
+       1273,
+       582
+      ]
+     },
+     {
+      "name": "shelve",
+      "conf": 0.42,
+      "xyxy": [
+       357,
+       170,
+       453,
+       413
+      ]
+     },
+     {
+      "name": "chair",
+      "conf": 0.41,
+      "xyxy": [
+       705,
+       200,
+       848,
+       449
+      ]
+     },
+     {
+      "name": "home interior",
+      "conf": 0.37,
+      "xyxy": [
+       0,
+       29,
+       1154,
+       716
+      ]
+     }
+    ]
+   },
+   "dog-sit-look": {
+    "ms": 39,
+    "n": 5,
+    "boxes": [
+     {
+      "name": "person",
+      "conf": 0.91,
+      "xyxy": [
+       627,
+       504,
+       866,
+       718
+      ]
+     },
+     {
+      "name": "view mirror",
+      "conf": 0.88,
+      "xyxy": [
+       1078,
+       35,
+       1280,
+       714
+      ]
+     },
+     {
+      "name": "socket",
+      "conf": 0.64,
+      "xyxy": [
+       125,
+       655,
+       150,
+       686
+      ]
+     },
+     {
+      "name": "exhaust hood",
+      "conf": 0.63,
+      "xyxy": [
+       13,
+       1,
+       1131,
+       629
+      ]
+     },
+     {
+      "name": "steering wheel",
+      "conf": 0.56,
+      "xyxy": [
+       499,
+       629,
+       588,
+       718
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

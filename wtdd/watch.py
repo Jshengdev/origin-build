@@ -1,4 +1,5 @@
-"""The eye's second opinion: an open-source detector (ultralytics YOLO11n, COCO's 80 classes, Apache-2.0 weights) in
+"""The eye's second opinion: an open-source detector (ultralytics YOLO11n, COCO's 80 classes, AGPL-3.0 weights: ultralytics'
+licence, https://www.ultralytics.com/license; the venv's ultralytics-8.4.163 METADATA says License: AGPL-3.0) in
 its own process over the dog's live frames. It pulls GET /dog/frame.jpg from the API at --hz, draws the boxes into
 ~/Pictures/wtdd/watch.jpg (the API serves it at /pictures/watch.jpg) and writes the counts and boxes to <repo>/watch.json
 (GET /watch); the remote shows both. One watch.detect ledger row whenever the set of classes in view changes and the
@@ -8,6 +9,8 @@ are not rows.
   python -m wtdd.watch                              live from the API, 4 frames a second
   python -m wtdd.watch --source ~/Pictures/wtdd/dog-live.jpg --once     one file, prints the detections
   python -m wtdd.watch --source look-down.jpg --once --out look-down-boxed.jpg   dog_say's one-shot: the boxed copy of the frame it posts
+  WTDD_WATCH_DEVICE=mps python -m wtdd.watch      the torch device model.predict runs on (unset = cpu, as before; mps asked
+                                                  while torch says it is unavailable = one WARN line, then cpu; never silent)
 
 Facts. cv2 lives here and never in the API process (its ffmpeg clashes with PyAV's). COCO names cup, bowl, bottle,
 wine glass, chair, couch, person, backpack, handbag, suitcase, laptop, cell phone, book ... and does NOT name socks,
@@ -37,14 +40,26 @@ HOLD = 3                     # a change in the set of classes must hold for this
 API = "http://127.0.0.1:7788"
 
 
-def detect(model, img: bytes) -> tuple[list[dict], object, int]:
+def device() -> str:
+    """WTDD_WATCH_DEVICE (cpu | mps), read once by main(); torch is imported only when mps is asked (the API never loads it)."""
+    from .config import maybe
+    dev = maybe("WTDD_WATCH_DEVICE") or "cpu"
+    if dev == "mps":
+        import torch
+        if not torch.backends.mps.is_available():
+            log("watch", "WARN WTDD_WATCH_DEVICE=mps but torch.backends.mps.is_available() is False: running on cpu")
+            return "cpu"
+    return dev
+
+
+def detect(model, img: bytes, device: str | None = None) -> tuple[list[dict], object, int]:
     import cv2
     import numpy as np
     arr = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
     if arr is None:
         raise ValueError(f"not a decodable image ({len(img)} bytes)")
     t0 = time.perf_counter()
-    r = model.predict(arr, conf=CONF, verbose=False)[0]
+    r = model.predict(arr, conf=CONF, verbose=False, **({"device": device} if device else {}))[0]
     ms = round((time.perf_counter() - t0) * 1000)
     boxes = [{"name": r.names[int(c)], "conf": round(float(p), 2), "xyxy": [round(float(v)) for v in b]}
              for c, p, b in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist(), r.boxes.xyxy.tolist())]
@@ -81,7 +96,8 @@ def main(argv: list[str] | None = None) -> int:
     from ultralytics import YOLO
     t0 = time.perf_counter()
     model = YOLO(MODEL)
-    log("watch", f"model {MODEL} loaded", ms=round((time.perf_counter() - t0) * 1000), conf=CONF, source=a.source)
+    dev = device()
+    log("watch", f"model {MODEL} loaded", ms=round((time.perf_counter() - t0) * 1000), conf=CONF, source=a.source, device=dev)
     is_url = a.source.startswith("http")
     last: set[str] | None = None
     candidate: set[str] | None = None
@@ -98,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
                 img = r.content
             else:
                 img = Path(a.source).expanduser().read_bytes()
-            boxes, plotted, ms = detect(model, img)
+            boxes, plotted, ms = detect(model, img, dev)
             d = publish(boxes, plotted, ms, a.source, out_path, state=not a.out)
             n += 1
             warned = 0

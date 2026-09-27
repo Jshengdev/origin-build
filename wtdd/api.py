@@ -25,6 +25,7 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /dog/state also carries mode, vocab, vocab_error (wtdd/vocab.py; 20): the API refuses to start on an empty, misnamed or listless WTDD_MODE
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -45,6 +46,7 @@ from pathlib import Path
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
 from .ledger import log, rows
+from . import vocab   # 20: an empty, misnamed or listless WTDD_MODE raises here, so the API refuses to start before it binds
 
 UI = ROOT / "ui"
 
@@ -103,7 +105,7 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, d)
         if u.path == "/dog/state":
             from .dog.session import DogSession
-            return self._json(200, DogSession.get().state())
+            return self._json(200, {**DogSession.get().state(), **vocab.status()})   # 20: the mode and its words, or the named vocab_error
         if u.path == "/dog/lidar":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().lidar())
