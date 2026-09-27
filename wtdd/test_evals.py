@@ -511,6 +511,30 @@ class Follow(unittest.TestCase):
         self.assertIn("WARN", err)
 
 
+class Twice(unittest.TestCase):
+    """B5: two runs of the twice scenario in the same second (a live grade run twice fast) each get their own wake guids
+    and claim key, so the second is not refused by the first's rows in memory.db. time.time is pinned to one second;
+    chat.db's max rowid is stubbed (offline: the Listener reads it at boot)."""
+
+    def test_two_runs_in_one_second_both_pass(self):
+        with mock.patch("time.time", return_value=1790481401.5), mock.patch("wtdd.chat.db.max_rowid", return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            first, second = evals.run_twice(), evals.run_twice()
+        self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
+        self.assertNotEqual(first[1]["detail"], second[1]["detail"])   # two claim keys
+
+    def test_two_processes_in_one_microsecond_both_pass(self):
+        """Two `python -m wtdd.evals --scenario twice` started together read the same time.time_ns() (this Mac's clock
+        is 1 us: seen once in four parallel pairs); the process id tells them apart. Two pids, one clock reading."""
+        with mock.patch("time.time_ns", return_value=1790513397114884000), mock.patch("wtdd.chat.db.max_rowid", return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with mock.patch("os.getpid", return_value=40001):
+                first = evals.run_twice()
+            with mock.patch("os.getpid", return_value=40002):
+                second = evals.run_twice()
+        self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
+
+
 class Dry(unittest.TestCase):
     """The verifying command: python -m wtdd.evals --scenario <s> runs dry on the fixture and says so."""
 
