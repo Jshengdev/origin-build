@@ -421,6 +421,18 @@ class Stub(unittest.TestCase):
         finally:
             DogSession._inst = None
 
+    def test_a_dog_command_under_the_stub_is_refused_by_name(self):
+        with mock.patch.dict(os.environ, {"WTDD_VIDEO_STUB": "14"}):
+            s = DogSession()
+        n0 = len(ledger.rows())
+        with self.assertRaises(Exception) as e:
+            s.cmd("Sit")
+        self.assertIn("DEMO_CACHE video stub", str(e.exception), "a command under the stub body failed without naming the stub")
+        new = ledger.rows()[n0:]
+        self.assertTrue(new, "a refused command under the stub wrote no row")
+        for r in new:
+            self.assertIn("DEMO_CACHE video stub", r["response_or_error"] or "", f"the {r['tool']} row's error does not name the stub")
+
 
 class Page(unittest.TestCase):
     def test_the_page_takes_the_stream_and_names_the_stall(self):
