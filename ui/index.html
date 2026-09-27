@@ -67,6 +67,15 @@
   .occ { fill: rgba(38,35,35,.6); stroke: none; pointer-events: none; }   /* one square per grid cell (not ".grid": that is the page layout) */
   .occlbl { opacity: .85; }
   /* 01 · occupancy · end */
+  /* 15 · floorplan · start */
+  .fp-wall { fill: #262323; } .fp-slab { fill: #aaa59d; } .fp-low { fill: #d6d1c7; }   /* opaque: they cover the grid's dark squares under them */
+  .fp-tall { fill: #fbfaf7; stroke: #262323; stroke-width: 1.2; }
+  .fp-seg { stroke: var(--live, #0b0dc4); stroke-width: 4; stroke-linecap: round; }
+  .fp-key { fill: rgba(251,250,247,.97); }   /* the legend's band: the house's top wall runs right under it */
+  .fp-wall, .fp-slab, .fp-low, .fp-tall, .fp-seg, .fp-key { pointer-events: none; }
+  .fplbl .fp-zero { fill: var(--warn); } .fplbl .bad { fill: var(--bad); }
+  .fplbl .fp-run { fill: var(--live, #0b0dc4); pointer-events: all; cursor: pointer; }
+  /* 15 · floorplan · end */
 </style>
 </head>
 <body>
@@ -267,6 +276,7 @@ function App() {
             ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
+            <${FloorPlanLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
@@ -384,6 +394,31 @@ function GridLayer() {
     <text class="lbl occlbl" x="12" y="28">grid · ${g ? `${c.length} cells seen ${g.threshold ?? "?"}+ times` : "…"}${g?.frames ? ` · ${g.frames} frames` : ""}${g?.source ? ` · ${g.source}` : ""}${g?.why ? ` · ${g.why}` : ""}${g?.error ? ` · FAILED ${g.error}` : ""}${g?.cb_errors ? ` · FAILED to take ${g.cb_errors} frames` : ""}</text></g>`;
 }
 // 01 · occupancy · end
+// 15 · floorplan · start
+// The floor plan (GET /dog/floorplan, wtdd/dog/floorplan.py): cells coloured by class (wall ink, slab grey, low light
+// grey, tall outlined; opaque, so they cover the grid's squares under them) and the wall runs as lines over them, each
+// cell one square centred on its corner pixel like GridLayer's. Its own 2 s poll, with or without a dog. The legend
+// always draws: a zero is yellow; a run with no wall, a FAILED tick and a failed read or press are red with the reason.
+// "▶ floor plan" is the button (POST /dog/floorplan: one run, one row per press). The page computes nothing.
+function FloorPlanLayer() {
+  const [f, setF] = useState(null);
+  const get = () => fetch(`${API}/dog/floorplan`).then(r => r.json()).then(setF).catch(e => setF({ segments_px: [], error: `GET /dog/floorplan failed: ${e}` }));
+  useEffect(() => { get(); const t = setInterval(get, 2000); return () => clearInterval(t); }, []);
+  const press = e => { e.stopPropagation(); fetch(`${API}/dog/floorplan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threshold: 3 }) })
+    .then(r => r.json()).then(o => o.error ? setF(p => ({ ...(p || {}), error: `POST /dog/floorplan failed: ${o.error}` })) : get())
+    .catch(err => setF(p => ({ ...(p || {}), error: `POST /dog/floorplan failed: ${err}` }))); };
+  const s = f?.cell_px, h = s / 2, k = f?.classes || {}, px = f?.class_px || {}, runs = (f?.segments_px || []).length;
+  const sq = n => (px[n] || []).map(p => `M${p[0] - h} ${p[1] - h}h${s}v${s}h-${s}z`).join("");
+  const z = (v, text) => v ? text : html`<tspan class="fp-zero">${text}</tspan>`;   // a zero is a WARN
+  return html`<g>
+    ${["slab", "low", "tall", "wall"].map(n => (px[n] || []).length > 0 && html`<path key=${n} class=${"fp-" + n} data-cells=${px[n].length} d=${sq(n)}/>`)}
+    ${(f?.segments_px || []).map((p, i) => html`<line key=${"s" + i} class="fp-seg" x1=${p[0]} y1=${p[1]} x2=${p[2]} y2=${p[3]}/>`)}
+    <rect class="fp-key" x="0" y="35" width="1060" height=${f?.why || f?.error ? 72 : 48}/>
+    <text class="lbl fplbl" x="12" y="52">${f && "wall" in k ? html`${z(runs, `walls · ${runs} runs`)} · ${z((k.slab || 0) + (k.low || 0), `furniture · ${(k.slab || 0) + (k.low || 0)} cells`)} · ${z(k.tall, `tall · ${k.tall}`)} · ${f.ms} ms · ${f.source}` : `floor plan · ${f ? "none" : "…"}`} · <tspan class="fp-run" onClick=${press}>▶ floor plan</tspan></text>
+    <text class="lbl fplbl" x="12" y="76">from the LiDAR's own cells; a label only moves a run to grey</text>
+    ${(f?.why || f?.error) && html`<text class="lbl fplbl" x="12" y="100">${f.why ? (f.ok === false ? html`<tspan class="bad">${f.why}</tspan>` : f.why) : ""}${f.error ? html`${f.why ? " · " : ""}<tspan class="bad">FAILED ${f.error}</tspan>` : ""}</text>`}</g>`;
+}
+// 15 · floorplan · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
