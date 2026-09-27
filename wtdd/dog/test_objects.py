@@ -477,8 +477,11 @@ class Fixture(unittest.TestCase):
         self.assertEqual(d["n"], len(d["objects"]))
         self.assertEqual([o["id"] for o in d["objects"]], ["o1", "o2"])
         self.assertEqual([o["stale"] for o in d["objects"]], [False, True])
-        self.assertEqual(d["objects"][0]["pos_px"], px_of([2.0, 0.0]))
-        self.assertEqual(d["objects"][1]["pos_px"], px_of([2.0, -1.6]))
+        from unittest import mock
+        from wtdd.dog import nav
+        with mock.patch.object(nav, "PX_PER_M", 108.5):   # the fixture file was written at the default scale; a .env WTDD_PX_PER_M (87 live) must not move its pixels
+            self.assertEqual(d["objects"][0]["pos_px"], px_of([2.0, 0.0]))
+            self.assertEqual(d["objects"][1]["pos_px"], px_of([2.0, -1.6]))
         for o in d["objects"]:
             self.assertGreater(decode_thumb(o["thumb"]).width, 0)
             self.assertIn("[stub", o["message"])

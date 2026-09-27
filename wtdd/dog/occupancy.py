@@ -24,11 +24,20 @@ frame is refused with ValueError (a runaway origin is not allocated). walls(thre
 threshold times, as cell CORNERS in metres (index * res + origin, the driver's convention for the dots). Shapes are
 only cells counted from points; no model draws or labels anything here.
 
+The height profile (item 15, read by wtdd/dog/floorplan.py). Grid.zmask is uint64 [iy, ix], the same shape as counts
+and grown with it in _grow: bit k set means absolute layer k was seen in that cell at least once, z = z_ref + k * res,
+with z_ref the first frame's origin[2]. It is band-free (the floor, a table top and a wall's top all land in it) and
+ORed per frame with np.unique + np.bitwise_or.at, even when the band is empty. A later frame with another origin[2]
+lands on the same lattice, because its points are absolute metres; update_frame counts it in z_rebased with a WARN.
+A layer outside 0..63 is a WARN and dropped, never wrapped (z_dropped). counts and walls(threshold) are exactly what
+they were before the mask. ui/grid.json keeps it as a fourth column; a 01-era file loads with an empty mask.
+
 UNVERIFIED on the real dog (the first live frame must confirm; lidar.py's docstring has the same list): the value of
 frame_id (expected "odom"; a frame with another frame_id than the grid's is refused); whether the window `origin`
 moves with the dog over a fixed world (the fixture assumes it does; if the points are body-relative the grid smears
-into a streak); where z = 0 sits (the Z_MIN/Z_MAX band); what the four wire bytes 8-11 carry (the driver skips them).
-The grid is in the odometry frame and smears with drift; nothing here corrects it."""
+into a streak); where z = 0 sits (the Z_MIN/Z_MAX band; z_ref is the first frame's origin[2], the fixture guesses
+-0.3 m); whether origin[2] moves between frames (z_rebased must stay 0 live); what the four wire bytes 8-11 carry
+(the driver skips them). The grid is in the odometry frame and smears with drift; nothing here corrects it."""
 from __future__ import annotations
 import argparse
 import json
@@ -52,10 +61,15 @@ MAX_SIDE = 2400      # cells per side, 120 m at 0.05 m: a frame that would grow 
 class Grid:
     """Occupied counts on a lattice in the odometry frame (see the module docstring)."""
 
-    def __init__(self, resolution: float, origin_xy, frame_id: str | None = None) -> None:
+    def __init__(self, resolution: float, origin_xy, frame_id: str | None = None, z_ref: float | None = None) -> None:
         self.resolution = float(resolution)
         self.origin = [float(origin_xy[0]), float(origin_xy[1])]   # metres: the corner of cell (0, 0)
         self.counts = np.zeros((GROW_MARGIN, GROW_MARGIN), dtype=np.uint32)   # [iy, ix]
+        self.zmask = np.zeros(self.counts.shape, dtype=np.uint64)   # [iy, ix]: bit k = absolute layer k seen (z_ref + k * res), band-free
+        self.z_ref = None if z_ref is None else float(z_ref)   # metres: the first frame's origin[2]; None in a 01-era saved grid (no mask)
+        self.z_rebased = 0   # frames whose origin[2] moved (a WARN each, re-based onto z_ref's lattice); must stay 0 live, UNVERIFIED
+        self.z_dropped = 0   # voxels the mask could not take: a layer outside 0..63 (a WARN) or a point outside the grid
+        self._z_last = self.z_ref   # the previous frame's origin[2]
         self.frames = 0
         self.frame_id = frame_id
         self.z_band = (lidar.Z_MIN, lidar.Z_MAX)
@@ -67,8 +81,8 @@ class Grid:
 
     @classmethod
     def from_frame(cls, d: dict) -> "Grid":
-        """A new grid on the frame's own lattice: its resolution, its origin (x, y) and its frame_id."""
-        return cls(d["resolution"], d["origin"][:2], d["frame"])
+        """A new grid on the frame's own lattice: its resolution, its origin (x, y), its frame_id and its z origin (z_ref)."""
+        return cls(d["resolution"], d["origin"][:2], d["frame"], float(d["origin"][2]))
 
     def _index(self, xy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         ix = np.rint((xy[:, 0] - self.origin[0]) / self.resolution).astype(np.int64)
@@ -90,40 +104,79 @@ class Grid:
                              f"frame reaches x index {ix_min}..{ix_max}, y {iy_min}..{iy_max} of a {w}x{h} grid; refused")
         c = np.zeros((nh, nw), dtype=np.uint32)
         c[lo_y:lo_y + h, lo_x:lo_x + w] = self.counts
-        self.counts = c
+        m = np.zeros((nh, nw), dtype=np.uint64)
+        m[lo_y:lo_y + h, lo_x:lo_x + w] = self.zmask
+        self.counts, self.zmask = c, m
         self.origin = [self.origin[0] - lo_x * self.resolution, self.origin[1] - lo_y * self.resolution]
         return lo_x, lo_y
 
     def update(self, points, z_min: float | None = None, z_max: float | None = None) -> int:
         """(N, 3) absolute metres (or (N, 2) already in the band) -> +1 per distinct cell; returns the cells touched.
         Every call the grid takes is one frame (an empty one too: 0 cells in the band is a WARN with the counts, never
-        hidden); a call refused past MAX_SIDE (ValueError) is not counted and changes nothing."""
+        hidden); a call refused past MAX_SIDE (ValueError) is not counted and changes nothing. (N, 3) points also OR
+        their absolute layer into zmask, band-free, even when the band is empty (_or_mask)."""
         p = np.asarray(points, dtype=np.float64)
         if p.ndim != 2 or p.shape[1] not in (2, 3):
             raise ValueError(f"points must be (N, 3) or (N, 2) metres, got shape {p.shape}")
+        mask = None
         if p.shape[1] == 3:
+            if self.z_ref is not None:
+                k = np.rint((p[:, 2] - self.z_ref) / self.resolution).astype(np.int64)
+                ok = (k >= 0) & (k <= 63)
+                mask = (p[ok], k[ok], k[~ok])
             lo = self.z_band[0] if z_min is None else z_min
             hi = self.z_band[1] if z_max is None else z_max
             p = p[(p[:, 2] >= lo) & (p[:, 2] <= hi)]
+        if len(p):
+            ix, iy = self._index(p)
+            cells = np.unique(np.column_stack([ix, iy]), axis=0)
+            sx, sy = self._grow(int(cells[:, 0].min()), int(cells[:, 0].max()), int(cells[:, 1].min()), int(cells[:, 1].max()))
+        if mask is not None:
+            self._or_mask(*mask)   # after _grow (the grown grid's indices), before the empty-band return (bits above the band count)
         if len(p) == 0:
             self.frames += 1
             log("occupancy", "WARN frame with 0 cells in the band", frames=self.frames, z_band=list(self.z_band), grid=self.shape)
             return 0
-        ix, iy = self._index(p)
-        cells = np.unique(np.column_stack([ix, iy]), axis=0)
-        sx, sy = self._grow(int(cells[:, 0].min()), int(cells[:, 0].max()), int(cells[:, 1].min()), int(cells[:, 1].max()))
         self.counts[cells[:, 1] + sy, cells[:, 0] + sx] += 1
         self.frames += 1   # after _grow: a frame refused past MAX_SIDE is not one the grid took
         return int(len(cells))
 
+    def _or_mask(self, p: np.ndarray, k: np.ndarray, out_k: np.ndarray) -> None:
+        """zmask[iy, ix] |= 1 << k for every point, one np.bitwise_or.at per frame. A layer outside 0..63 (out_k) is a
+        WARN and dropped, never wrapped (1 << 64 would land on bit 0); a point outside the grid (only ever out of the
+        band: _grow covers the band) is dropped; both are counted in z_dropped."""
+        if len(out_k):
+            self.z_dropped += len(out_k)
+            log("occupancy", "WARN layer outside 0..63 dropped, never wrapped", n=len(out_k), k_min=int(out_k.min()),
+                k_max=int(out_k.max()), z_ref=self.z_ref, z_dropped=self.z_dropped)
+        ix, iy = self._index(p)
+        h, w = self.zmask.shape
+        inside = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+        self.z_dropped += int((~inside).sum())
+        bits = np.left_shift(np.uint64(1), k[inside].astype(np.uint64))   # numpy 2 refuses np.uint64(1) << int64
+        u, inv = np.unique(iy[inside] * w + ix[inside], return_inverse=True)
+        acc = np.zeros(len(u), dtype=np.uint64)
+        np.bitwise_or.at(acc, inv, bits)
+        self.zmask.reshape(-1)[u] |= acc
+
     def update_frame(self, d: dict) -> int:
         """update() from a decoded frame (lidar.decode); refuses another resolution or another frame_id (another
-        lattice, another world) with ValueError."""
+        lattice, another world) with ValueError. A frame whose origin[2] moved from the previous frame's is a WARN
+        (z_rebased): its points are absolute metres, so update() already puts them on z_ref's lattice; off_lattice_m
+        is how far that origin sits between two layers (nonzero: its layers were snapped to the nearest)."""
         if float(d["resolution"]) != self.resolution:
             raise ValueError(f"frame resolution {d['resolution']} m is not the grid's {self.resolution} m: refused")
         if self.frame_id is not None and d["frame"] != self.frame_id:
             raise ValueError(f"frame_id {d['frame']!r} is not the grid's {self.frame_id!r}: another frame, refused")
-        return self.update(d["points"])
+        n = self.update(d["points"])
+        z = float(d["origin"][2])
+        if self._z_last is not None and abs(z - self._z_last) > 1e-9:
+            self.z_rebased += 1
+            off = (z - self.z_ref) / self.resolution
+            log("occupancy", "WARN frame origin z moved: re-based onto z_ref", **{"from": self._z_last, "to": z}, z_ref=self.z_ref,
+                off_lattice_m=round((off - round(off)) * self.resolution, 4) + 0.0, z_rebased=self.z_rebased)
+        self._z_last = z
+        return n
 
     def walls(self, threshold: int = THRESHOLD) -> np.ndarray:
         """(M, 2) float64 metres: the corners of the cells seen at least threshold times, in (iy, ix) order."""
@@ -144,21 +197,28 @@ class Grid:
         return {"x": [round(x0, 3), round(x0 + w * self.resolution, 3)], "y": [round(y0, 3), round(y0 + h * self.resolution, 3)]}
 
     def to_dict(self) -> dict[str, Any]:
-        """ui/grid.json: every nonzero cell as [ix, iy, count]; odometry metres, never map pixels; `cal` ties them to the map."""
+        """ui/grid.json: every nonzero cell as [ix, iy, count, zmask] (zmask a JSON int up to 2**64 - 1, through
+        tolist(), never int64) plus z_ref; odometry metres, never map pixels; `cal` ties them to the map. A cell seen
+        only outside the band (count 0, mask bits only) is not saved: the floor plan reads cells seen threshold+ times."""
         iy, ix = np.nonzero(self.counts)
         h, w = self.counts.shape
         return {"resolution": self.resolution, "origin": list(self.origin), "width": [w, h], "frames": self.frames,
-                "frame_id": self.frame_id, "z_band": list(self.z_band), "cal": self.cal,
-                "cells": np.column_stack([ix, iy, self.counts[iy, ix]]).astype(np.int64).tolist(),
+                "frame_id": self.frame_id, "z_band": list(self.z_band), "cal": self.cal, "z_ref": self.z_ref,
+                "cells": [list(r) for r in zip(ix.tolist(), iy.tolist(), self.counts[iy, ix].tolist(), self.zmask[iy, ix].tolist())],
                 "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Grid":
-        g = cls(d["resolution"], d["origin"], d["frame_id"])
+        """A saved grid; a 01-era file ([ix, iy, count] rows, no z_ref) loads with an empty mask."""
+        g = cls(d["resolution"], d["origin"], d["frame_id"], d.get("z_ref"))
         w, h = d["width"]
         g.counts = np.zeros((int(h), int(w)), dtype=np.uint32)
-        c = np.asarray(d["cells"], dtype=np.int64).reshape(-1, 3)
+        g.zmask = np.zeros((int(h), int(w)), dtype=np.uint64)
+        rows = d["cells"]
+        c = np.asarray([r[:3] for r in rows], dtype=np.int64).reshape(-1, 3)
         g.counts[c[:, 1], c[:, 0]] = c[:, 2]
+        if rows and len(rows[0]) == 4:   # never through int64: a mask with bit 63 set overflows it
+            g.zmask[c[:, 1], c[:, 0]] = np.array([r[3] for r in rows], dtype=np.uint64)
         g.frames, g.z_band, g.cal = int(d["frames"]), tuple(d["z_band"]), d.get("cal")
         return g
 
