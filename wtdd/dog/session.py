@@ -10,6 +10,10 @@ connects once more, logged; there is no reconnect loop.
 drive() is hold-to-move: the remote refreshes a velocity every 200 ms while a key is down; the loop republishes it at
 MOVE_HZ and sends StopMove 0.6 s after the last refresh or on stop(). Speeds are capped at DRIVE_MAX.
 
+state() also serves faults (the dog's pushed faults, each with age_s) and streams (state, video, lidar: n, age_ms,
+stale); WTDD_STATE_FIXTURE serves a typed state instead, a DEMO_CACHE for the dry screenshot that names itself in its
+`fixture` key.
+
 Where it thinks it is: calibrate(p, heading) ties the odometry pose now to a map point (wtdd/dog/nav.py); state() then
 carries "map": {p, heading_deg}. follow(path, stops) switches the dog's obstacle avoidance on (read back, refused
 otherwise) and is a task that feeds nav.steer velocities into the same drive loop, waypoint by waypoint, pausing at the
@@ -81,6 +85,7 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
         if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
             self.cal = json.loads(CAL_FILE.read_text())
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
@@ -129,12 +134,31 @@ class DogSession:
         return self.body is not None
 
     def state(self) -> dict[str, Any]:
+        from .. import config
+        if fx := config.maybe("WTDD_STATE_FIXTURE"):   # DEMO_CACHE: a typed GET /dog/state (wtdd/dog/fixtures/state-vitals.json) for the dry screenshot; unset WTDD_STATE_FIXTURE and the live Body's state is served; a missing file raises
+            # Only GET /dog/state is typed; every other dog route stays live (the page's /dog/frame.jpg pull connects a reachable dog), so set it only with the dog off.
+            return self._fixture(fx)
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
-                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
+                        "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None,
+                "faults": self._faults(), "streams": self.body.streams() if self.body else None}
+
+    def _faults(self) -> list[dict[str, Any]] | None:
+        """The faults the dog pushed and has not cleared (Body.faults), each with age_s since we received it; None without a body."""
+        if self.body is None:
+            return None
+        now = time.time()
+        return [{**f, "age_s": round(now - f["at"], 1)} for f in self.body.faults]
+
+    def _fixture(self, fx: str) -> dict[str, Any]:
+        """The typed state in WTDD_STATE_FIXTURE (repo-relative or absolute), named in its `fixture` key. A missing file raises."""
+        from .. import config
+        p = Path(fx) if Path(fx).is_absolute() else config.ROOT / fx
+        log("dog", f"WARN serving WTDD_STATE_FIXTURE {fx}, not the dog")
+        return {**json.loads(p.read_text()), "fixture": fx}
 
     # ---- recording a route by driving (the trace of where it thinks it is becomes the map's path)
     def record(self, on: bool) -> dict[str, Any]:

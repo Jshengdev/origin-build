@@ -1,0 +1,28 @@
+{
+  "_note": "Typed by hand in the shape rt/lf/sportmodestate (LF_SPORT_MOD_STATE) had when this dog sent it on 2026-09-13: the message as the driver hands it to Body._on_state. Keys, nesting and types follow that dump; the values are typed, not recorded (error_code 100, temperature 79, body_height 0.32, accelerometer z 9.54 and the all-zero foot_force, range_obstacle and foot arrays are what the dump held). The stamp is 2026-09-13 11:13:35 PDT on the dog's clock. UNVERIFIED on the dog: the temperature's unit, error_code's meaning, the quaternion's order (w first assumed from 0.9997).",
+  "type": "msg",
+  "topic": "rt/lf/sportmodestate",
+  "data": {
+    "stamp": {"sec": 1789323215, "nanosec": 250000000},
+    "error_code": 100,
+    "imu_state": {
+      "quaternion": [0.9997, 0.0054, -0.009, 0.0206],
+      "gyroscope": [0.0021, -0.0013, 0.0007],
+      "accelerometer": [0.12, -0.08, 9.54],
+      "rpy": [0.0105, -0.0183, 0.0412],
+      "temperature": 79
+    },
+    "mode": 0,
+    "progress": 0.0,
+    "gait_type": 0,
+    "foot_raise_height": 0.0,
+    "position": [0.412, -0.087, 0.318],
+    "body_height": 0.32,
+    "velocity": [0.0, 0.0, 0.0],
+    "yaw_speed": 0.0,
+    "range_obstacle": [0.0, 0.0, 0.0, 0.0],
+    "foot_force": [0, 0, 0, 0],
+    "foot_position_body": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "foot_speed_body": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  }
+}

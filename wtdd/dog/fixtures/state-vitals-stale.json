@@ -1,0 +1,36 @@
+{
+  "_note": "DEMO_CACHE for the dry screenshot of the named failure (24-failed.png): state-vitals.json with every stream stopped past the 2 s rule (state 4.2 s, video 3.1 s, lidar 6.0 s). Served only while WTDD_STATE_FIXTURE names this file. Nothing here was read from the dog.",
+  "connected": true,
+  "moving": true,
+  "vel": [0.3, 0.0, 0.0],
+  "state": {
+    "mode": 0, "gait_type": 0, "progress": 0.0,
+    "position": [1.284, -0.412, 0.318],
+    "velocity": [0.12, 0.05, 0.0],
+    "yaw_speed": 0.21,
+    "body_height": 0.32,
+    "range_obstacle": [0.0, 0.0, 0.0, 0.0],
+    "rpy": [0.0105, -0.0183, -2.2096],
+    "n": 1184, "hz": 20.0, "age_ms": 4200,
+    "gyroscope": [0.0021, -0.0013, 0.2104],
+    "accelerometer": [0.12, -0.08, 9.54],
+    "imu_temp": 79,
+    "error_code": 100,
+    "skew_ms": 38,
+    "foot_force": [0, 0, 0, 0]
+  },
+  "map": {"p": [322, 1100], "heading_deg": -126.6},
+  "calibrated": true,
+  "follow": {},
+  "avoid": true,
+  "recheck": false,
+  "rec": null,
+  "faults": [
+    {"ts": 1790469588, "at": 1790469588.4, "source": 600, "code": 8, "id": "600_8", "text": "Low battery software protection", "age_s": 12.0}
+  ],
+  "streams": {
+    "state": {"on": true, "n": 1184, "age_ms": 4200, "stale": true},
+    "video": {"on": true, "n": 1702, "age_ms": 3100, "stale": true},
+    "lidar": {"on": true, "n": 212, "age_ms": 6000, "stale": true}
+  }
+}
