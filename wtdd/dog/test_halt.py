@@ -87,6 +87,8 @@ Review round 4 (the classes after StillMs, RED before their fixes):
                                      next to the velocity, written as state_after.yaw_speed (and yaw_speed_settled
                                      when the settle read ran); still above it, or never read back, stop.person is ok
                                      false naming yaw_speed, the halt stands and the eval grades fail
+  the "no person watch" WARN         once per stretch of movement, not once per process: an idle tick forgets the last
+                                     one, so a second hand-drive with the detector still down logs it again
 """
 from __future__ import annotations
 import asyncio
@@ -1355,6 +1357,25 @@ class Yaw(Dry):
         self.assertEqual(sa["yaw_speed"], 0.0)
         self.assertNotIn("yaw_speed_settled", sa)
         self.assertEqual(sa["still_ms"], sa["latency_ms"])
+
+
+class WarnPerStretch(Dry):
+    """The detector down through two separate hand-drives: each stretch of movement says so on stderr, not only the
+    first one this process saw."""
+
+    def test_each_stretch_of_movement_logs_its_own_no_person_watch_warn(self):
+        self.plant([person(near_h() + 10)], t=time.time() - (halt.FRESH_S + 5))
+        warns = []
+        for _ in range(2):
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                self.s.drive(0.3, 0.0, 0.0)
+                self.s.person_tick()
+                self.s.stop()          # the key let go
+                self.s.person_tick()   # idle
+            warns.append([l for l in buf.getvalue().splitlines() if "WARN no person watch" in l and "stale" in l])
+        self.assertEqual([len(w) for w in warns], [1, 1], warns)
+        self.assertEqual(of("stop.person"), [])
 
 
 if __name__ == "__main__":
