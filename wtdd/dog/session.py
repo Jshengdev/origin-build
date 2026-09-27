@@ -35,7 +35,8 @@ frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind 
 are rows, reads are not.
 
 scout(z, target_deg, timeout_s) (item 14, wtdd/dog/scout.py) is a task like the follower: it turns the dog in place by
-holding (0, 0, z) for the same drive loop until the IMU yaw has integrated past target_deg, halts once, and writes one
+holding (0, 0, z) for the same drive loop until the IMU yaw has integrated past target_deg, halts once itself (the
+drive loop may add its own release halt: one or two StopMoves per press), and writes one
 dog.scout row; with nothing tied yet it first ties the pose to the canvas centre facing up (a dog.calibrate row with
 args.source "dropoff"; the page's drag and "dog is here..." are "tap"). state().scout is its live status; stop()
 cancels it. It refuses while following or recording, and follow() refuses while it spins: one task owns the velocity.
@@ -454,9 +455,11 @@ class DogSession:
 
     async def _scout(self, args: dict[str, Any], z: float, target_deg: float, timeout_s: float) -> None:
         """The spin: snapshot, LiDAR on, (0, 0, z) held every scout.TICK_S until the integrated IMU yaw passes target_deg,
-        one halt on every path, the yaw read back after it, then one dog.scout row whose state_after is complete on a
-        FAILED row too. FAILED: a refused LiDAR switch, no turn after NO_TURN_S, timeout, a stop, 0 frames, cb_errors
-        rising, 0 band cells. Not closed is ok with closed false and a WARN; z 0 is the standing control."""
+        the scout's own one halt on every path (main's drive loop also sends its release halt when vel drops, while
+        the scout's StopMove is in flight, so the dog may see two StopMoves), the yaw read back after it, then one dog.scout row whose
+        state_after is complete on a FAILED row too. FAILED: a refused LiDAR switch, no turn after NO_TURN_S, timeout,
+        a stop, 0 frames, cb_errors rising, 0 band cells. Not closed is ok with closed false and a WARN; z 0 is the
+        standing control."""
         b, ss = self.body, self.scout_state
 
         def cells() -> int:
@@ -503,7 +506,8 @@ class DogSession:
                     err = e
                 self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
                 try:
-                    await self._halt()   # exactly one halt on every path out of the spin (a zero through avoidance first when it is on)
+                    await self._halt()   # the scout halts once itself on every path out of the spin (a zero through avoidance first
+                    # when it is on); main's drive loop also sends its release halt when vel drops, so the dog may see two StopMoves
                 except Exception as e:  # noqa: BLE001  (a failed halt outranks the spin's own error: it becomes the row's error)
                     err = RuntimeError(f"halt FAILED: {type(e).__name__}: {e}" + (f" (after {type(err).__name__}: {err})" if err else ""))
                 st, lp, el = b.state() or {}, b.lidar_points(), time.monotonic() - t0

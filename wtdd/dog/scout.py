@@ -10,7 +10,9 @@ Run. POST /dog/scout (wtdd/api.py) calls DogSession.scout (wtdd/dog/session.py),
 recording, connects, ties "nose at drop-off is up" to the empty canvas when nothing is tied yet (one dog.calibrate row,
 args.source "dropoff": CANVAS_CENTRE facing DROPOFF_HEADING_DEG; a person's earlier tap is kept as "tap"), switches the
 LiDAR on, holds (0, 0, z) for the drive loop every TICK_S (the Q/E keys' path; DRIVE_HOLD_S is the dead-man) until the
-wrapped IMU yaw deltas integrate past target_deg, then halts once and reads the yaw back. This module holds only the
+wrapped IMU yaw deltas integrate past target_deg, then halts once itself and reads the yaw back. Main's drive loop
+also sends its own release halt when the held velocity drops (it still reads `moving` while the scout's StopMove is in
+flight), so the dog may see one or two StopMoves per press; the second is a harmless retry. This module holds only the
 pure parts it uses, read at call time as scout.X (the tests patch them): integrate_yaw, closed, row, the constants.
 z = 0 is the standing control (Needs the dog 14.4): nothing is commanded, it stands for timeout_s, and the row's
 cells_added is the number the spin is compared against. Offline:

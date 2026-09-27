@@ -7,7 +7,9 @@ RED until scout.py exists and the session has scout(). No dog: a FakeBody stands
 an IMU yaw that turns at a chosen rate, velocity ticks and StopMove recorded, and a LiDAR stream that feeds the fixture
 frames to the callback the way Body._on_lidar does. The drive loop that publishes the held velocity is main's
 (_drive_loop, proven by the remote's Q/E keys); these tests read the held velocity (session.vel) instead of running it,
-so exactly one halt is observable. Every count is computed from the fixture's declared world with plain sets
+so every halt counted here is the scout's own, with the drive loop not running. On the dog the drive loop also sends
+its release halt when the held velocity drops (measured dry with it running and a 150 ms StopMove: two StopMoves per
+press, the second a harmless retry). Every count is computed from the fixture's declared world with plain sets
 (make_spin_frames.frame_cells / wall_cells / world_cells), never from the accumulator.
 
 The contract under test:
@@ -45,7 +47,7 @@ The contract under test:
                             (why: None on a clean close, the WARN on a turn that did not close, the error on a FAILED row);
                             args.source is "dropoff" when the scout tied the pose itself, else the tie's own source ("tap")
                             state_after is complete on a FAILED row too (the finding is the numbers it reached)
-  FAILED (ok false, the error named, one halt): LiDAR switch refused; no turn after NO_TURN_S (names "avoid on" or
+  FAILED (ok false, the error named, the scout's own one halt): LiDAR switch refused; no turn after NO_TURN_S (names "avoid on" or
                             "avoid off"); timeout (turned_deg on the row); 0 frames; 0 band cells (names
                             lidar.Z_MIN/Z_MAX); cb_errors rising. Not closed is ok true, closed false, a stderr WARN
                             and `why` both saying "not closed".
