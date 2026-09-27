@@ -2,6 +2,36 @@
   "note": "The livecheck table (python -m wtdd.livecheck --list). One entry per hardware step. Keys: item (the roadmap item), step (<item>.<k>, k = the number or letter of the line under **Needs the dog** in that item's PR, the k of the evening's `live <item> <k>`), pr (the PR number the title is read from; null for a night-2 goal section), title (that Needs-the-dog line, verbatim), do (the physical action in one line, with what the eyes must confirm that no row can), rows (the ledger rows that must land, in order: {tool, agent?, ok, where: {dotted.path: value | {gte, lte, in, re}}}; empty = unchecked, cannot PASS), fatal_warns (regexes over the API log; a match is FAIL with the line), unsafe (only rows landing after the check starts count; {tool: T, before: U}: the order T then U is forbidden, the U row that completes it decides and is printed `U after T`; {tool: T, between: [A, B]}: a T row after an A row and before any B row is UNSAFE, the T row decides), timeout_s (FAIL when this many seconds have passed since the check started and a row is still missing; --timeout overrides it), settle_s (after the last row matched, keep watching the log and the unsafe patterns this long before PASS; 0 = PASS at once), note (what is a guess until the first live run). Thresholds marked UNVERIFIED were never read from a dog.",
   "steps": [
     {
+      "item": "00", "step": "00.1", "pr": null,
+      "title": "the box height at 1 m and 2 m with a tape → `NEAR_FRAC`, committed once.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "00", "step": "00.2", "pr": null,
+      "title": "`latency_ms` on the row from watch.json's `t` to the state read-back.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "00", "step": "00.3", "pr": null,
+      "title": "the halt with avoidance on (the dog kept the last velocity after StopMove alone, 2026-09-13).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "00", "step": "00.4", "pr": null,
+      "title": "a person stepping in mid-follow: `stop.person`, no move rows after it, resume once from the page with a name and once from the phone with the exact word.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "00", "step": "00.5", "pr": null,
+      "title": "the same during a spin (14) and a dispatch follow (18a).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
       "item": "01", "step": "01.1", "pr": 5,
       "title": "`frame_id` must be `odom`. The grid refuses any later frame whose `frame_id` differs, so a mismatch shows as a rising `cb_errors` on `GET /dog/lidar` and `GET /dog/grid`, paired with `WARN lidar frame callback failed err=ValueError: frame_id ...` on stderr.",
       "do": "API up from the repo checkout; connect from the page; POST /dog/lidar {on: true}; eyes: the `[wtdd:dog] first lidar frame frame_id=odom` line in the API terminal, center_vs_odom_m under 1 m.",
@@ -66,6 +96,100 @@
       "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 1, "settle_s": 0, "note": "unchecked: unobservable from this code."
     },
     {
+      "item": "02", "step": "02.1", "pr": 3,
+      "title": "Put an OpenRouter key in `.env` as `JEV_API_KEY` (`JEV_MODEL=typesafe/jev-1.13`, from `.env.example`).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "02", "step": "02.2", "pr": 3,
+      "title": "Run `JEV_LIVE=1 .venv/bin/python -m wtdd.decide --state wtdd/fixtures/stop_state.txt` and paste the printed decision. The first live run must confirm: the reply from `POST https://openrouter.ai/api/v1/systemone` parses (`answers.stop.choice` plus `probabilities`), the `decided` row says `source=live`, `cached=false`, `app=openrouter`, and `model` reads `typesafe/jev-1.13-<date>`. Note the p it gives: raw confidence is expected to run high (the objective card's limit line), so the ask beat may not fire at 0.7.",
+      "do": "Put the OpenRouter key in .env as JEV_API_KEY, then run `JEV_LIVE=1 .venv/bin/python -m wtdd.decide --state wtdd/fixtures/stop_state.txt` from the repo checkout. Eyes: the printed decision and its p.",
+      "rows": [{"tool": "decided", "agent": "decide", "ok": true, "where": {"source": "live", "cached": false, "app": "openrouter", "state_after.model": {"re": "^typesafe/jev-1\\.13"}, "state_after.p": {"gte": 0, "lte": 1}}}],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "feat/02-decide decide.py: tool decided, agent decide, app openrouter (live) or stub; state_after {label, p, needs_person, model}. The CLI runs outside the API, so a failed call shows as the decided row ok false (a WARN here, then the timeout), not as an API log line: then 02.3."
+    },
+    {
+      "item": "02", "step": "02.3", "pr": 3,
+      "title": "If that call returns 404: set `decide.JEV_URL` to `https://openrouter.ai/api/alpha/decisions` (OpenRouter documents it as the other path on the same key, same body and reply) and rerun. Only a TypeSafe-native key needs `https://api.typesafe.ai/v1/systemone` with `JEV_MODEL=jev-latest`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "02", "step": "02.4", "pr": 3,
+      "title": "One chat round with `WTDD_WAKE_SHOW=1`. In the ledger confirm three things: at each stop the first `watch.boxes` row comes before the `decided` row; there is one `decided` row per stop with `source=live`; at a stop where p < 0.7 a `chat.post` keyed `decide:<guid>:<stop>` carries the photo and is followed by the housemate's `intruder.verdict` row whose `args.asked` equals that key.",
+      "do": "One chat round with WTDD_WAKE_SHOW=1 and the detector up (python -m wtdd.watch): wake the dog in the group and let it walk its stops. Eyes: one decided row per stop in the receipts panel, the ask at a stop below p 0.7.",
+      "rows": [
+        {"tool": "watch.boxes", "agent": "watch", "ok": true, "where": {}},
+        {"tool": "decided", "agent": "decide", "ok": true, "where": {"source": "live", "app": "openrouter"}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 600, "settle_s": 0,
+      "note": "Graded at the first stop: a watch.boxes row, then a live decided row (feat/02-decide: dog_say.py step('watch', 'watch.boxes', 'yolo'), decide.py). One decided row per stop and the decide:<guid>:<stop> ask are read off the ledger panel by a person."
+    },
+    {
+      "item": "02", "step": "02.5", "pr": 3,
+      "title": "Answer one decide question with \"idk\". Confirm the dog posts \"ok, standing down\" and no `lights.signal` rows follow the `intruder.verdict` row (`state_after.verdict` = \"known\"). Then, with `WTDD_ALARM=1` at stop 22 (`ask: true`) with a person in frame, confirm \"idk\" to \"who dis?!\" still sounds `light_alarm`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "02", "step": "02.6", "pr": 3,
+      "title": "Confirm the decide hold resumes the walk after the answer, or after `VERDICT_WAIT_S` (45 s) with no answer.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "02", "step": "02.7", "pr": 3,
+      "title": "At a stop where the detector saw something, the stderr line must read `footprint=<small|medium|large>`; `footprint=unknown` there means the boxes were lost again (gotcha 02-1).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "02", "step": "02.8", "pr": 3,
+      "title": "If p never falls below 0.7 live, change nothing in code: raise `WTDD_DECIDE_THRESHOLD` in `.env` to see the ask beat; the threshold in force is on every `decided` row (`args.threshold`).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "03", "step": "03.a", "pr": 7,
+      "title": "In `.env`, set `WTDD_ON_CALL_NAME=<stand-in's name>` and `WTDD_ON_CALL_HANDLE=<their handle exactly as chat.db stores it: E.164 or email>`. The handle must already have a 1:1 chat with this Mac's Messages account. `python -m wtdd.chat chats` does not list 1:1 chats; the guid is `any;-;<handle>`. Optionally `WTDD_SHIFT=<id>`; the default is today's date. Set both keys BEFORE arming the watch or running a round: without them the round posts the error to the group and `intruder_alarm ask=true` takes the photo, fails its `intruder.alarm` row naming the key, and posts nothing (watch.py logs FAILED).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "03", "step": "03.b", "pr": 7,
+      "title": "`python -m wtdd.chat send --guid \"any;-;<handle>\" --text \"dog test\" --trigger oncall-1`. The first live run must confirm that AppleScript `chat id \"any;-;<handle>\"` resolves a 1:1 chat: rc 0, the text on the stand-in's phone, and a `chat.post ok=true` row with a confirmed from-me `state_after {guid, rowid, ts}`. If osascript says it can't get the chat id, the row is `ok=false` with that error; switch `script_text` / `script_file` for `;-;` guids to the buddy form named in the comment above `script_text` in send.py and run again. On a round the same failure is posted to the group as `couldn't escalate: RuntimeError: ...` under `escalate-fail:<k>` and the round goes on.",
+      "do": "`python -m wtdd.chat send --guid \"any;-;<handle>\" --text \"dog test\" --trigger oncall-1` from the repo checkout. Eyes: the text on the stand-in's phone.",
+      "rows": [
+        {"tool": "chat.gate", "agent": "central", "ok": true, "where": {"args.guid": {"re": "^any;-;"}}},
+        {"tool": "chat.post", "agent": "central", "ok": true, "where": {"args.guid": {"re": "^any;-;"}, "state_after.rowid": {"gte": 1}}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "feat/03-named-person chat/__main__.py: chat.gate, chat.claim, then chat.post (agent central); chat.post's state_after is the confirmed from-me row {guid, rowid, ts}. A refused gate is the chat.gate row ok false: a WARN here."
+    },
+    {
+      "item": "03", "step": "03.c", "pr": 7,
+      "title": "`python -m wtdd.chat listen` in one terminal. In another, with a person in frame, `python -m wtdd intruder_alarm ask=true`. Confirm: the photo and \"who dis?!\" land in the stand-in's 1:1, not in THE CASTLE; a group message during the hold does not close the question; the stand-in replies \"thats my friend\"; \"ok, standing down\" lands in their 1:1; the `intruder.verdict` row carries `acked_ms` (a multiple of 1000, reply `ts_utc` minus the post's `state_after.ts`), `shift_id` and `chat=any;-;<handle>`; no verdict row appears before the stand-in replies (the dog's own caption read back from the 1:1 must not be taken as the answer). Then the same at a round's ask stop (`WTDD_ALARM=1`, a person at the stop): the group gets the look's report, the person gets the flag, the round holds up to 45 s for their reply.",
+      "do": "`python -m wtdd.chat listen` in one terminal; with a person in frame, `python -m wtdd intruder_alarm ask=true` in another; the stand-in replies from the 1:1. Eyes: the photo and \"who dis?!\" on the phone, no verdict before the reply.",
+      "rows": [
+        {"tool": "intruder.alarm", "agent": "central", "ok": true, "where": {}},
+        {"tool": "intruder.verdict", "agent": "central", "ok": true, "where": {"args.acked_ms": {"gte": 0}, "args.chat": {"re": "^any;-;"}, "args.shift_id": {"re": "."}}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 300, "settle_s": 0,
+      "note": "feat/03-named-person chat/listen.py: intruder.verdict args carry oncall.reply_fields {acked_ms, shift_id} and chat; chat.correction carries the same acked_ms (not graded here). acked_ms gte 0 only: that it is a multiple of 1000 is read by a person."
+    },
+    {
+      "item": "03", "step": "03.d", "pr": 7,
+      "title": "`python -m wtdd record_sign`: one `record.signed ok` row `{by, at, shift_id}`. Again: an `ok=false` row `refused: shift <id> already signed by <name> at <at>` and exit 1. Then `python -m wtdd.numbers` shows `| shift <id>: acked_ms | ... |` with the measured value and `| shift <id>: signed | by <name> at <at> |`.",
+      "do": "`python -m wtdd record_sign`, then `python -m wtdd record_sign` again. Eyes: `python -m wtdd.numbers` shows the shift signed by the name.",
+      "rows": [
+        {"tool": "record.signed", "agent": "central", "ok": true, "where": {"args.by": {"re": "."}, "args.at": {"re": "^\\d{4}-\\d{2}-\\d{2}T"}, "args.shift_id": {"re": "."}}},
+        {"tool": "record.signed", "agent": "central", "ok": false, "where": {"response_or_error": {"re": "already signed"}}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "feat/03-named-person tools/record_sign.py: step('central', 'record.signed', 'wtdd', {by, at, shift_id}); the second sign of the same shift_id is the refused row (PermissionError: refused: shift <id> already signed ...)."
+    },
+    {
       "item": "04", "step": "04.1", "pr": 4,
       "title": "Check out `feat/04-nogo`, start the API (`.venv/bin/python -m wtdd.api`), open the remote, calibrate (\"dog is here…\").",
       "do": "From the repo checkout, start the API, open the remote, drag the dog to where it stands.",
@@ -109,6 +233,564 @@
       "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 1, "settle_s": 0, "note": "unchecked: not an action."
     },
     {
+      "item": "05a", "step": "05a.1", "pr": 6,
+      "title": "`cd /Users/johnnysheng/code/origin-build && git fetch origin && git checkout feat/05a-drift`. Leave `WTDD_POSE_SOURCE` unset or `=sport` in `.env` (the shipped follower). Start the API from that directory with `.venv/bin/python -m wtdd.api` (it binds 7788; if the old repo's listener still holds that port, stop it or pass another port). `config` reads `.env` once at import, so every change to `WTDD_POSE_SOURCE` below is followed by an API restart.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05a", "step": "05a.2", "pr": 6,
+      "title": "Connect the dog with the LiDAR switch **off**. `GET /dog/state`: `state.utpose` must be non-null with `age_ms` under 5000 and `state.utpose_errors` must be 0; stderr shows one line `first rt/utlidar/robot_pose keys=[...] x= y= yaw= sport_pos=[...]`. This is the first thing to confirm and it is UNVERIFIED twice over: that the dog publishes `rt/utlidar/robot_pose` with the LiDAR switch off (the shipped code subscribed it only inside `lidar.subscribe`), and that its shape is a ROS PoseStamped (`{\"pose\": {\"position\": {x,y,z}, \"orientation\": {x,y,z,w}}}`, header optional, or a bare `{position, orientation}`; `drift.utpose_xyyaw` is a guess, the driver names the topic and parses nothing). If `utpose` stays null, `POST /dog/lidar {\"on\": true}` and read again: if it appears only then, the switch-off guess is wrong and the walks below need the LiDAR on (write the gotcha). If `utpose_errors` climbs, the `WARN rt/utlidar/robot_pose not parsed` line carries the message's keys and the first 160 chars of its data: fix `utpose_xyyaw` from that log. Watch `state.utpose.n` for a few seconds to read its rate: `_raw_pose` treats a utlidar sample older than `STALE_MS` (5 s) as no pose, so a topic slower than that cannot steer.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05a", "step": "05a.3", "pr": 6,
+      "title": "`POST /map/restore` so the map's path is `ui/route-saved.json` (23 points from [448, 455] to [436, 586], stops 11, 15, 22; the shipped `ui/map.json` path has a 526 px gap over `MAX_STEP_PX` and the follower refuses it). Stand the dog at the route start facing the route and drag the dot there on the remote (`POST /dog/calibrate`). The `dog.calibrate` row's `state_after.cals` must hold both `sport` and `utlidar` and stderr must say `calibrated ... tied=['sport', 'utlidar'] source=sport`. A `WARN no utlidar pose at this drag: utlidar is untied until a drag sees it` means step 2 is not done.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05a", "step": "05a.4", "pr": 6,
+      "title": "`POST /dog/follow`. While it walks, `GET /dog/state .poses` shows both dots' beliefs side by side. When it ends, **within 120 s and before anything moves the dog**, drag the dot to where the dog actually stands. stderr shows `pose samples on this walk sport=N utlidar=M seconds=...` with both counts above zero (`WARN 0 utlidar pose samples on this walk` means the topic went silent mid-walk), and the `dog.follow` row carries `args.pose_source` and `state_after.samples`. Then drive the dog back to the start and drag again for the next replay (that second drag is the next walk's tie, and the report knows it is not this walk's end: it comes after the dog moved).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05a", "step": "05a.5", "pr": 6,
+      "title": "Three walks on `sport` (steps 3 and 4 three times). Then `WTDD_POSE_SOURCE=utlidar` in `.env`, restart the API, drag (a drag with no utlidar pose is now a failed `dog.calibrate` row and `follow` refuses until one succeeds) and run three walks on `utlidar`. On the first utlidar-driven turn, watch the direction: a mirrored yaw convention shows as that turn going the wrong way. Stop the dog if it does and write the gotcha; the yaw sign in `utpose_xyyaw` is UNVERIFIED.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05a", "step": "05a.6", "pr": 6,
+      "title": "`.venv/bin/python -m wtdd.dog.drift --ledger ledger.jsonl`. It prints one line per walk (`vs drag [x, y]` for every walk dragged in time, `vs route end` otherwise, with a WARN naming why), the mean and max end error per source over the drag-referenced walks, and `lower-drift source: ...`. That line is the drift number. If it says `none (...)`, the reason is printed; the usual one is a drag that came late or after the dog moved.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05a", "step": "05a.7", "pr": 6,
+      "title": "The power-cycle re-drag (gotcha `05a-3`) **has not been observed live**; its Symptom narrates the sequence as the test reproduces it on `FakeBody`, not as it happened on the dog. To observe it: drag with both poses live, power-cycle the dog, reconnect, drag again while `state.utpose` is still null. Expect `WARN no utlidar pose at this drag: utlidar is untied until a drag sees it had_tie=True` and `dog_cal.json` holding `cals` with `sport` only; when `state.utpose` returns, drag once more so utlidar is tied in its new frame, else its next walk's samples land as `map: null` and the report WARNs `pose.sample rows without a map projection`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.a", "pr": 9,
+      "title": "Read the `[wtdd:dog] localize applied|rejected|unmatched ...` lines: every window except skipped ones prints exactly one, unmatched ones stay one per window past the first five. Read `ms` on every line and `latency_ms` on every `pose.corrected` row and confirm it stays under BUDGET_MS (40) on the driver's dispatcher (the fixture's ~250-cell windows take 2 to 5 ms; a real window thinned to MAX_MATCH_POINTS = 800 is bounded at 17 angles x 289 shifts x 800 gathers). If it does not, the fallback is a queue and one worker thread, not built.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.b", "pr": 9,
+      "title": "The frame convention: the first-frame line's `center_vs_odom_m` should be small and steady, meaning the windows are in the LF_SPORT_MOD_STATE odometry the correction is applied to. If they are in the utlidar frame the correction belongs to that pose source (05a's WTDD_POSE_SOURCE) at the rebase.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.c", "pr": 9,
+      "title": "Tune SEARCH_M, SEARCH_DEG, STEP_DEG, CAP_M, CAP_DEG, MIN_SCORE, MIN_CELLS and MATCH_THRESHOLD in wtdd/dog/localize.py from the `score0` and `score` columns of the rows and from the unmatched lines. All are UNVERIFIED. Watch for 1-cell jitter: a 1-cell shift wins whenever it has strictly more hits than zero offset, so a noisy live band can move the belief by one cell between windows; if the score/score0 columns show that, a margin (apply only when score - score0 >= epsilon) is a one-line tune.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.d", "pr": 9,
+      "title": "The row rate equals the window rate. If it floods the remote's ledger panel, Johnny decides on a throttle.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.e", "pr": 9,
+      "title": "Drag after a corrected walk: the dot lands exactly where dragged, the grid does not jump, the `dog.calibrate` row carries `args.corr`. `calibrate()` reads `self.corr` outside `_grid_lock`, so a window applied in the microseconds between its reads would make the row's `state_after.map` differ from p by that window's correction: a truthful receipt of what happened, not a defect, but worth one look.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.f", "pr": 9,
+      "title": "POST /dog/grid {clear: true} after a drag and a corrected walk, without a power cycle: the remote switches to \"confirm its location (drag it)\" / \"reconnected: drag the dog to where it really is\", the `dog.grid_clear` row has `state_after.recheck` true and `args.corr_before`, and one drag clears it. Design limit to watch: drift that builds up while windows are unmatched (new territory) comes back as one jump when the old room is seen again; past CAP_M it is rejected on every window, those windows are not drawn, and only a grid clear recovers. The rejected-streak WARN at 5 names this.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "05b", "step": "05b.g", "pr": 9,
+      "title": "The live pivot: with a state stream the rows should say `pivot: \"odom\"`. The committed Session tests only exercise `pivot: \"window\"` because `Body.state()` is None there; the reviewer's probe with a fake state showed \"odom\" working end to end, and the first live run confirms it.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "06", "step": "06.1", "pr": 8,
+      "title": "Start the API: `.venv/bin/python -m wtdd.api`. `POST /dog/lidar {on: true}`. Drag the dog on the remote to calibrate (`POST /dog/calibrate`). Walk it about 3 m by hand so `GET /dog/grid` shows walls (`n > 0`).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "06", "step": "06.2", "pr": 8,
+      "title": "`POST /tools/plan_path {from: \"<dog x,y>\", to: \"<a point across the room>\"}`. Expect `result.cost_map` `\"grid\"` and a `plan.route` row with `args.cost_map` grid, `args.grid_source` `\"session\"`, `cached` false, `source` live, and `args.walls > 0`. Save it with `save=true`, or keep the recorded route. A saved route that leaves the drawn rooms is still refused by `check_path` (see Cut).",
+      "do": "With walls on the grid (06.1), `POST /tools/plan_path {from: \"<dog x,y>\", to: \"<a point across the room>\"}`. Eyes: the planned line on the map clears the walls.",
+      "rows": [{"tool": "plan.route", "agent": "plan", "ok": true, "where": {"args.cost_map": "grid", "args.grid_source": "session", "args.walls": {"gte": 1}}}],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "feat/06-planner-grid plan.py: args gain the cost map's info (cost_map, walls, nogo, ...) and grid_source; any grid_source but session marks the row cached, which a live check refuses."
+    },
+    {
+      "item": "06", "step": "06.3", "pr": 8,
+      "title": "Put a box on the floor on a taught waypoint two or three ahead of the dog, let the LiDAR see it (`GET /dog/grid` shows the blob), then `POST /dog/follow`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: this line is the action; its confirm list is 06.4, graded there."
+    },
+    {
+      "item": "06", "step": "06.4", "pr": 8,
+      "title": "The first live run must confirm: (a) exactly one stderr `WARN waypoint occupied: replanned at=i rejoin=j ...` and one `plan.replanned` row (ok true, `blocked`/`rejoin`/`skipped`, `shift_id`); (b) the dog drives the detour around the box, reaches the rejoin waypoint, then the rest of the taught route, and the `dog.follow` row has `replans` 1 and the skipped stops; (c) no replan loop: the waypoint after the detour is not reported occupied (the lattice agreement); (d) the dog's body clears the box: the follower's `reach_px` of 30 px can cut a detour corner by up to 30 px against a 40 px inflation, so watch the closest pass; (e) whether the box's cells reach `THRESHOLD` (3 frames) before the dog advances to that waypoint. The check runs per waypoint, so a box placed on the waypoint the dog is already driving to is left to the avoidance service and `WP_TIMEOUT_S`, not to the replan.",
+      "do": "06.3's action: a box on a taught waypoint two or three ahead of the dog, seen by the LiDAR, then POST /dog/follow. Eyes: the dog drives the detour and its body clears the box.",
+      "rows": [
+        {"tool": "plan.replanned", "agent": "plan", "ok": true, "where": {"args.rejoin.index": {"gte": 1}, "args.shift_id": {"re": "."}}},
+        {"tool": "dog.follow", "agent": "dog", "ok": true, "where": {}}
+      ],
+      "fatal_warns": ["plan\\.replanned ok=False", "dog\\.follow ok=False", "occupied after \\d+ replans"], "unsafe": [], "timeout_s": 600, "settle_s": 0,
+      "note": "feat/06-planner-grid plan.replan: args {from, blocked, cell_px, shift_id} plus rejoin and skipped. The two ok=False patterns are those steps' own stderr lines (ledger.step), in the API's log because the follower runs there. The replans and skipped stops on GET /dog/state are read by a person."
+    },
+    {
+      "item": "06", "step": "06.5", "pr": 8,
+      "title": "Also on the first run: the WARN `following without an occupancy grid` appears when the LiDAR is off; with the LiDAR on and the route clear, the follow is unchanged (`replans` 0); count the `wall cells off the map` WARN lines a real grid produces (cells the LiDAR sees beyond the drawn viewBox): one per waypoint check plus one per plan or replan, loud, not wrong.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "06", "step": "06.6", "pr": 8,
+      "title": "Known and not patched here (contracts F bug 3, on main): `GET /dog/state`, where `follow.replans` and `follow.skipped_stops` are served, raises AttributeError `recheck` on a fresh API until `dog_cal.json` exists. 06's gate does not need it, so the rule says do not patch; a live follow always has a calibration, so the page will see the replans there.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "06", "step": "06.7", "pr": 8,
+      "title": "Both grid facts this item leans on are 01's UNVERIFIED items: the voxel frame's `frame_id`, origin and z-band. If 01's first live frame moves them, the projection here moves with it (`occupancy.to_map_px` is consumed as is).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "07", "step": "07.1", "pr": 10,
+      "title": "Measure the Go2 camera's horizontal field of view with a tape at 2 m: `fov = 2 atan(width seen / 4)`. Put it in `.env` as `WTDD_CAM_FOV_DEG=<deg>`; leave `WTDD_OBJECTS` unset and `WTDD_OBJECTS_DRAFT=live` (or `stub` for a take that must not wait on a model).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "07", "step": "07.2", "pr": 10,
+      "title": "Start `.venv/bin/python -m wtdd.api` and `.venv/bin/python -m wtdd.watch`. `POST /dog/lidar {on: true}`, then calibrate by dragging the dog to where it is (`POST /dog/calibrate`). Open the remote: its first `GET /dog/objects` starts the `objects` thread.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "07", "step": "07.3", "pr": 10,
+      "title": "Stand the dog 2 m from one known object (a chair or a cone). Confirm the pin lands on that object's blob in the grid, not on the wall behind it; confirm it lands on the correct side when the object is right of the image centre (the bearing sign: right of image = clockwise on the map = a negative odometry yaw offset); confirm the label and p on the map match the detector's.",
+      "do": "Stand the dog 2 m from one known object (a chair or a cone), API and detector up, LiDAR on, calibrated. Eyes: the pin sits on that object's blob, not on the wall behind it, on the correct side.",
+      "rows": [{"tool": "object.seen", "agent": "objects", "ok": true, "where": {"args.event": "new", "args.label": {"re": "."}, "args.p": {"gte": 0, "lte": 1}, "args.pos_px": {"re": "^\\[-?\\d"}}}],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 180, "settle_s": 0,
+      "note": "feat/07-objects dog/objects.py _row: args {id, label, p, pos_px, event, shift_id}. Where the pin sits is the eye's."
+    },
+    {
+      "item": "07", "step": "07.4", "pr": 10,
+      "title": "Confirm the ray's origin (LF_SPORT_MOD_STATE position) and the voxel frame (`frame_id`) share one odometry: the pin must not drift away from its blob as the dog turns in place. If pins land consistently about 0.3 m short, that is the camera's forward offset, not applied tonight.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "07", "step": "07.5", "pr": 10,
+      "title": "During a walk, drop the dog's state for a moment (a reconnect, or a STALE_MS gap). Confirm no object is duplicated: `ledger.jsonl` gets no second `object.seen new` row for a thing already on the map, and its pin stays put with `why` naming the pose. Also start the detector before calibrating, then calibrate: each object seen before calibration takes its first pin and does not become a second object (one `new` row per thing).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "07", "step": "07.6", "pr": 10,
+      "title": "Walk the route and watch for mis-association (a person in front of a wall pins on the wall, because placement is the first counted cell on the ray) and drift (the pin moves with the odometry). Check that stale objects fade about 2 s after the detector stops boxing them.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "07", "step": "07.7", "pr": 10,
+      "title": "Check the ledger: one `object.seen` row per new / drafted / stale / seen_again event and none per frame. With `WTDD_OBJECTS_DRAFT=live` there is one `llm.generate` (agent `objects`) per new object; with `stub` the drafted rows say `cached=true source=stub`. A mistyped mode such as `stubb` must show `draft FAILED ValueError` per object on the map and make no model call.",
+      "do": "With WTDD_OBJECTS_DRAFT=live, walk the route past one object the detector boxes. Eyes: one pin per object, none per frame.",
+      "rows": [
+        {"tool": "object.seen", "agent": "objects", "ok": true, "where": {"args.event": "new"}},
+        {"tool": "llm.generate", "agent": "objects", "ok": true, "where": {}},
+        {"tool": "object.seen", "agent": "objects", "ok": true, "where": {"args.event": "drafted"}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 300, "settle_s": 0,
+      "note": "One new object: its object.seen new row, the model's llm.generate (agent objects), then its drafted row. A stub draft is cached true, source stub, which a live check refuses. No row per frame is read off the ledger panel by a person."
+    },
+    {
+      "item": "08", "step": "08.1", "pr": 2,
+      "title": "`git fetch origin && git checkout feat/08-roster-quote`. In `.env` put `WTDD_GUARD_SHIFT_USD` (the one guard shift the night replaces, from the interview or BLS), `WTDD_GUARD_SHIFT_CITE` (its source: the interview date, or the BLS table and year; `config.py` cuts a value at ` #`, so the cite must not contain that sequence), `WTDD_PRICE_PER_STOP_NIGHT`, and `WTDD_ON_CALL_NAME` (03's key; set it here if 03 is not merged yet).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "08", "step": "08.2", "pr": 2,
+      "title": "`.venv/bin/python -m wtdd roster`: expect exit 0, stops 10, 22 and 23 each assigned to `body`, `cameras []` with a WARN until 09 puts cameras on the map, `on_call` the name entered.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "08", "step": "08.3", "pr": 2,
+      "title": "`.venv/bin/python -m wtdd quote nights=N`: expect `price = 3 × N × the price entered` and `guard_shift_ref` the value and cite entered. Then `quote nights=1.5`: expect exit 1 and a FAILED `quote.night` row whose args say `nights 1.5`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "08", "step": "08.4", "pr": 2,
+      "title": "Start the API from the repo on a free port (7788 is the old repo's live listener) and open the remote: \"The night · roster and quote\" sits at the top of the right column and shows both rows with the real cite.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "09", "step": "09.1", "pr": 1,
+      "title": "Check the branch out in `/Users/johnnysheng/code/origin-build` itself: `git fetch origin && git checkout --detach origin/feat/09-fixed-cam`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "09", "step": "09.2", "pr": 1,
+      "title": "There first: `.venv/bin/python -m unittest wtdd.cam.test_cam -v`. `yolo11n.pt` sits there, so `LiveDetector` runs the real subprocess and prints what YOLO saw on the drawn figure. Expect 9 tests OK; with a copy of the weights it printed `classes={} ms=443` here.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "09", "step": "09.3", "pr": 1,
+      "title": "Start the API as usual (`.venv/bin/python -m wtdd.api`, port 7788) and the listener (`python -m wtdd.chat listen`) so the verdict path is live. `python -m wtdd.watch` on the dog's feed is optional.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "09", "step": "09.4", "pr": 1,
+      "title": "On the laptop: clone the repo at `feat/09-fixed-cam`, make a venv, `pip install requests opencv-python` (both in `requirements.txt`). Open the tunnel: `ssh -N -L 7788:127.0.0.1:7788 <user>@<the Mac>` (Remote Login on the Mac). The API stays bound to `127.0.0.1`; opening it to the LAN is Johnny's call and is not in this PR. Then `python -m wtdd.cam --cam lap1` (device 0, 0.5 Hz; grant the terminal camera access when macOS asks).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "09", "step": "09.5", "pr": 1,
+      "title": "The first live run must confirm: (a) `GET /ledger` shows one `cam.frame` and one `cam.detect` row per posted frame, with the detector's real `latency_ms` (cold here: 4524 ms wall) and `args.shift_id`; record the achieved frame rate, since the client posts serially and a detection longer than 2 s lowers it below 0.5 Hz. (b) On the remote, the \"Fixed cameras · one more eye\" panel refreshes the laptop's frame, the boxes sit on the real objects, the header shows the detector's ms and goes `stale` within about 3 s after the client stops. (c) The frame is current, not one the capture backend buffered (wave a hand, compare). The cv2 device path is UNVERIFIED.",
+      "do": "On the laptop, run the camera client against the API (PR #1 step 4). Eyes: the Fixed cameras panel refreshes, the boxes sit on the real objects, the frame is current (wave a hand).",
+      "rows": [
+        {"tool": "cam.frame", "agent": "cam", "ok": true, "where": {"args.cam": {"re": "."}, "args.shift_id": {"re": "."}}},
+        {"tool": "cam.detect", "agent": "cam", "ok": true, "where": {"args.cam": {"re": "."}, "args.shift_id": {"re": "."}, "latency_ms": {"gte": 1}}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 180, "settle_s": 0,
+      "note": "feat/09-fixed-cam cam/__init__.py: step('cam', 'cam.frame', 'camera', {cam, shift_id, bytes}), then step('cam', 'cam.detect', 'yolo', {cam, shift_id, model}). The frame rate is read by a person."
+    },
+    {
+      "item": "09", "step": "09.6", "pr": 1,
+      "title": "Arm the intruder watch (the remote's \"intruder watch\" button, or `POST /intruder {on}`) and step into the laptop's view. Confirm: exactly one \"who dis?!\" in THE CASTLE with the laptop's boxed frame; an `intruder.alarm` row with `args.file` ending `cams/lap1.jpg` and `trigger cam:lap1:<epoch>`; `pending.json` written. Reply \"idk\": STRANGER DANGER x3 and the living-room light alarm. Reply anything else: \"ok, standing down\". Stay in view over 60 s: no second question inside 60 s (the client's line says `cooldown N s`), and one more after the cooldown only if still armed and in view.",
+      "do": "Arm the intruder watch (POST /intruder {on}) and step into the laptop's view. Eyes: one \"who dis?!\" in THE CASTLE with the laptop's boxed frame, none again inside 60 s.",
+      "rows": [
+        {"tool": "cam.detect", "agent": "cam", "ok": true, "where": {"args.cam": {"re": "."}}},
+        {"tool": "chat.post", "agent": "central", "ok": true, "where": {"args.trigger": {"re": "^cam:"}}},
+        {"tool": "intruder.alarm", "agent": "central", "ok": true, "where": {"args.file": {"re": "cams/[^/]+\\.jpg$"}}}
+      ],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 180, "settle_s": 0,
+      "note": "The trigger cam:<id>:<epoch> is on the chat.post (and chat.claim) args: intruder.alarm's args are {look, seconds, ask, file} (feat/09-fixed-cam tools/intruder_alarm.py). The chat.post lands before intruder.alarm because the post runs inside the alarm's step. The 60 s cooldown is the eye's."
+    },
+    {
+      "item": "09", "step": "09.7", "pr": 1,
+      "title": "Also watch for: the ask's round trip (the detector runs twice on an ask, then the chat send's read-back) staying under the client's 60 s post timeout; and, if the dog's `watch.py` is also armed and sees the same person, two questions (one per eye, different trigger keys, the second `pending.json` replacing the first). Decide whether that is acceptable before the demo; the fix would be one shared cooldown, which this PR does not add.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.1", "pr": 13,
+      "title": "Before starting the listener for the night, set `WTDD_SHIFT=<the shift id, e.g. 2026-09-27>` in `.env` and leave it set through the morning signature (gotcha 10-1: without it a night that crosses midnight stamps two shift ids and the record splits a stop across two pages).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.2", "pr": 13,
+      "title": "Run one 03 round on the dog: the wake in THE CASTLE, the map's stops, one \"who dis?!\" flag to the on-call 1:1, answered.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.3", "pr": 13,
+      "title": "`python -m wtdd.record --shift <id> --html /tmp/record.html`. Confirm: the header has no \"cached/stub\" line (a live night); the stderr line's `stops=` equals the map's stop count and `flags=` the escalate posts; each stop shows its look kind, the detector's boxes, the model's line, its `say:<wake>:<n>` post and whether a person was pinged; the flag names the on-call handle, the reply and its `acked_ms`; the refusals are the ok=false PermissionError rows; the window's first ts is the round's wake (on a ledger that still holds pre-03 rows, the first stamped shift reaches back to the nearest earlier unstamped wake, so check the printed first ts); the signature line says \"unsigned\".",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.4", "pr": 13,
+      "title": "`python -m wtdd record_sign by=\"<name>\"`, re-render: \"signed by <name> at <time>\", every count unchanged.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.5", "pr": 13,
+      "title": "With WTDD_SHIFT still set, press dog_say once from the page and re-render: stops must stay 3 (the map's count) with their pinged cells unchanged, flags unchanged, the new post listed in the red line \"1 post stamped after the signature, not on the record (no stop, ping or flag above counts it)\", and `after_signature=1` on the stderr line.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.6", "pr": 13,
+      "title": "`python -m wtdd record_sign` a second time: refused; the page lists it under Refusals.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "10", "step": "10.7", "pr": 13,
+      "title": "Change WTDD_SHIFT before the next night (a value left in .env makes the next night the same shift, and its signature is refused as already signed).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.1", "pr": 12,
+      "title": "Run one real round with decisions (02's path) with the detector process up (`python -m wtdd.watch`), so each stop writes `dog.look` -> `watch.boxes` -> `llm.generate` (agent watch) -> `decided`; make one stop land below the threshold so a \"not sure:\" question is posted, and have a housemate answer it.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.2", "pr": 12,
+      "title": "Put a person in frame at a stop so the flag goes to the on-call person's 1:1 (`chat.post` kind escalate); have that person reply from the 1:1; sign the record once (`python -m wtdd record_sign by=<name>`).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.3", "pr": 12,
+      "title": "Draw a no-go zone across the taught route (04), ask for a walk, and let the refusal land; do not move the dog or the lights until the next wake.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.4", "pr": 12,
+      "title": "From the group, correct one confident label (\"that's a tarp, not a person\"), then run the next round so the same stop decides again.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.5", "pr": 12,
+      "title": "Grade the shift: `python -m wtdd.evals --scenario decide,escalate,refuse,correct --ledger ledger.jsonl --shift <id>`. The first live shift's rows must grade under the same four graders with no code change: every result is pass, fail or unsafe with the row named in `why`; a Python traceback instead of a graded row is a bug in this item.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.6", "pr": 12,
+      "title": "What that first run must confirm, row by row: 02's `decided` carries `args.threshold` and `state_after.{label, p, needs_person, model}` as the grader reads them; 04's `route.refused` has `source: \"map\"` both at the top level and in `args`, `ok: false`, and its waypoint inside the zone; 03's reply rows carry `acked_ms` as an int (missing is a fail; not whole seconds is only a WARN); every `chat.post` carries `args.shift_id` (the shift window keys on it); at each stop the detector's `watch.boxes` row lands before dog_say's `llm.generate` (an `unsafe` there is the finding the rule exists for, not a grader bug); the stop's vision call is written with agent `watch`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "11", "step": "11.7", "pr": 12,
+      "title": "Only after step 5 grades cleanly, and only from that main checkout: the same command with `--write`. Check the README diff keeps the eleven measured rows of 2026-09-13 (merge() seeds from `docs/evidence/trials-2026-09-13.json` when `evals.json` is absent) and adds the four new scenarios. Never `--write` from a worktree; this PR never ran it.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "12", "step": "12.1", "pr": 11,
+      "title": "Find out the person's phone type. iPhone/iMessage: leave `WTDD_ON_CALL_CHANNEL` unset (or `=imessage`); 03's 1:1 path runs unchanged and nothing below applies.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "12", "step": "12.2", "pr": 11,
+      "title": "If SMS: a Twilio account and an MMS-capable US/CA number. On a trial account, verify the person's number first or the first send fails with code 21608. In `.env`: `WTDD_ON_CALL_CHANNEL=sms`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` (E.164). For the photo, a public https tunnel to this Mac's API as `TWILIO_MEDIA_BASE`; `curl <base>/pictures/<a staged file>` must return the JPEG from outside. `WTDD_ON_CALL_HANDLE` must be E.164 exactly (Twilio's `To`).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "12", "step": "12.3", "pr": 11,
+      "title": "First live read: `.venv/bin/python -m wtdd.chat watch --guid sms:<handle> --once` must exit without error. This is the first check that Twilio accepts the `DateSent>` list filter (a 400 raises, loud; a non-JSON page names its status and body).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "12", "step": "12.4", "pr": 11,
+      "title": "First live send: `.venv/bin/python -m wtdd.chat send --guid sms:<handle> --text 'test from the dog'`. Confirm the text arrives; confirm the `chat.post` row is `ok=true, cached=false, source=live` with `state_after.status` sent or delivered and an `SM` sid as `guid`.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "12", "step": "12.5", "pr": 11,
+      "title": "First live photo: `.venv/bin/python -m wtdd.chat photo --guid sms:<handle> --file <a jpg> --text 'who dis?!'`. Confirm the MMS arrives with the picture and the line in one message, and that `state_after.media` is the public URL.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "12", "step": "12.6", "pr": 11,
+      "title": "First live reply: `.venv/bin/python -m wtdd.chat listen`, trigger a flag, the person replies \"thats my friend\". Confirm one `intruder.verdict` row with `app=sms, cached=false`, a numeric `acked_ms`, `chat=sms:<handle>`, and that the reply is read exactly once. This also confirms the boot watermark (this Mac's clock against Twilio's `date_sent`) does not skip a reply.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: no row is pinned for this line yet; a person adds rows from the branch's row contract"
+    },
+    {
+      "item": "14", "step": "14.1", "pr": null,
+      "title": "the first spin as the origin discriminator: the origin stays put and the walls do not rotate on the page during a pure turn (else body-relative: STOP; 01, 05b, 06, 07, 15, 16, 18a, 19, 21 all wait).",
+      "do": "After 01's LIVE steps 1-3, press the scout button (POST /dog/scout) at the drop point. Eyes: the origin stays put and the walls do not rotate on the page while the cone turns; rotating walls or a rosette = STOP.",
+      "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.frames": {"gte": 1}, "state_after.cells_added": {"gte": 1}, "state_after.cb_errors_during": 0}}],
+      "fatal_warns": ["WARN lidar frame callback failed", "WARN lidar frame rejected"], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "Row keys as pinned by feat/14-scout-spin's RED test (wtdd/dog/test_scout.py: agent dog, app map; state_after {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed, avoid, cb_errors_during, ...} plus heading0, closed_deg, velocity_path, why); UNVERIFIED until that branch is green. frames gte 1 and cells_added gte 1 are UNVERIFIED guesses (nonzero). The walls standing still is the eye's."
+    },
+    {
+      "item": "14", "step": "14.2", "pr": null,
+      "title": "whether the avoidance service carries a yaw-only MOVE (else avoid off, said on the row).",
+      "do": "The same press as 14.1. Eyes: the dog turned; the row names the velocity path that carried the turn.",
+      "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.velocity_path": {"re": "."}, "state_after.avoid": {"in": [true, false]}}}],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "Which path turned it (velocity_path, avoid on the row) is the finding, read off the PASS row. A press with no turn is the FAILED row naming avoid on or off (feat/14-scout-spin RED test): a WARN here, then the timeout."
+    },
+    {
+      "item": "14", "step": "14.3", "pr": null,
+      "title": "closure within 10° on the IMU versus 05a's utlidar yaw and 05b's summed dtheta (or `absent`).",
+      "do": "The same press as 14.1. Eyes: the dog's nose is back where it started.",
+      "rows": [{"tool": "dog.scout", "agent": "dog", "ok": true, "where": {"state_after.closed": true, "state_after.closed_deg": {"gte": 350, "lte": 370}}}],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 120, "settle_s": 0,
+      "note": "closed is |turned - 360| <= 10 on the IMU (feat/14-scout-spin RED test); a turn that did not close is ok true, closed false: a WARN here. The comparison with 05a's utlidar yaw and 05b's summed dtheta (or absent) is read off the same row by a person."
+    },
+    {
+      "item": "14", "step": "14.4", "pr": null,
+      "title": "cells added by the spin versus 12 s standing still (the control press with z 0); the four ranges sane.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: the control press (z 0) is not pinned on feat/14-scout-spin (a press with no turn may be the no-turn FAILED row); the two cells_added are compared by a person."
+    },
+    {
+      "item": "14", "step": "14.5", "pr": null,
+      "title": "the receipts-panel row rate during the spin.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: a rate a person reads off the receipts panel."
+    },
+    {
+      "item": "14", "step": "14.6", "pr": null,
+      "title": "under `WTDD_NO_PLAN=1`: record a route on the empty canvas and save a zone, both accepted with the WARN; `plan_path` with no session grid refused with its row.",
+      "do": "WTDD_NO_PLAN=1 in .env, no session grid: record a route on the empty canvas and save a zone (both accepted with the WARN), then `python -m wtdd plan_path from=<a> to=<b>`.",
+      "rows": [{"tool": "plan.route", "agent": "plan", "ok": false, "where": {"response_or_error": {"re": "no session grid under WTDD_NO_PLAN"}}}],
+      "fatal_warns": [], "unsafe": [], "timeout_s": 300, "settle_s": 0,
+      "note": "feat/14-scout-spin's RED test (wtdd/test_noplan.py): one plan.route row ok false naming 'no session grid under WTDD_NO_PLAN'; agent plan is main's plan.route agent. The WARN 'rooms off under WTDD_NO_PLAN' is expected here, not fatal; the accepted route and zone are the eye's."
+    },
+    {
+      "item": "15", "step": "15.1", "pr": null,
+      "title": "the first live frame's origin[2] and z range (Z0 guess −0.3 m) and whether origin[2] moves between frames (the re-base WARN counter stays 0).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: numbers a person reads off the first-frame line; the re-base WARN's text is not pinned on feat/15-floorplan."
+    },
+    {
+      "item": "15", "step": "15.2", "pr": null,
+      "title": "how high a wall at 3 m is seen (tunes TALL, confirms the straight-run rule).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: a height a person reads."
+    },
+    {
+      "item": "15", "step": "15.3", "pr": null,
+      "title": "one 3 m drive along a wall past a table or desk: the table grey, the wall a line, the legend's numbers read off the `dog.floorplan` row, screenshot in `docs/evidence/night-2/`; one shelf photographed for goal 16. STOP if 01's LIVE step 3 streaks: nothing here survives a body-relative origin.",
+      "do": "One 3 m drive along a wall past a table or desk, LiDAR on. Eyes: the table grey, the wall a line; screenshot the page into docs/evidence/night-2/; photograph one shelf for goal 16.",
+      "rows": [{"tool": "dog.floorplan", "ok": true, "where": {"args.grid_source": "session", "args.threshold": {"gte": 1}, "state_after.classes.wall": {"gte": 1}}}],
+      "fatal_warns": ["WARN lidar frame callback failed", "WARN lidar frame rejected"], "unsafe": [], "timeout_s": 300, "settle_s": 0,
+      "note": "Row keys as pinned by feat/15-floorplan's RED test (wtdd/dog/test_floorplan.py: args {threshold, constants, grid_source}, state_before {cells, frames}, state_after {classes {wall, tall, slab, low}, segments, ms}; ok false when no wall); its agent is not pinned there, so it is not checked. wall gte 1 is an UNVERIFIED guess; the table's class is the eye's. A floor plan run on ui/grid.json is cached true, which a live check refuses."
+    },
+    {
+      "item": "16", "step": "16.1", "pr": null,
+      "title": "`WTDD_CAM_FOV_DEG` measured (07's open item).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "16", "step": "16.2", "pr": null,
+      "title": "one live stop facing the shelf: one `blob.labelled` row with app, model, latency_ms, the crop's sha, label, p; the run moves to grey only if p ≥ threshold.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "16", "step": "16.3", "pr": null,
+      "title": "the failure shot if the model is wrong (a stack called a wall): the row keeps both verdicts; never staged.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "17", "step": "17.1", "pr": null,
+      "title": "one stop with an open cover: the `decided` row action escalate, rule `escalate:opening`, the heads-up with the photo on the on-call phone (03's UNVERIFIED 1:1 send is the risk, BOARD item 2).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "17", "step": "17.2", "pr": null,
+      "title": "one reply typed live: `reply.decided` with meaning, p, latency_ms; acked_ms on the verdict row; both rows on the morning page.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "18", "step": "18.1", "pr": null,
+      "title": "the camera's pt placed with 23 on open floor within ~5 m of a stop; the dry check with the dog standing (`cost_map grid`, `grid_source session`).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "18", "step": "18.2", "pr": null,
+      "title": "one live sighting → the ask in the 1:1 with the polyline and the block on the page before anything moved; \"yes\" → `intruder.verdict` approved, `dispatch.decided` app imessage, the walk, `dog.follow reached == of`, `dog.look ok`, the photo in the thread within about a minute; the tape-measure distance at arrival written in the PR comment, never in code.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "18", "step": "18.3", "pr": null,
+      "title": "the three drills, one at a time: a box → one `plan.replanned`; a no-go across the only way → FAILED decided, the dog does not move; a person mid-follow → with 00 merged `stop.person`, without it the dog's own `who dis?!` and the stand-in's thumb on stop.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "18", "step": "18.4", "pr": null,
+      "title": "the two-eyes rule seen: an open who-dis from the dog's eye blocks the camera's ask, on the row.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "18", "step": "18.5", "pr": null,
+      "title": "`WTDD_DISPATCH_AUTO=1` once, off camera, only if every step above passed, to see the threshold path (18b's proof; not filmed).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "19", "step": "19.1", "pr": null,
+      "title": "one dining table 2 m ahead at a stop: one `zone.decided` (app openrouter, latency_ms) then one `zone.proposed` with cells on the table (read cells and dist_m against a tape).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "19", "step": "19.2", "pr": null,
+      "title": "one confirm by the named stand-in.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "19", "step": "19.3", "pr": null,
+      "title": "one walk refused at it with `route.refused` source map.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "19", "step": "19.4", "pr": null,
+      "title": "one dismiss. About 20 minutes after 01 and 07 pass.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "20", "step": "20.1", "pr": null,
+      "title": "on Sunday one stop under `WTDD_MODE=site` names a listed thing in its sentence.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "20", "step": "20.2", "pr": null,
+      "title": "person recall unchanged on the take (the `who dis?!` still fires on a person).",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "21", "step": "21.1", "pr": null,
+      "title": "three taps on the session grid at the house: `plan.multistop` ok, the polyline around the confirmed zone, saved and walked with the body clear of the zone's edge.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "21", "step": "21.2", "pr": null,
+      "title": "one tap behind the zone → a detour drawn.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
+      "item": "21", "step": "21.3", "pr": null,
+      "title": "one tap inside a wall → the FAILED leg shown, nothing saved.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
+    },
+    {
       "item": "22", "step": "22.1", "pr": null,
       "title": "on the first live step of the evening (`01.1`) the verdict line appears within a second of the row landing, read beside the API terminal.",
       "do": "Run `python -m wtdd.livecheck --step 01.1` beside the API terminal, then do 01.1. Eyes: the verdict line within a second of the dog.connect row in the receipts panel.",
@@ -119,6 +801,12 @@
       "title": "one deliberate FAIL (a step run without the dog) and the timeout line.",
       "do": "Run `python -m wtdd.livecheck --step 04.4 --timeout 15` with the dog off and press nothing. Eyes: fifteen per-second lines, then `FAIL 04.4 · timeout after 15 s: missing route.refused where args.source map, args.zone re ^nogo`.",
       "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 15, "settle_s": 0, "note": "unchecked: the FAIL is the point."
+    },
+    {
+      "item": "23", "step": "23.1", "pr": null,
+      "title": "on Sunday, `place camera` where the Mac actually sits (open floor within ~5 m of a stop, inside a drawn non-nogo zone), save; `python -m wtdd roster` exit 0 with the camera in its zone; 18a's dry check reads the new pt.",
+      "do": "",
+      "rows": [], "fatal_warns": [], "unsafe": [], "timeout_s": 60, "settle_s": 0, "note": "unchecked: rows wait for this goal's branch and PR"
     }
   ]
 }
