@@ -52,8 +52,8 @@ duplicate posts are checked over the whole --ledger file, the shipped rule.
 They are not in "all": they grade a ledger and drive nothing. --write refuses dry trials (SystemExit; README.md and
 evals.json untouched): the README's table is device grades only. evals.json is gitignored, so on a fresh clone merge()
 seeds from docs/evidence/trials-2026-09-13.json (same shape) and --write on the dog keeps the measured rows.
-UNVERIFIED: no live ledger has been graded by the four; 02's decided and 04's route.refused shapes come from their
-branches (not on this base), and 03's from its code and fixtures, never from a run on the dog."""
+UNVERIFIED: no live ledger has been graded by the four; 02's decided, 03's and 04's route.refused shapes come from
+their code (merged: wtdd/decide.py, wtdd/chat/oncall.py, wtdd/nogo.py) and fixtures, never from a run on the dog."""
 from __future__ import annotations
 import argparse
 import json
@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, field, ledger   # field.MAP and field.inside read at call time, so WTDD_MAP (04) and a patch apply
+from .config import API
 from .ledger import log
 
 README = config.ROOT / "README.md"
@@ -71,7 +72,6 @@ EVALS = config.ROOT / "evals.json"   # every scenario's newest rows (the remote 
 SNAPSHOT = config.ROOT / "docs" / "evidence" / "trials-2026-09-13.json"   # the measured trials the README shows; merge()'s seed without evals.json
 START, END = "<!-- trials:start -->", "<!-- trials:end -->"
 ORDER = ["twice", "walk", "look", "person", "follow", "decide", "escalate", "refuse", "correct"]   # merge() sorts on it
-API = "http://127.0.0.1:7788"
 FIXTURES = config.ROOT / "wtdd" / "fixtures" / "evals"   # <scenario>.jsonl + refuse-map.json, built by make.py there
 DRY = ("decide", "escalate", "refuse", "correct")          # graded from a ledger: a committed fixture, or --ledger on the dog
 LOCAL = ("watch.boxes", "watch.detect", "cam.detect")   # the detector's rows: the local person-in-frame stop, no model in it
@@ -509,12 +509,7 @@ def run_twice() -> list[dict[str, Any]]:
 
 
 # 19 · scout-zones
-FIXTURES = config.ROOT / "wtdd" / "fixtures" / "evals"   # 11's name: the dry ledgers a scenario is graded on
 ORDER.append("scout")
-
-
-def load(path) -> list[dict[str, Any]]:
-    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
 
 
 def _auto_why(r: dict[str, Any], thr: float) -> str | None:
@@ -621,8 +616,9 @@ def run_scout(fixture=None) -> list[dict[str, Any]]:
     # DEMO_CACHE: the scout's receipts. What: wtdd/fixtures/evals/scout.jsonl (built by make_scout.py in the row shapes
     # scout_zones.py writes, every row cached=true) graded against scout-map.json. Why: no dog, no detector, no person
     # and no key in a worktree; the grader must be seen to pass and to say unsafe (scout-unsafe.jsonl) before a live
-    # ledger is trusted to it. Live: 11's run_graded calls grade_scout(rows, map) and unsafe_scout on the real
-    # ledger.jsonl for a shift once 11 merges (--ledger/--shift); this branch grades dry only and --write refuses it.
+    # ledger is trusted to it. Live: not wired yet. 11 has merged, but its run_graded (--ledger/--shift) grades DRY's
+    # four only, so --scenario scout grades this fixture whatever --ledger says, and --write refuses it. The live path
+    # is run_graded calling grade_scout(rows, map) and unsafe_scout on the shift's rows of the real ledger.jsonl.
     f = Path(fixture) if fixture else FIXTURES / "scout.jsonl"
     t0 = time.monotonic()
     rows: list[dict[str, Any]] = []
@@ -734,9 +730,6 @@ def main(argv: list[str] | None = None) -> int:
     if a.write and any(r.get("dry") for r in res):   # the README's trials are device grades only: a dry trial never lands there
         raise SystemExit(f"--write refused: {sorted({r['scenario'] for r in res if r.get('dry')})} graded dry on fixtures; README.md and evals.json untouched")
     if a.write:
-        if any(r.get("dry") for r in res):
-            raise SystemExit("--write refuses dry (fixture) trials: the README's trials table is device grades only; "
-                             "run with --ledger ledger.jsonl --shift <id>")
         write_readme(table(merge([{k: v for k, v in r.items() if k != "dry"} for r in res])))   # evals.json keeps the 7-key row
     return 0 if all(r["grade"] == "pass" for r in res) else 1
 

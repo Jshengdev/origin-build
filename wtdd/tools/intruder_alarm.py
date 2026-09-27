@@ -1,9 +1,11 @@
 """Stranger in the house: a photo (level by default, the fastest look; tilt or sit if the face is higher), the
-detector's boxes on it, and the question "who dis?!" with the picture to the on-call person's 1:1 chat, never the
-castle (ask=true, the default; item 03: WTDD_ON_CALL_NAME / WTDD_ON_CALL_HANDLE, unset = this tool fails loud, nothing
-posted). The listener then reads that person's verdict for PENDING_WINDOW_S: "idk" (no idea, dunno, not me, no clue...) means
-"STRANGER DANGER!!!" three times and the living room strobing red and blue for N seconds (light_alarm); any other
-answer stands it down with "ok". ask=false skips the question and alarms at once. Triggered by python -m wtdd.watch when the intruder watch is armed (GET/POST
+detector's boxes on it, and the question "who dis?!" with the picture to the on-call chat, oncall.person(): the
+person's 1:1 (item 03: WTDD_ON_CALL_NAME / WTDD_ON_CALL_HANDLE), or the chat WTDD_ON_CALL_GUID names, the group itself
+for the demo (S10). ask=true is the default; nothing configured = this tool fails loud, nothing posted. The listener
+reads that chat's answer within its PENDING_WINDOW_S, typed by decide.read_reply (wtdd/chat/listen.py verdict()):
+stranger means "STRANGER DANGER!!!" three times and the living room strobing red and blue for N seconds (light_alarm);
+standing_down posts "ok, standing down", handled "ok, closed", acknowledged keeps it open for handled, and an unclear
+reply is asked once more ("do you know them? yes or no"). ask=false skips the question and alarms at once. Triggered by python -m wtdd.watch when the intruder watch is armed (GET/POST
 /intruder) and a person is in view for a few frames, at most once a minute; or by hand. One intruder.alarm row around
 the look, the boxes, the post and the lights; each part has its own rows. Nothing here retries."""
 ARGS = {"look": {"type": "string", "default": "level", "doc": "level | tilt | sit"},
@@ -13,7 +15,6 @@ ARGS = {"look": {"type": "string", "default": "level", "doc": "level | tilt | si
 
 TEXT = "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!"
 ASK = "who dis?!"
-PENDING_WINDOW_S = 120
 
 
 def run(look="level", seconds=5, trigger=None, ask=True):
