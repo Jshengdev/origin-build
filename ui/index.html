@@ -50,10 +50,13 @@
   .lamp { stroke: #262323; stroke-width: 3; cursor: grab; } .lamp-glow { fill: #ffcc44; }
   .strip-line { stroke: #262323; stroke-width: 10; stroke-linecap: round; cursor: grab; } .strip-glow { stroke: #ffcc44; stroke-width: 24; stroke-linecap: round; }
   .handle { fill: #fff; stroke: #262323; stroke-width: 2; cursor: grab; }
+  .dogbody { stroke: #e8590c; stroke-opacity: .6; stroke-linecap: round; pointer-events: none; } .doghead { fill: #e8590c; stroke: #fff; stroke-width: 2; pointer-events: none; }   /* S9 · the Go2 as a pill at its real size */
   .dogdot { fill: #e8590c; stroke: #fff; stroke-width: 3; cursor: grab; } .dognose { stroke: #e8590c; stroke-width: 4; stroke-linecap: round; }
   .cone { fill: rgba(232,89,12,.14); stroke: rgba(232,89,12,.6); stroke-width: 2; } .conetip { fill: #fff; stroke: #e8590c; stroke-width: 3; cursor: grab; }
   .trace { fill: none; stroke: #e8590c; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .8; } .mark { fill: #e8590c; stroke: #fff; stroke-width: 2; }
   .lidar { fill: none; stroke: rgba(11,13,196,.5); stroke-width: 6; stroke-linecap: round; pointer-events: none; }   /* one dot per "M x y h0" */
+  .planned { fill: none; stroke: #0a7f5a; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }   /* S6b: follow.planned, every leg */
+  .actual { fill: none; stroke: #e8590c; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; opacity: .9; pointer-events: none; }   /* S6b: follow.trace, where it went */
   .lbl { font-family: 'IBM Plex Mono', monospace; font-size: 17px; fill: #262323; paint-order: stroke; stroke: #fbfaf7; stroke-width: 5px; user-select: none; pointer-events: none; }
   .levels { font-family: var(--mono); font-size: 10.5px; line-height: 1.7; }
   .bar { display: inline-block; height: 7px; background: #ffcc44; border-radius: 4px; vertical-align: middle; margin-left: 8px; transition: width .2s; }
@@ -67,6 +70,17 @@
   .occ { fill: rgba(38,35,35,.6); stroke: none; pointer-events: none; }   /* one square per grid cell (not ".grid": that is the page layout) */
   .occlbl { opacity: .85; }
   /* 01 · occupancy · end */
+  /* 04 · nogo · start */
+  .nogo { fill: rgba(220,38,38,.16); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+  .nogo-draft { fill: rgba(220,38,38,.08); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 2 4; pointer-events: none; }
+  .lbl.nogo-lbl { fill: #dc2626; }
+  /* 04 · nogo · end */
+  /* 07 · objects · start */
+  .obj .pin { fill: rgba(220,30,30,.85); stroke: #fff; stroke-width: 2; pointer-events: none; }
+  .obj image { pointer-events: none; }   /* the thumbnail never takes a click meant for the map */
+  .obj.stale { opacity: .35; }
+  .objmsg { font-size: 11px; opacity: .8; }
+  /* 07 · objects · end */
   /* 15 · floorplan · start */
   .fp-wall { fill: #262323; } .fp-slab { fill: #aaa59d; } .fp-low { fill: #d6d1c7; }
   .fp-wall, .fp-slab, .fp-low { fill-opacity: .55; }   /* translucent like 01's .occ: a lamp, the strip, the route or a stop label under a cell still shows */
@@ -94,6 +108,8 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const redact = s => typeof s === "string" ? s.replace(/\+\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "a member") : s;   // S10: the Receipts are filmed: a phone handle or an email reads "a member"; dates, coordinates and numbers pass
+const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
 function App() {
@@ -103,6 +119,7 @@ function App() {
   const [busy, setBusy] = useState(null);
   const [last, setLast] = useState(null);
   const [mode, setMode] = useState(null);          // null | "path" | "dot" | "line"
+  const [nogoDraft, setNogoDraft] = useState([]);   // 04 · nogo: the corners clicked so far in "nogo" mode
   const [placing, setPlacing] = useState(null);
   const [pending, setPending] = useState(null);
   const [dot, setDot] = useState(null);
@@ -129,11 +146,15 @@ function App() {
   const run = async (name, args) => { setBusy(name); const out = await call(name, args); setLast(out); setBusy(null); if (name === "lights_status" && out.ok) setStatus(out.result); return out; };
   const toMap = e => { const svg = svgRef.current, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse()); return [Math.round(p.x), Math.round(p.y)]; };
   const withRooms = m => ({ ...m, lights: (m.lights || []).map(L => ({ ...L, room: roomOf(L.kind === "line" ? [(L.pts[0][0] + L.pts[1][0]) / 2, (L.pts[0][1] + L.pts[1][1]) / 2] : L.pts[0], m.rooms) })) });
-  const saveMap = async () => { const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays
+  const saveMap = async () => { if (mode === "nogo" && nogoDraft.length) { setLast({ ok: false, tool: "save map", error: "not saved: a no-go zone is still being drawn: press close zone (or clear), then save" }); return; } const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays
+  const clearNogo = async () => { const m = withRooms({ ...map, zones: (map.zones || []).filter(z => z.nogo !== true) }); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setNogoDraft([]); setMode(null); } };   // S4: every no-go zone off the map, saved at once; the lighting zones stay
   const setEnt = (k, v) => setMap({ ...map, entity: { ...map.entity, [k]: v } });
 
   // ---------- the dog: hold-to-drive (W A S D, Q E to turn) and the looks. Velocities refresh every 200 ms while a key
   // is held; the server stops the dog 0.6 s after the last refresh, so a dropped key never runs it into a wall.
+  // S1: the keyboard drives only in #admin and only while "keys drive" is on (off by default); typing in a field or a
+  // shortcut with ctrl, cmd or alt never drives; leaving the tab (blur, hidden) releases every held key, sends one stop
+  // if a key was held, and disarms, because a keyup that lands in another window would otherwise refresh the dead-man forever.
   const [dog, setDog] = useState(null);
   const [photo, setPhoto] = useState(null);
   const [live, setLive] = useState(null);   // the dog's camera: GET /dog/frame.jpg, self-paced, only while connected
@@ -147,14 +168,28 @@ function App() {
   const sendDrive = () => { const v = [0, 0, 0]; for (const k of keys.current) { const kv = VEL[k]; if (kv) { v[0] += kv[0]; v[1] += kv[1]; v[2] += kv[2]; } } return v.some(Boolean) ? post("/dog/drive", { x: v[0], y: v[1], z: v[2] }) : post("/dog/stop"); };
   const press = k => { if (!VEL[k] || keys.current.has(k)) return; keys.current.add(k); if (!driveTimer.current) { sendDrive(); driveTimer.current = setInterval(sendDrive, 200); } };
   const release = k => { keys.current.delete(k); if (!keys.current.size && driveTimer.current) { clearInterval(driveTimer.current); driveTimer.current = null; post("/dog/stop"); } };
+  const releaseAll = () => { const held = keys.current.size > 0 || driveTimer.current !== null; keys.current.clear(); if (driveTimer.current) { clearInterval(driveTimer.current); driveTimer.current = null; } if (held) post("/dog/stop"); };
+  const armedRef = useRef(false); const [armed, setArmed] = useState(false);
+  const arm = on => { armedRef.current = on; setArmed(on); if (!on) releaseAll(); };
+  useEffect(() => { if (!admin) arm(false); }, [admin]);
   useEffect(() => {
-    const kd = e => { if (e.target.tagName === "INPUT" || e.repeat) return; press(e.key.toLowerCase()); };
+    const typing = e => { const t = e.target; return !!t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName)); };
+    const kd = e => { if (!armedRef.current || typing(e) || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; press(e.key.toLowerCase()); };
     const ku = e => release(e.key.toLowerCase());
+    const off = () => arm(false);   // the tab lost focus: nothing held stays held
+    const vis = () => { if (document.hidden) off(); };
     window.addEventListener("keydown", kd); window.addEventListener("keyup", ku);
+    window.addEventListener("blur", off); document.addEventListener("visibilitychange", vis);
     const t = setInterval(() => fetch(`${API}/dog/state`).then(r => r.json()).then(d => { setDog(d); if (!drag.current) setDogDrag(null); }).catch(() => {}), 1000);
-    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); clearInterval(t); };
+    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); window.removeEventListener("blur", off); document.removeEventListener("visibilitychange", vis); clearInterval(t); };
   }, []);
   const markIf = (look, say, ask = false) => { if (dog?.rec) post("/dog/mark", { look, say, ask }).then(r => r.json()).then(setLast); };   // recording: the look pressed here becomes this stop's action, with a report
+  // S5b · the map scale (#admin): GET /dog/scale is what the slider shows; the native "change" (on release, not React's
+  // per-tick onChange) POSTs it, one dog.scale row, and the value is read back from the server, refused or not.
+  const [scale, setScale] = useState(null); const [scaleDraft, setScaleDraft] = useState(null); const scaleEl = useRef(null);
+  const readScale = () => fetch(`${API}/dog/scale`).then(r => r.json()).then(s => { setScale(s); setScaleDraft(null); }).catch(e => setScale({ error: `GET /dog/scale failed: ${e}` }));
+  useEffect(() => { readScale(); }, [admin]);
+  useEffect(() => { const el = scaleEl.current; if (!el) return; const f = () => post("/dog/scale", { px_per_m: +el.value }).then(r => r.json()).then(o => { setLast({ ...o, tool: "dog.scale", args: { px_per_m: +el.value }, result: o }); readScale(); }); el.addEventListener("change", f); return () => el.removeEventListener("change", f); });
   const lookShot = async kind => { markIf(kind, true); const out = await run("dog_look", { look: kind }); if (out.ok) setPhoto({ url: `${API}/pictures/look-${kind}.jpg?t=${out.result.pitch_deg}-${Math.floor(performance.now())}`, down: out.result.file_down ? `${API}/pictures/look-down.jpg?t=${Math.floor(performance.now())}` : null, file: out.result.file, pitch: out.result.pitch_deg, pitchDown: out.result.pitch_down_deg, kind }); };
   const key = (k, label) => html`<button class="small" onPointerDown=${() => press(k)} onPointerUp=${() => release(k)} onPointerLeave=${() => release(k)}>${label}</button>`;
 
@@ -182,6 +217,7 @@ function App() {
     if (mode === "here") { setMode(null); post("/dog/calibrate", { p, heading_deg: dog?.map?.heading_deg ?? 0 }).then(r => r.json()).then(setLast); }
     if (mode === "dot" && placing) placeLight("dot", [p]);
     if (mode === "line" && placing) { if (!pending) setPending(p); else placeLight("line", [pending, p]); }
+    if (mode === "nogo") setNogoDraft([...nogoDraft, p]);
   };
   const placeLight = (kind, pts) => { setMap({ ...map, lights: [...(map.lights || []).filter(l => l.id !== placing.id), { ...placing, kind, pts }] }); setPending(null); setPlacing(null); setMode(null); };
   const onDown = (kind, li, pi) => e => { e.stopPropagation(); drag.current = { kind, li, pi }; moved.current = false; e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId); };
@@ -229,12 +265,13 @@ function App() {
         <div class="panel">
           <h2>The castle · first floor</h2>
           <div class="row">
-            <button class="key" onClick=${play} disabled=${!map || (map.path || []).length < 2 || dot !== null}>${dot ? "walking…" : dog?.calibrated ? "▶ walk the path · the dog drives" : "▶ walk the path · simulated"}</button>
+            <button class="key" onClick=${() => play()} disabled=${!map || (map.path || []).length < 2 || dot !== null}>${dot ? "walking…" : dog?.calibrated ? "▶ walk the path · the dog drives" : "▶ walk the path · simulated"}</button>
             ${dot && html`<button onClick=${() => { post("/field/stop"); post("/dog/stop"); }}>stop</button>`}
             ${!dot && dog?.calibrated && dog?.connected && html`<button class="small" title="the proximity field on the dog's believed position while you drive it with the controller; no route, no stops; 'stop' ends it" onClick=${() => { fetch("/tools/walk_path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: "dog", follower: false, act: false }) }).then(r => r.json()).then(setLast); }}>lights follow the dog</button>`}
             ${dog?.calibrated && dog?.connected && !dog?.avoid && !dot && html`<button class="small" style=${{ color: "var(--bad)" }} title="the dog's obstacle-avoidance service is not answering; this drives the route without it, by your choice, and the row says so" onClick=${() => play(false)}>walk WITHOUT avoidance</button>`}
             <button class=${mode === "path" ? "on" : ""} onClick=${() => { setMode(mode === "path" ? null : "path"); setPlacing(null); }}>${mode === "path" ? "drawing path (click to add)" : "draw path"}</button>
             ${mode === "path" && html`<button onClick=${() => setMap({ ...map, path: [], stops: [] })}>clear path</button>`}
+            ${map && html`<${NoGoButtons} mode=${mode} setMode=${setMode} draft=${nogoDraft} setDraft=${setNogoDraft} map=${map} setMap=${setMap} clear=${clearNogo}/>`}
             <button class=${mode === "here" ? "on" : ""} onClick=${() => { setMode(mode === "here" ? null : "here"); setPlacing(null); }}>${mode === "here" ? "click where the dog is" : "dog is here…"}</button>
             <button class="small" title="ui/route-saved.json back into the map" onClick=${() => post("/map/restore", {}).then(r => r.json()).then(o => { setLast({ ...o, tool: "restore route" }); fetch("/map").then(r => r.json()).then(setMap); })}>restore saved route</button>
             <button class="key" onClick=${saveMap}>save</button>
@@ -256,6 +293,7 @@ function App() {
           ${map && html`<svg ref=${svgRef} class=${"map" + (mode ? " placing" : "")} viewBox="0 0 1060 1540" onClick=${onMapClick} onPointerMove=${onMove} onPointerUp=${onUp} onPointerLeave=${onUp}>
             <image href="house.svg" x="0" y="0" width="1060" height="1540"/>
             ${(map.rooms || []).map(r => html`<polygon key=${r.name} class=${"room" + (here === r.name ? " here" : "")} points=${r.poly.map(p => p.join(",")).join(" ")}/>`)}
+            <${NoGoLayer} map=${map} draft=${mode === "nogo" ? nogoDraft : []}/>
             ${mode === "path" && guide?.path && html`<polyline class="guide" points=${guide.path.map(p => p.join(",")).join(" ")}/>`}
             <polyline class="path" points=${map.path.map(p => p.join(",")).join(" ")}/>
             ${map.path.map((p, i) => { const st = (map.stops || []).includes(i); return html`<g key=${"p" + i}>
@@ -280,14 +318,20 @@ function App() {
             <${GridLayer}/>
             <${FloorPlanLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
+            ${dog?.follow?.planned?.length > 0 && html`<g>${dog.follow.planned.map((l, i) => html`<polyline key=${"leg" + i} class="planned" points=${l.map(p => p.join(",")).join(" ")}/>`)}
+              <polyline class="actual" points=${(dog?.follow?.trace || []).map(p => p.join(",")).join(" ")}/>
+              <g transform="translate(12 70)"><line class="planned" x1="0" y1="0" x2="40" y2="0"/><text class="lbl" x="48" y="6">planned</text><line class="actual" x1="150" y1="0" x2="190" y2="0"/><text class="lbl" x="198" y="6">actual</text></g></g>`}
+            <${ObjectsLayer}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
+              const m = scale?.px_per_m, seg = m && (0.70 * m - 0.31 * m) / 2, head = m && [x + seg * Math.cos(h), y + seg * Math.sin(h)], tail = m && [x - seg * Math.cos(h), y - seg * Math.sin(h)];   // S9: the body, 0.70 m x 0.31 m, centred on the reported position (its middle); no scale yet = the dot alone
               const a = [x + L * Math.cos(h - half), y + L * Math.sin(h - half)], b = [x + L * Math.cos(h + half), y + L * Math.sin(h + half)], tip = [x + L * Math.cos(h), y + L * Math.sin(h)];
               return html`<g>
+                ${m ? html`<line class="dogbody" x1=${tail[0]} y1=${tail[1]} x2=${head[0]} y2=${head[1]} stroke-width=${0.31 * m}/><circle class="doghead" cx=${head[0]} cy=${head[1]} r=${0.31 * m * 0.3}/>` : null}
                 <path class="cone" d=${`M ${x} ${y} L ${a[0]} ${a[1]} A ${L} ${L} 0 0 1 ${b[0]} ${b[1]} Z`}/>
                 <line class="dognose" x1=${x} y1=${y} x2=${tip[0]} y2=${tip[1]}/>
                 <circle class="conetip" cx=${tip[0]} cy=${tip[1]} r="11" onPointerDown=${onDown("cone", 0, 0)} onClick=${e => e.stopPropagation()}/>
-                <circle class="dogdot" cx=${x} cy=${y} r="14" onPointerDown=${onDown("dog", 0, 0)} onClick=${e => e.stopPropagation()}/>
+                <circle class="dogdot" cx=${x} cy=${y} r=${m ? 7 : 14} onPointerDown=${onDown("dog", 0, 0)} onClick=${e => e.stopPropagation()}/>
                 <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°</text></g>`;
             })()}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
@@ -296,11 +340,12 @@ function App() {
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
           <div class="mono" style=${{ marginBottom: "var(--gap-group)" }}>${dog ? (dog.connected ? `connected · mode ${dog.state?.mode ?? "?"} · pos ${(dog.state?.position || []).slice(0, 2).map(v => (+v).toFixed(2)).join(", ")} · ${dog.moving ? "moving " + dog.vel.map(v => (+v).toFixed(1)).join("/") : "still"}` : "not connected · the first command connects (about 1 s)") : "…"}</div>
-          ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<span class="mono">hold a key or a button · 0.3 m/s · 0.5 rad/s</span></div>
+          ${admin && html`<div class="row tight">${key("q", "Q turn ◀")}${key("w", "W ▲")}${key("e", "E turn ▶")}<button class=${"small" + (armed ? " on" : "")} title="W A S D Q E drive only while this is on; leaving the tab turns it off and stops a held key" onClick=${() => arm(!armed)}>${armed ? "keys drive · on" : "keys drive · off"}</button><span class="mono">hold a button, or a key while keys drive is on · 0.3 m/s · 0.5 rad/s</span></div>
           <div class="row tight">${key("a", "A ◀")}${key("s", "S ▼")}${key("d", "D ▶")}<button class="small" onClick=${() => post("/dog/stop")}>stop</button></div>`}
           <div class="row tight">
             <button class="small" disabled=${!map || (map.path || []).length < 2} title="the dog stands on path point 1 facing point 2" onClick=${() => post("/dog/calibrate", { p: map.path[0], toward: map.path[1] }).then(r => r.json()).then(setLast)}>at path start, facing pt 2</button>
             <button class="small" disabled=${!dog?.map || !map || (map.path || []).length < 2} title="keep the position, point the nose at the next path point ahead of the dog" onClick=${() => { const P = map.path, q = dog.map.p; let k = 0, best = 1e9; P.forEach((pt, i) => { const d = Math.hypot(pt[0] - q[0], pt[1] - q[1]); if (d < best) { best = d; k = i; } }); const nxt = P[Math.min(k + 1, P.length - 1)]; post("/dog/calibrate", { p: q, toward: nxt }).then(r => r.json()).then(setLast); }}>facing next pt</button>
+            ${admin && html`<label class="k" title="pixels per metre on the floor plan: slide until the LiDAR's walls sit on the drawn ones; set on release, saved in dog_cal.json">scale ${scale?.px_per_m != null ? html`<input type="range" ref=${scaleEl} min="60" max="180" step="0.5" value=${scaleDraft ?? scale.px_per_m} onChange=${e => setScaleDraft(e.target.value)}/> ${scaleDraft ?? scale.px_per_m} px/m · ${scale.source}` : html`<span class=${scale?.error ? "bad" : ""}>${scale?.error || "…"}</span>`}${last?.tool === "dog.scale" ? html` <span class=${"mono " + (last.ok ? "ok" : "bad")}>${last.ok ? "set" : `FAILED ${last.error}`}</span>` : ""}</label>`}
             <button class=${"small" + (dog?.rec ? " on" : "")} disabled=${!dog?.calibrated} title="drive it with the controller; the trace of where it thinks it is becomes the route" onClick=${() => post("/dog/record", { on: !dog?.rec }).then(r => r.json()).then(o => { setLast(o); if (o.ok && o.rec && !o.rec.active) fetch("/map").then(r => r.json()).then(setMap); })}>${dog?.rec ? `stop & save route (${dog.rec.n} pts)` : "record route"}</button>
             ${dog?.rec && html`<button class="small" onClick=${() => post("/dog/mark", {}).then(r => r.json()).then(setLast)}>mark stop here (${dog.rec.marks.length})</button>`}
             <button class=${"small" + (dog?.avoid ? " on" : "")} disabled=${!dog?.connected} title="the dog's own obstacle avoidance; velocities go through it while on" onClick=${() => post("/dog/avoid", { on: !dog?.avoid }).then(r => r.json()).then(setLast)}>${dog?.avoid ? "avoid on" : "avoid off"}</button>
@@ -341,7 +386,8 @@ function App() {
           })()}
         </div>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
-          ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
+          ${(pc => pc && html`<div key="pc"><span>${(pc.ts || "").slice(11)}</span><span class=${pc.ok ? "" : "bad"}>pose.corrected${pc.ok ? "" : " FAILED"} · ${pc.args?.windows} windows · largest nudge ${pc.args?.largest_m} m${pc.ok ? "" : ` · ${String(pc.response_or_error ?? "").slice(0, 200)}`}</span><span>${pc.latency_ms} ms</span></div>`)([...ledger].reverse().find(r => r.tool === "pose.corrected"))}
+          ${[...ledger].reverse().filter(r => r.tool !== "pose.corrected").slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? redact(r.args.say) : r.args ? redact(JSON.stringify(r.args)).slice(0, 60) : ""}${r.ok ? "" : ` · ${redact(String(r.response_or_error ?? "")).slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
@@ -372,7 +418,7 @@ function App() {
           <h2>Commands · demo</h2>
           <div class="row">${cmd("the show (25 s)", "light_show", {})}${cmd("red / blue on 'special' 5 s", "hue_signal", { light: "special", seconds: 5 })}${cmd("make the fire picture", "dog_on_fire", {})}${cmd("read every light", "lights_status", {})}</div>
           <div class="cmd">${cli("light_show", {})}</div>
-          ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
+          ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${redact(JSON.stringify(last.args))} → ${redact(last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error)}</div>`}
         </div>
         ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}
@@ -396,6 +442,50 @@ function GridLayer() {
     <text class="lbl occlbl" x="12" y="28">grid · ${g ? `${c.length} cells seen ${g.threshold ?? "?"}+ times` : "…"}${g?.frames ? ` · ${g.frames} frames` : ""}${g?.source ? ` · ${g.source}` : ""}${g?.why ? ` · ${g.why}` : ""}${g?.error ? ` · FAILED ${g.error}` : ""}${g?.cb_errors ? ` · FAILED to take ${g.cb_errors} frames` : ""}</text></g>`;
 }
 // 01 · occupancy · end
+// 04 · nogo · start
+// No-go zones: map.zones entries with nogo: true (wtdd/nogo.py). The planner blocks them; the walk and the follower refuse a
+// route that touches one and write route.refused. Zones without nogo (a, b, c: the lighting zones) are not drawn here.
+// Drawing: "draw no-go", click the corners on the floor, "close zone", then the page's "save" (POST /map, the whole map).
+function NoGoLayer({ map, draft }) {
+  const pts = poly => poly.map(p => p.join(",")).join(" ");
+  const mid = poly => [0, 1].map(k => poly.reduce((s, p) => s + p[k], 0) / poly.length);   // the corners' mean: where the label sits
+  return html`<g>
+    ${(map.zones || []).filter(z => z.nogo === true).map(z => { const [x, y] = mid(z.poly); return html`<g key=${z.name}>
+      <polygon class="nogo" points=${pts(z.poly)}/><text class="lbl nogo-lbl" x=${x} y=${y} text-anchor="middle">${z.label || z.name}${/no-go/.test(z.label || "") ? "" : " · no-go"}</text></g>`; })}
+    ${draft.length >= 2 && html`<polygon class="nogo-draft" points=${pts(draft)}/>`}
+    ${draft.map((p, i) => html`<circle key=${"d" + i} class="nogo-draft" cx=${p[0]} cy=${p[1]} r="6"/>`)}
+  </g>`;
+}
+function NoGoButtons({ mode, setMode, draft, setDraft, map, setMap, clear }) {
+  const zones = map.zones || [];
+  let n = zones.filter(z => z.nogo === true).length + 1;
+  while (zones.some(z => z.name === `nogo-${n}`)) n++;   // a hand-edited map may skip a number: the name stays unique (it is the refusal row's zone)
+  const close = () => { setMap({ ...map, zones: [...zones, { name: `nogo-${n}`, label: `no-go ${n}`, poly: draft, nogo: true }] }); setDraft([]); setMode(null); };
+  return html`<button class=${mode === "nogo" ? "on" : ""} title="a zone the dog must never enter: the planner routes around it, a route through it is refused and logged" onClick=${() => { setMode(mode === "nogo" ? null : "nogo"); setDraft([]); }}>${mode === "nogo" ? "drawing no-go (click corners)" : "draw no-go"}</button>
+    ${mode === "nogo" && draft.length >= 3 && html`<button onClick=${close}>close zone</button>`}
+    ${mode === "nogo" && draft.length > 0 && html`<button onClick=${() => setDraft([])}>clear</button>`}
+    ${mode !== "nogo" && zones.some(z => z.nogo === true) && html`<button title="take every no-go zone off the map and save it (the lighting zones stay)" onClick=${clear}>clear no-go</button>`}`;
+}
+// 04 · nogo · end
+// 07 · objects · start
+// The live object layer (GET /dog/objects, wtdd/dog/objects.py): one pin per placed object at the LiDAR cell its bearing
+// met, its label and probability as text, its thumbnail and its drafted line (or FAILED when the draft failed); stale
+// ones fade. No polygon, rect or path per object: shapes come from the points (the grid and the dots), words and photos
+// from the store. Polled every 2 s with or without a dog (objects decay by detector windows, not by the connection). The
+// body line is always drawn; zero objects says why, a failed read says FAILED.
+function ObjectsLayer() {
+  const [o, setO] = useState(null);
+  useEffect(() => { const f = () => fetch(`${API}/dog/objects`).then(r => r.json()).then(setO).catch(e => setO({ n: 0, objects: [], error: `GET /dog/objects failed: ${e}` })); f(); const t = setInterval(f, 2000); return () => clearInterval(t); }, []);
+  const all = o?.objects || [], placed = all.filter(x => x.pos_px), stale = all.filter(x => x.stale).length, off = all.find(x => !x.pos_px);
+  return html`<g>
+    ${placed.map(x => { const [cx, cy] = x.pos_px, line = x.message || (x.message_source?.startsWith("FAILED") ? `draft ${x.message_source}` : null); return html`<g key=${x.id} class=${"obj" + (x.stale ? " stale" : "")} data-id=${x.id}>
+      <circle class="pin" cx=${cx} cy=${cy} r="9"/>
+      ${x.thumb && html`<image href=${x.thumb} x=${cx + 14} y=${cy - 52} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
+      <text class="lbl objlbl" x=${cx + 14} y=${cy + 8}>${x.label} · ${(+x.p).toFixed(2)}${x.stale ? " · stale" : ""}</text>
+      ${line && html`<text class="lbl objmsg" x=${cx + 14} y=${cy + 24}>${line}</text>`}</g>`; })}
+    <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
+}
+// 07 · objects · end
 // 15 · floorplan · start
 // The floor plan (GET /dog/floorplan, wtdd/dog/floorplan.py): cells coloured by class (wall ink, slab grey, low light
 // grey, all translucent like 01's squares, since this layer mounts over the lamps, the strip and the route; tall only

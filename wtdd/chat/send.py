@@ -1,4 +1,5 @@
-"""The mouth: osascript sends to the ONE allowed group, each confirmed by reading the dog's own from-me row back.
+"""The mouth: osascript sends to the two allowed targets (the ONE group, the on-call person's 1:1), each confirmed by
+reading the dog's own from-me row back.
 
 wtdd.chat.__main__.post is the caller: it runs the target gate and the never-twice claim first, each as its own ledger
 row (chat.gate, chat.claim), then wraps the send in a chat.post row. send_text and send_file ALSO call gate() as their
@@ -6,13 +7,18 @@ first statement, so a direct caller (a future tool, the agent loop, a REPL) can 
 the second check is one read-only chat.db lookup. No retries, ever: real people are on the other end, and an
 unconfirmed send raises instead of sending again.
 
-The gate (gate()): guid == WTDD_CHAT_GUID AND chat.db's display_name for that guid == TARGET_NAME. TARGET_NAME is
-WTDD_CHAT_NAME from .env, default "wtdd test" (the build-night test group). On 2026-09-13 Johnny set it to "THE CASTLE",
-the real housemates group (8 members), on purpose; test_chat.Gate pins that choice. Both checks must hold, so a guid
-pointed at any other chat, or a renamed chat, is refused with a PermissionError before anything is claimed or sent.
+The gate (gate()) is an allow-set of exactly two targets, each checked two ways; it returns the verified name.
+The group: guid == WTDD_CHAT_GUID AND chat.db's display_name for that guid == TARGET_NAME. TARGET_NAME is WTDD_CHAT_NAME
+from .env, default "wtdd test" (the build-night test group). On 2026-09-13 Johnny set it to "THE CASTLE", the real
+housemates group (8 members), on purpose; test_chat.Gate pins that choice. The on-call person (item 03, oncall.py):
+guid == any;-;<WTDD_ON_CALL_HANDLE> AND chat.db's members of that chat are exactly [that handle] (a 1:1 chat has no
+display_name worth checking, so its one member is the second check; test_oncall.Gate pins it). Any other guid, a renamed
+group, a 1:1 with anyone else, or the on-call guid with no person configured is refused with a PermissionError before
+anything is claimed or sent. There is no third path.
 
 Verified on this Mac (2026-09-13): AppleScript `chat id "<guid>"` resolves the chat.db guid directly (Automation
-permission for Messages is granted to the terminal). A file send is `POSIX file "<path>" as alias` and the file has to
+permission for Messages is granted to the terminal). UNVERIFIED: the same for a 1:1 guid `any;-;<handle>` (the on-call
+target) until the first live send says so. A file send is `POSIX file "<path>" as alias` and the file has to
 sit under ~/Pictures/wtdd (sandboxed Messages.app can read there), so stage() copies it in first; a caption goes in the
 same script after `delay 3` and is confirmed as a second from-me row above the file row. Text and guid are escaped for
 AppleScript string literals (backslash first, then double quote). osascript gets 30 s; rc != 0 raises."""
@@ -25,27 +31,37 @@ from typing import Any
 
 from .. import config
 from ..ledger import log
-from . import db
+from . import db, oncall
 
 TARGET_NAME = config.maybe("WTDD_CHAT_NAME") or "wtdd test"   # wtdd: the ONE group this process may post to; guid AND name must match
 PICTURES = Path("~/Pictures/wtdd").expanduser()
 CONFIRM_S = 10.0
 
 
-def gate(guid: str) -> None:
-    """Two checks, both must hold: guid == WTDD_CHAT_GUID, and that chat is named exactly TARGET_NAME in chat.db."""
+def gate(guid: str) -> str:
+    """Exactly two targets, two checks each; returns the verified name. The on-call 1:1: guid == any;-;<handle> and its
+    chat.db members are exactly [handle]. The group: guid == WTDD_CHAT_GUID and its chat.db name is exactly TARGET_NAME."""
+    h = config.maybe("WTDD_ON_CALL_HANDLE")
+    if h and guid == oncall.guid(h):
+        members = db.chat_members(guid)
+        if members != [h]:
+            raise PermissionError(f"refused: {guid} members {members!r} are not exactly [{h!r}]")
+        return config.get("WTDD_ON_CALL_NAME")
     want = config.get("WTDD_CHAT_GUID")
     if guid != want:
-        raise PermissionError(f"refused: {guid} is not WTDD_CHAT_GUID")
+        raise PermissionError(f"refused: {guid} is not WTDD_CHAT_GUID nor the on-call chat")
     name = db.chat_name(guid)
     if name != TARGET_NAME:
         raise PermissionError(f"refused: {guid} is named {name!r}, not {TARGET_NAME!r}")
+    return TARGET_NAME
 
 
 def escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+# UNVERIFIED for the on-call 1:1 (`any;-;<handle>`): if the first live send says it can't get that chat id, the
+# fallback for `;-;` guids is `send ... to buddy "<handle>" of service "iMessage"`, switched only after that run.
 def script_text(guid: str, text: str) -> str:
     return (
         'tell application "Messages"\n'

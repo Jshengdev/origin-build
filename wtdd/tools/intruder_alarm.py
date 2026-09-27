@@ -1,6 +1,7 @@
 """Stranger in the house: a photo (level by default, the fastest look; tilt or sit if the face is higher), the
-detector's boxes on it, and the question "who dis?!" to the castle with the picture (ask=true, the default). The
-listener then reads the group's verdict for PENDING_WINDOW_S: "idk" (no idea, dunno, not me, no clue...) means
+detector's boxes on it, and the question "who dis?!" with the picture to the on-call person's 1:1 chat, never the
+castle (ask=true, the default; item 03: WTDD_ON_CALL_NAME / WTDD_ON_CALL_HANDLE, unset = this tool fails loud, nothing
+posted). The listener then reads that person's verdict for PENDING_WINDOW_S: "idk" (no idea, dunno, not me, no clue...) means
 "STRANGER DANGER!!!" three times and the living room strobing red and blue for N seconds (light_alarm); any other
 answer stands it down with "ok". ask=false skips the question and alarms at once. Triggered by python -m wtdd.watch when the intruder watch is armed (GET/POST
 /intruder) and a person is in view for a few frames, at most once a minute; or by hand. One intruder.alarm row around
@@ -32,10 +33,13 @@ def run(look="level", seconds=5, trigger=None, ask=True):
             file = det["file"]
         except Exception as e:  # noqa: BLE001  (the plain photo is posted; the failure is on its own watch.boxes row)
             det = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
-        if ask:   # the question with the photo; the chat's answer decides (wtdd/chat/listen.py pending verdict)
-            post = chat_post.run(text=ASK, file=file, trigger=key)
+        if ask:   # the question with the photo, to the on-call person (a flag, kind escalate); their answer decides (listen.py verdict)
+            from ..chat.__main__ import post as gated_post
+            from ..chat.oncall import person
+            to = person()["guid"]
+            post = gated_post(to, key, "escalate", ASK, file)
             (ROOT / "pending.json").write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": file, "seconds": seconds,
-                                                           "trigger": key, "classes": (det or {}).get("classes")}))
+                                                           "trigger": key, "chat": to, "classes": (det or {}).get("classes")}))
             out = {"file": file, "pitch_deg": shot.get("pitch_deg"), "detector": det, "post": post, "text": ASK, "pending": True}
         else:
             post = chat_post.run(text=TEXT, file=file, trigger=key)
