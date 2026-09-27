@@ -44,8 +44,9 @@ The contract under test:
   DogSession.stop()         cancels a running scout like the follower; its row says stopped, with state_after
                             complete, when the stop lands inside the scout's own halt too; a stop while the press is
                             still connecting or tying the pose (no task yet, the page's button already reads "stop") is
-                            read by the press itself, and by its task before the LiDAR switch: one FAILED row naming
-                            it, nothing moved
+                            read by the press itself, and by its task before the LiDAR switch (a task not yet started
+                            is never cancelled: it would run no line and write no row): one FAILED row naming it,
+                            nothing moved
   dog.scout row            args {z_rad_s, target_deg, timeout_s, shift_id, source}
                             state_before {map, heading0_deg, grid_frames, cells, lidar_n, range_obstacle, localize, utlidar}
                             state_after {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed,
@@ -766,6 +767,31 @@ class FailLoud(Harness):
         self.assertEqual((len(r), r[0]["ok"]), (1, False))
         self.assertIn("stopped", str(r[0]["response_or_error"]))
         self.assertEqual(set(r[0]["state_after"] or {}), AFTER, "state_after is complete on this FAILED row too")
+
+    def test_a_stop_before_the_loop_starts_the_task_still_ends_it_with_its_row(self):
+        """The press has handed the spin over, but the loop is busy (a halt, a LiDAR decode) and has not started the
+        task. Cancelling run_coroutine_threadsafe's future then means the coroutine never runs a line (measured on
+        3.13): no row, and scout_state stays active, so the page reads "stop" and every later press is refused.
+        A stop before the task's first step must not cancel it; the task reads the stop instead."""
+        body = FakeBody(yaw_rate=3.0, frames=self.frames)
+        s = self.session(body)
+        vels, real = [], asyncio.run_coroutine_threadsafe
+        s._set_vel = lambda x, y, z: vels.append((x, y, z))
+
+        def busy(coro, loop):
+            if getattr(coro, "__name__", "") == "_scout":
+                loop.call_soon_threadsafe(time.sleep, 0.3)   # the loop is busy for 0.3 s when the spin is handed over
+            return real(coro, loop)
+
+        with mock.patch.object(session.asyncio, "run_coroutine_threadsafe", busy):
+            s.scout(z=0.5, target_deg=360, timeout_s=10)
+        s.stop()   # the task is queued behind the busy loop: not a line of it has run
+        st = self.wait(s, timeout=5)
+        self.assertIn("stopped", st["error"] or "")
+        self.assertEqual(vels, [], "no velocity was held after the stop")
+        r = self.rows("dog.scout")
+        self.assertEqual((len(r), r[0]["ok"]), (1, False), "the press still writes its one row")
+        self.assertIn("stopped", str(r[0]["response_or_error"]))
 
     def test_a_state_read_that_fails_still_names_05a_and_05b_absent(self):
         body = FakeBody(yaw_rate=3.0, frames=self.frames)
