@@ -918,6 +918,67 @@ class Stuck(_Harness):
         self.assertSays(ref[0])
         self.assertEqual(fs["passed"], [], "refused, not passed")
 
+    def real_holds(self) -> None:
+        """B15: the real sidestep and hold, so each move reaches as far as it would on the dog (SIDESTEP_MS for
+        SIDESTEP_S, nav.VMAX for STUCK_S): the check that keeps it out of a zone is measured over that reach."""
+        from wtdd.dog import session
+        self.enterContext(mock.patch.object(session, "STUCK_S", 3.0))
+        self.enterContext(mock.patch.object(session, "SIDESTEP_S", 1.0))
+
+    def test_stuck_beside_a_zone_whose_side_the_scan_calls_open_it_never_steps_into_the_zone(self):
+        """B15: the sidestep and the sweep went by the scan alone, and a no-go zone is not in the scan: stuck 8 px below
+        nogo-1 (x 450..510, y 1040..1250) with a wall on its right, the open side was the zone. Now the sidestep goes the
+        other way and every heading into the zone is skipped, one row each naming the zone and the angle."""
+        from wtdd.dog import nav
+        self.real_holds()
+        at, dot, ppm = (460, 1258), (650, 1258), nav.PX_PER_M   # the dog faces +x (the harness): its left is up the page, the zone
+        self.believed[:] = at
+        self.live(fx.blob_px((at[0] + 0.4 * ppm, at[1])) + [(at[0] + 80, y) for y in range(at[1] + 60, at[1] + 81, 4)])   # a box 0.4 m ahead, a wall 60..80 px to its right
+        self.blocked, self.free_after = dot, 1                 # the first heading actually driven gets it past
+        self.s.run(self.s._goto(dot, 30.0, {"i": 1, "trace": [], "planned": []}, "waypoint 1"), timeout=20)
+        self.assertNotIn((0.0, 0.15, 0.0), self.vels, f"a sidestep to the left, into {ZONE['name']}")
+        self.assertIn((0.0, -0.15, 0.0), self.vels, "the sidestep goes the other way, away from the zone")
+        self.assertEqual(self.aims, [15], "no heading into the zone is driven; the first on the other side is")
+        st = self.stuck()
+        self.assertGreater(st[0]["args"]["clear_m"]["left"], st[0]["args"]["clear_m"]["right"], "the scan calls the zone's side open")
+        skipped = [r for r in st if r["args"].get("skipped")]
+        self.assertEqual([(r["args"]["side"], r["args"]["angle"]) for r in skipped], [("left", 15), ("left", 30), ("left", 45)])
+        for r in skipped:
+            self.assertEqual(r["args"]["zone"], ZONE["name"])
+            self.assertIn(f"{r['args']['angle']}° left", r["args"]["say"])
+            self.assertIn(ZONE["name"], r["args"]["say"])
+            self.assertSays(r)
+        self.assertEqual([(r["args"]["side"], r["args"]["angle"]) for r in st if not r["args"].get("skipped")], [("right", 15)])
+
+    def test_when_every_heading_enters_a_zone_the_stuck_row_names_the_zone(self):
+        """B15: the last dot drawn just below nogo-1 and the dog stuck 20 px below the zone: every heading 15 to 45
+        degrees off the direct line runs into the zone, so none is driven, and the refusal says which zone."""
+        self.real_holds()
+        line = [[480, 1270], [480, 1262]]   # the line itself stays out of the zone (its edge is y 1250)
+        self.believed[:] = line[0]
+        self.blocked = tuple(line[1])
+        fs, _ = self.run_follow([], fx.grid(), path=line)   # no live view: the dot straight as drawn, stuck after STUCK_S
+        self.assertEqual(self.aims, [], "no heading of the sweep is driven")
+        self.assertIn("refused", fs.get("error") or "", fs)
+        self.assertIn(ZONE["name"], fs.get("error") or "", fs)
+        ref = [r for r in self.decided() if r["args"]["action"] == "refused"]
+        self.assertEqual(len(ref), 1, self.decided())
+        self.assertIn(ZONE["name"], ref[0]["args"]["reason"])
+        self.assertEqual(len([r for r in self.stuck() if r["args"].get("skipped")]), 6, "one row per heading skipped")
+
+    def test_a_map_that_cannot_be_read_stops_the_sweep_loud(self):
+        """B15: the zones cannot be checked, so nothing moves unchecked: the error names the map."""
+        from wtdd.dog import session
+        missing = _TMP / "no-such-map.json"
+        self.enterContext(mock.patch.object(session.plan, "MAP", missing))
+        self.live(fx.blob_px((300 + 0.4 * session.nav.PX_PER_M, 1400)))
+        self.blocked, self.free_after = tuple(LINE[-1]), 1
+        with self.assertRaises(RuntimeError) as cm:
+            self.s.run(self.s._goto(LINE[-1], 30.0, {"i": 1, "trace": [], "planned": []}, "waypoint 1"), timeout=20)
+        self.assertIn(str(missing), str(cm.exception))
+        self.assertNotIsInstance(cm.exception, session.Stuck, "a Stuck is re-planned and passed; this stops the follow")
+        self.assertEqual((self.vels, self.aims), ([], []), "no sidestep and no heading without the zones")
+
 
 class Reconnect(_Harness):
     """B2 (CLEANUP-PLAN): the state stream goes quiet mid-follow (a power cycle, a hotspot drop) and the next call's stale
