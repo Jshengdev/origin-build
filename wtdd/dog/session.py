@@ -55,9 +55,9 @@ each a zero nudge). Applied windows wait in one summary pose.corrected row, writ
 the last pose.corrected row (the first at once). An update is its own row at once, the summary pending before it
 first: an applied nudge over one grid cell, or any rejection. Every row carries args.windows, every window since the
 last row (applied, rejected, unmatched and skipped also counted apart), and args.largest_m, the largest nudge among
-them; the rest is the newest window's. A grid clear, lidar off and a stale reconnect write the pending summary; a
-process exit does not (no hook: at most SUMMARY_S of zero-to-one-cell nudges, on stderr line by line, never reach the
-ledger).
+them; the rest is the newest window's. A grid clear, lidar off and a stale reconnect write the pending summary (the
+dog.grid_clear row counts the windows since the last pose.corrected row, which no row will count); a process exit
+does not (no hook: at most SUMMARY_S of zero-to-one-cell nudges, on stderr line by line, never reach the ledger).
 map_pose() is the odometry pose through self.corr, then nav.to_map; calibrate() ties that corrected pose and keeps the
 correction (the grid is drawn through it); grid_clear() resets it and, with a calibration, sets recheck (the dot moves
 by the dropped correction, so the remote asks for the drag). The match runs inline on the driver's dispatcher, as the
@@ -444,7 +444,7 @@ class DogSession:
             self._pc_flush()   # S7: the summary pending is written before the grid it was measured against goes
             g = self.grid
             before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0,
-                      "corr_before": localize.describe(self.corr)}
+                      "corr_before": localize.describe(self.corr), "windows_since_pose_corrected": self._counts()}   # S7: none will count them
             with step("dog", "dog.grid_clear", "map", {"why": why, **before}) as r:
                 if self.cal is not None and tuple(self.corr) != localize.IDENTITY:   # the dot is drawn through it: dropping it moves the dot
                     self.recheck = True
