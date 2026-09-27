@@ -468,13 +468,19 @@ class DogSession:
 
     def blobs_px(self) -> dict[str, Any]:
         """GET /dog/blobs: the labels in force, each pinned at its centre through the floor plan's saved calibration, else
-        the session's: {labels: [record without cells + pos_px], source, ts?, why?}. A read: no row, no model."""
+        the session's: {labels: [record without cells + pos_px], source, moved, ts?, why?}. Each label's erase and `moved`
+        are the same blobs.erase GET /dog/floorplan draws (the newest plan, the threshold now), never the flag stamped when
+        the label was made; no drawn plan, nothing greyed. A read: no row, no model."""
         lab = self._labels_now()
         if lab is None:
-            return {"labels": [], "source": None, "why": "no labels yet: press name blobs at a stop (POST /dog/blobs)"}
-        cal = (self._fp[2] if self._fp else None) or self.cal
-        out = {**lab, "labels": [{**{k: v for k, v in x.items() if k != "cells"},
-                                  "pos_px": occupancy.to_map_px([x["xy"]], cal)[0].tolist() if cal else None} for x in lab["labels"]]}
+            return {"labels": [], "source": None, "moved": [], "why": "no labels yet: press name blobs at a stop (POST /dog/blobs)"}
+        res, _src, fcal = self._fp or (None, None, None)
+        cal = fcal or self.cal
+        e = (blobs.erase(res, lab["labels"]) if cal and res and "cls" in res and lab["labels"] else
+             {"moved": [], "erased": [False] * len(lab["labels"])})
+        out = {**lab, "moved": e["moved"], "labels": [{**{k: v for k, v in x.items() if k != "cells"}, "erase": hit,
+                                                       "pos_px": occupancy.to_map_px([x["xy"]], cal)[0].tolist() if cal else None}
+                                                      for x, hit in zip(lab["labels"], e["erased"])]}
         if cal is None:
             out["why"] = " · ".join(filter(None, [lab.get("why"), "not calibrated: drag the dog to where it is (POST /dog/calibrate)"]))
         return out

@@ -264,11 +264,12 @@ def label_stop(grid: occupancy.Grid, img, pose: dict, fov_deg: float, threshold:
 
 
 def erase(plan: dict, labels: list[dict], threshold: float | None = None) -> dict[str, Any]:
-    """A new plan {**plan, cls, segments, runs, full, moved, refused}: every run a FURNITURE label at p >= threshold
+    """A new plan {**plan, cls, segments, runs, full, moved, refused, erased}: every run a FURNITURE label at p >= threshold
     (default WTDD_DECIDE_THRESHOLD) covers more than half of goes from class 1 to class 3, but for the cells a kept run
     also holds, and its segment is dropped; moved lists "r<k>". A run whose plan["full"] is True (its top reaches TALL:
     a full-height wall) is never moved, whatever a label kept from an earlier plan says: it is listed in refused and
-    WARNed once. A label off the list is a ValueError. Nothing else changes."""
+    WARNed once. erased[i] says whether labels[i] moved a run in this plan (GET /dog/blobs serves it as the label's
+    erase). A label off the list is a ValueError. Nothing else changes."""
     bad = [x.get("label") for x in labels if x.get("label") is not None and x.get("label") not in LABELS]
     if bad:
         raise ValueError(f"labels off the closed list ({', '.join(LABELS)}): {bad}")
@@ -295,4 +296,4 @@ def erase(plan: dict, labels: list[dict], threshold: float | None = None) -> dic
             cls[b, a] = 3
     return {**plan, "cls": cls, "segments": [s for k, s in enumerate(plan["segments"]) if k not in gone],
             "runs": [x for k, x in enumerate(plan["runs"]) if k not in gone], "full": [f for k, f in enumerate(plan["full"]) if k not in gone],
-            "moved": [f"r{k}" for k in gone], "refused": [f"r{k}" for k in refused]}
+            "moved": [f"r{k}" for k in gone], "refused": [f"r{k}" for k in refused], "erased": [any(k in gone for k in c) for c in covers]}
