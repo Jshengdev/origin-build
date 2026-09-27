@@ -31,7 +31,8 @@ README.md): "what teh dog doin" recognized at 0.94, picture 3.4 s, walk 63.6 s, 
 guids, 0 duplicates.
 
 The on-call person (item 03, oncall.py; WTDD_ON_CALL_NAME / WTDD_ON_CALL_HANDLE). A flag goes to their 1:1 chat
-(escalate(), kind "escalate", the photo and "who dis?!"), never to the group; the group still gets the look's say: post.
+(escalate(), kind "escalate", the photo and "who dis?!"), not the group unless S10 (below) makes the group the on-call
+chat; the group still gets the look's say: post.
 The listener reads both chats (read(), one watermark each, every message tagged m["chat"]). The on-call chat only
 answers flags: a verdict or a correction, from that person's own messages; a wake phrase or command there never arms
 the dog. Replies go back to the chat that answered. intruder.verdict and chat.correction rows carry acked_ms (the post's
@@ -156,8 +157,9 @@ class Listener:
         self.post(guid or self.guid, key, "listen", text, file)
 
     def escalate(self, key: str, text: str, file: str | None) -> str:
-        """A flag to the on-call person's 1:1 (kind "escalate"), never the group. No person configured raises the
-        RuntimeError naming the key (the caller posts it as the error). Returns the chat the flag went to."""
+        """A flag (kind "escalate") to oncall.person()'s chat: the on-call person's 1:1 (03), or the group itself when
+        WTDD_ON_CALL_GUID names it (S10). No person configured raises the RuntimeError naming the key (the caller posts it
+        as the error). Returns the chat the flag went to."""
         to = oncall.person()["guid"]
         if self.dry:
             log("chat", f"DRY would escalate [{key}]: {text}", to=to, file=file or "")
@@ -188,7 +190,6 @@ class Listener:
         heads-up line to the on-call person (a heads_up question, the hold); ask posts the "not sure" line with the photo
         to the group (a decide question, the hold); continue asks nothing. "who dis?!" wins when both would ask (one
         question per stop). Every pending names the question it asked."""
-        from .. import tools
         from ..tools.dog_say import look_and_see
         k = m["guid"] + (f":{at}" if at is not None else "")
         look, ask = "tilt", _flag("WTDD_ALARM")
@@ -329,7 +330,7 @@ class Listener:
             if source == "dog":   # the real dog walks the round: the API's follower drives it, the field follows its pose
                 import requests
                 avoid = (config.maybe("WTDD_ROUND_AVOID") or "1") not in ("0", "false", "no")   # 0 = follow without the dog's avoidance, by explicit choice
-                r = requests.post("http://127.0.0.1:7788/dog/follow", json={"avoid": avoid}, timeout=20).json()
+                r = requests.post(f"{config.API}/dog/follow", json={"avoid": avoid}, timeout=20).json()
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})

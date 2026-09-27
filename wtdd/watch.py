@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from .config import ROOT
+from .config import API, ROOT
 from .ledger import append, log
 
 WATCH = ROOT / "watch.json"
@@ -34,7 +34,6 @@ OUT = Path("~/Pictures/wtdd/watch.jpg").expanduser()
 MODEL = "yolo11n.pt"
 CONF = 0.35
 HOLD = 3                     # a change in the set of classes must hold for this many frames before it is a row (no flicker rows)
-API = "http://127.0.0.1:7788"
 
 
 def detect(model, img: bytes) -> tuple[list[dict], object, int]:

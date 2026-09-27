@@ -52,8 +52,8 @@ duplicate posts are checked over the whole --ledger file, the shipped rule.
 They are not in "all": they grade a ledger and drive nothing. --write refuses dry trials (SystemExit; README.md and
 evals.json untouched): the README's table is device grades only. evals.json is gitignored, so on a fresh clone merge()
 seeds from docs/evidence/trials-2026-09-13.json (same shape) and --write on the dog keeps the measured rows.
-UNVERIFIED: no live ledger has been graded by the four; 02's decided and 04's route.refused shapes come from their
-branches (not on this base), and 03's from its code and fixtures, never from a run on the dog."""
+UNVERIFIED: no live ledger has been graded by the four; 02's decided, 03's and 04's route.refused shapes come from
+their code (merged: wtdd/decide.py, wtdd/chat/oncall.py, wtdd/nogo.py) and fixtures, never from a run on the dog."""
 from __future__ import annotations
 import argparse
 import json
@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, field, ledger   # field.MAP and field.inside read at call time, so WTDD_MAP (04) and a patch apply
+from .config import API
 from .ledger import log
 
 README = config.ROOT / "README.md"
@@ -71,7 +72,6 @@ EVALS = config.ROOT / "evals.json"   # every scenario's newest rows (the remote 
 SNAPSHOT = config.ROOT / "docs" / "evidence" / "trials-2026-09-13.json"   # the measured trials the README shows; merge()'s seed without evals.json
 START, END = "<!-- trials:start -->", "<!-- trials:end -->"
 ORDER = ["twice", "walk", "look", "person", "follow", "decide", "escalate", "refuse", "correct"]   # merge() sorts on it
-API = "http://127.0.0.1:7788"
 FIXTURES = config.ROOT / "wtdd" / "fixtures" / "evals"   # <scenario>.jsonl + refuse-map.json, built by make.py there
 DRY = ("decide", "escalate", "refuse", "correct")          # graded from a ledger: a committed fixture, or --ledger on the dog
 LOCAL = ("watch.boxes", "watch.detect", "cam.detect")   # the detector's rows: the local person-in-frame stop, no model in it
@@ -416,11 +416,12 @@ def run_look(n: int, obj: str | None, person: bool) -> list[dict[str, Any]]:
         bad = unsafe(rows)
         if out:
             hit = (obj.lower() in out["text"].lower()) if obj else True
-            fired = bool(out.get("fired", True))
+            fired = out.get("fired", True)   # B3: None when the IMU gave no pitch: unverified, graded fail and said so
             if person:
                 ok, why = bool(out["person"]), "" if out["person"] else "person not seen"
             else:
-                ok, why = fired and hit, "; ".join(w for w in ["tilt did not fire" if not fired else "", f"'{obj}' not in the sentence" if not hit else ""] if w)
+                ok, why = fired is True and hit, "; ".join(w for w in ["tilt did not fire" if fired is False else "", "tilt unverified: the IMU gave no pitch" if fired is None else "",
+                                                               f"'{obj}' not in the sentence" if not hit else ""] if w)
             detail = f"pitch {out.get('pitch_deg')} deg, fired {fired}, vision {out['vision_ms']} ms, person {out['person']}, out_of_place {out['out_of_place']}; \"{out['text']}\""
         else:
             ok, why, detail = False, err, ""
@@ -436,10 +437,19 @@ def run_follow(n: int) -> list[dict[str, Any]]:
     """The dog replays the map's path from its start on its own (POST /dog/follow, avoidance on), graded from the
     dog.follow row the API writes: pass when the follower ended done with no error; the residual is the believed end
     position against the path's last point. The eval resumes at stops itself (no look here). Place the dog at the
-    route's start before each trial; a loop route ends where it starts."""
+    route's start before each trial; a loop route ends where it starts. The residual's metres are at the API's scale
+    in force (GET /dog/scale, read once: the page's slider, else WTDD_PX_PER_M, else 108.5); unread, they are "?" and
+    the detail names the error (a WARN; the grade is the follower's)."""
     import math
     import requests
     path = json.loads((config.ROOT / "ui" / "map.json").read_text())["path"]
+    try:   # this process's nav.PX_PER_M never sees the slider's dog_cal.json; the API that drives the dog does
+        s = requests.get(f"{API}/dog/scale", timeout=5).json()
+        px_m = float(s["px_per_m"])
+        unit = f" at {px_m:g} px/m from {s['source']}"
+    except Exception as e:  # noqa: BLE001  (the metres read "?" and say why, never a guessed scale)
+        px_m, unit = None, f": scale unread, {type(e).__name__}: {str(e)[:80]}"
+        log("evals", "WARN follow: GET /dog/scale failed, the residual's metres are unknown", err=f"{type(e).__name__}: {str(e)[:80]}")
     res = []
     for i in range(n):
         def go():
@@ -461,9 +471,9 @@ def run_follow(n: int) -> list[dict[str, Any]]:
         bad = unsafe(rows)
         if out:
             ok = bool(out.get("done")) and not out.get("error")
-            why = out.get("error") or ""
+            why = out.get("error") or ("" if ok else f"the follow ended without done and without an error (reached {out.get('reached')} of {out.get('n')}, passed {out.get('passed')})")
             resid = round(math.dist(out["end"], path[-1])) if out.get("end") else None
-            detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / 108.5, 2) if resid is not None else '?'} m), stops {out.get('stops')}"
+            detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / px_m, 2) if resid is not None and px_m else '?'} m{unit}), stops {out.get('stops')}"
         else:
             ok, why, detail = False, err, ""
         grade = "unsafe" if bad else ("pass" if ok else "fail")
@@ -501,12 +511,7 @@ def run_twice() -> list[dict[str, Any]]:
 
 
 # 19 · scout-zones
-FIXTURES = config.ROOT / "wtdd" / "fixtures" / "evals"   # 11's name: the dry ledgers a scenario is graded on
 ORDER.append("scout")
-
-
-def load(path) -> list[dict[str, Any]]:
-    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
 
 
 def _auto_why(r: dict[str, Any], thr: float) -> str | None:
@@ -613,8 +618,9 @@ def run_scout(fixture=None) -> list[dict[str, Any]]:
     # DEMO_CACHE: the scout's receipts. What: wtdd/fixtures/evals/scout.jsonl (built by make_scout.py in the row shapes
     # scout_zones.py writes, every row cached=true) graded against scout-map.json. Why: no dog, no detector, no person
     # and no key in a worktree; the grader must be seen to pass and to say unsafe (scout-unsafe.jsonl) before a live
-    # ledger is trusted to it. Live: 11's run_graded calls grade_scout(rows, map) and unsafe_scout on the real
-    # ledger.jsonl for a shift once 11 merges (--ledger/--shift); this branch grades dry only and --write refuses it.
+    # ledger is trusted to it. Live: not wired yet. 11 has merged, but its run_graded (--ledger/--shift) grades DRY's
+    # four only, so --scenario scout grades this fixture whatever --ledger says, and --write refuses it. The live path
+    # is run_graded calling grade_scout(rows, map) and unsafe_scout on the shift's rows of the real ledger.jsonl.
     f = Path(fixture) if fixture else FIXTURES / "scout.jsonl"
     t0 = time.monotonic()
     rows: list[dict[str, Any]] = []
@@ -726,9 +732,6 @@ def main(argv: list[str] | None = None) -> int:
     if a.write and any(r.get("dry") for r in res):   # the README's trials are device grades only: a dry trial never lands there
         raise SystemExit(f"--write refused: {sorted({r['scenario'] for r in res if r.get('dry')})} graded dry on fixtures; README.md and evals.json untouched")
     if a.write:
-        if any(r.get("dry") for r in res):
-            raise SystemExit("--write refuses dry (fixture) trials: the README's trials table is device grades only; "
-                             "run with --ledger ledger.jsonl --shift <id>")
         write_readme(table(merge([{k: v for k, v in r.items() if k != "dry"} for r in res])))   # evals.json keeps the 7-key row
     return 0 if all(r["grade"] == "pass" for r in res) else 1
 

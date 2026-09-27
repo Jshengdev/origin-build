@@ -6,7 +6,8 @@ floor picture, 2 = the room), why, file (the picked one, boxed by the detector w
 words and {label, p, needs_person, model}, or {error}), the confirmed post row, and ask (the "not sure" question with
 the photo, posted when needs_person; the chat listener, not this tool, reads the reply). The caption gets a
 "[detector: cup, chair x2]" suffix when the detector saw something. look_and_see() is the half without the post: the chat listener calls it and posts under the wake message's
-guid (say:<guid>), and sounds light_alarm when person is true.
+guid (say:<guid>); with person true at an ask stop it flags "who dis?!" to the on-call chat and holds for the answer, and
+only a reply read as stranger sounds light_alarm (wtdd/chat/listen.py look_and_say, verdict).
 
   python -m wtdd dog_say                          nod, look, say, post (trigger defaults to say-<epoch>)
   python -m wtdd dog_say look=sit trigger=k       the sit look; trigger is the idempotence key of the post

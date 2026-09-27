@@ -464,6 +464,53 @@ class Correct(unittest.TestCase):
         self.assertIn("jev 500", why)
 
 
+class Follow(unittest.TestCase):
+    """B13: the follow trial's residual in metres is at the scale in force, never 108.5. The scale in force is the
+    API's (GET /dog/scale: the page's slider saved in dog_cal.json, else WTDD_PX_PER_M), which the evals process's own
+    nav.PX_PER_M does not see. The API is mocked: /dog/follow starts, /dog/state says the follower ended done 87 px past
+    the path's last point; config.ROOT points at a scratch map with that path, so unsafe() (which reads the repo's
+    zones) is stubbed: no rows."""
+
+    def follow(self, scale, px_per_m=87.0):
+        """One trial against the mocked API; scale is GET /dog/scale's body, or the exception that GET raises."""
+        from wtdd.dog import nav
+        root = Path(tempfile.mkdtemp(prefix="wtdd-evals-follow-"))
+        (root / "ui").mkdir()
+        (root / "ui" / "map.json").write_text(json.dumps({"path": [[100, 100], [200, 100]]}))
+
+        def api(url, **_):
+            if url.endswith("/dog/scale") and isinstance(scale, Exception):
+                raise scale
+            body = ({"ok": True} if url.endswith("/dog/follow") else scale if url.endswith("/dog/scale") else
+                    {"follow": {"active": False, "done": True, "reached": [0, 1], "n": 2, "i": 0, "stops": 0}, "map": {"p": [287, 100]}})
+            return mock.Mock(json=mock.Mock(return_value=body))
+        err = io.StringIO()
+        with mock.patch.object(nav, "PX_PER_M", px_per_m), mock.patch.object(evals.config, "ROOT", root), \
+                mock.patch.object(evals, "unsafe", return_value=[]), \
+                mock.patch("requests.post", side_effect=api), mock.patch("requests.get", side_effect=api), \
+                contextlib.redirect_stderr(err):
+            (r,) = evals.run_follow(1)
+        return r, err.getvalue()
+
+    def test_the_residual_in_metres_is_at_the_scale_in_force(self):
+        r, _ = self.follow({"px_per_m": 87.0, "source": "WTDD_PX_PER_M"})
+        self.assertEqual(r["grade"], "pass", r)
+        self.assertIn("end 87 px from the path's last point (1.0 m", r["detail"])   # 87 / 87; at 108.5 it read 0.8 m
+
+    def test_the_scale_is_the_apis_the_sliders_not_this_processs(self):
+        """The slider moved the API to 87 (source page); this process still has 108.5 from its own env."""
+        r, _ = self.follow({"px_per_m": 87.0, "source": "page"}, px_per_m=108.5)
+        self.assertEqual(r["grade"], "pass", r)
+        self.assertIn("end 87 px from the path's last point (1.0 m at 87 px/m from page)", r["detail"])
+
+    def test_an_unread_scale_leaves_the_metres_unknown_and_says_why(self):
+        r, err = self.follow(ConnectionError("the API is not answering"), px_per_m=108.5)
+        self.assertEqual(r["grade"], "pass", r)   # the grade is the follower's: done, no error
+        self.assertIn("(? m", r["detail"])
+        self.assertIn("ConnectionError: the API is not answering", r["detail"])
+        self.assertIn("WARN", err)
+
+
 class Twice(unittest.TestCase):
     """B5: two runs of the twice scenario in the same second (a live grade run twice fast) each get their own wake guids
     and claim key, so the second is not refused by the first's rows in memory.db. time.time is pinned to one second;
@@ -583,6 +630,35 @@ class Dry(unittest.TestCase):
         self.assertEqual([r["scenario"] for r in out[:2]], ["twice", "twice"])
         self.assertEqual(out[-1]["scenario"], "correct")
         self.assertEqual(written, out)
+
+
+class Unknown(unittest.TestCase):
+    """B3, B14 (CLEANUP-PLAN): a fail always says why, and an unknown reading is never named as a measured one. The live
+    scenarios are run here against stand-ins for the API and the look (no dog, no model)."""
+
+    def test_a_follow_that_ended_without_done_or_error_says_why(self):
+        state = {"follow": {"active": False, "i": 0, "n": 5, "reached": [0, 1], "stops": [], "error": None}, "map": {"p": [300, 1400]}}
+        scale = {"px_per_m": 108.5, "source": "default"}   # B13's GET /dog/scale, read once before the trial
+        post = mock.Mock(return_value=mock.Mock(json=lambda: {"ok": True}))
+        get = mock.Mock(side_effect=lambda url, **k: mock.Mock(json=lambda: scale if url.endswith("/dog/scale") else state))
+        root = _TMP / "follow-root"
+        (root / "ui").mkdir(parents=True, exist_ok=True)
+        (root / "ui" / "map.json").write_text(json.dumps({"path": [[300, 1400], [650, 1400]]}))   # the route it replays
+        if not (root / "wtdd").exists():
+            (root / "wtdd").symlink_to(Path(evals.__file__).resolve().parent)   # unsafe() reads the Hue zones there
+        with mock.patch.object(evals.config, "ROOT", root), mock.patch("requests.post", post), mock.patch("requests.get", get), \
+                contextlib.redirect_stderr(io.StringIO()):
+            res = evals.run_follow(1)
+        self.assertEqual(res[0]["grade"], "fail", res)
+        self.assertIn("without done", res[0]["why"], res)
+
+    def test_a_tilt_with_no_imu_pitch_is_graded_unverified_not_did_not_fire(self):
+        out = {"text": "a chair by the door", "fired": None, "pitch_deg": None, "person": False, "out_of_place": [], "vision_ms": 900}
+        with mock.patch("wtdd.tools.dog_say.look_and_see", return_value=out), contextlib.redirect_stderr(io.StringIO()):
+            res = evals.run_look(1, "chair", False)
+        self.assertEqual(res[0]["grade"], "fail", "an unverified nod never passes")
+        self.assertIn("unverified", res[0]["why"], res)
+        self.assertNotIn("did not fire", res[0]["why"], res)
 
 
 if __name__ == "__main__":
