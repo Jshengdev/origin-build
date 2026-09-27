@@ -17,6 +17,8 @@ as unclear; the round's hold goes on across the re-ask. A pending of kind halt (
 From the review of 17: the answer to the re-ask is read against the re-ask (args.question); one acked_ms per flag (a
 close after a hold carries closed_ms instead; after a re-ask the final row keeps the first reply's time), so
 numbers.shifts() on the remote fixture counts one; a verdict read by the stub is a cached/stub row, an unread one is not.
+From the second review: the stub reads a yes or no against the re-ask itself ("no" to "do you know them?" is a stranger,
+so a who_dis flag sounds the alarm; "yes" stands down), where 02's CORRECTION had read a bare "no" as standing_down.
 
 Offline: the scratch ledger and memory.db are set through WTDD_LEDGER / WTDD_MEMORY before wtdd.ledger is imported. Run
 alone, they are this module's; after wtdd.test_decide in one process they are that module's (wtdd.ledger reads the
@@ -415,6 +417,31 @@ class Verdict(unittest.TestCase):
         self._say("thats my friend")
         v = self._rows("intruder.verdict")[0]
         self.assertEqual((v["cached"], v["source"]), (True, "stub"))
+
+    # ---------- fix round 2 (second review of 17): each check below was seen failing before its fix
+
+    def test_no_to_the_reask_is_a_stranger_and_the_alarm(self):
+        """"do you know them? yes or no" answered "no" means they do not know them: on a who_dis flag, the alarm. The stub
+        read it with 02's CORRECTION (^no) as standing_down and stood a confirmed stranger down."""
+        self._ask("who_dis")
+        self._say("wait what", 1)
+        got, call = self._say("no", 2)
+        self.assertTrue(got)
+        call.assert_called_once_with("light_alarm", seconds=5)
+        self.assertEqual(self._verdicts(), [("stranger", "alarm")])
+        self.assertEqual([r["state_after"]["meaning"] for r in self._rows("reply.decided")], ["unclear", "stranger"])
+        self.assertEqual(self._texts()[0], REASK)
+        self.assertTrue(self._texts()[1].startswith("STRANGER DANGER"))
+
+    def test_yes_to_the_reask_stands_down(self):
+        """"yes" to "do you know them?" means they know them: known, "ok, standing down". The stub read it unclear."""
+        self._ask("who_dis")
+        self._say("wait what", 1)
+        got, call = self._say("yes", 2)
+        self.assertTrue(got)
+        call.assert_not_called()
+        self.assertEqual(self._verdicts(), [("known", "stand_down")])
+        self.assertEqual(self._texts(), [REASK, STANDING_DOWN])
 
 
 class Fixture(unittest.TestCase):
