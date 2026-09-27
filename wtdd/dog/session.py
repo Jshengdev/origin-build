@@ -32,7 +32,9 @@ Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
 say(text) is one of the two fixed lines on the dog's own speaker (wtdd/dog/audio.py); state().say is the last play with
-age_s and speaking. WTDD_STATE_FIXTURE=<json> (DEMO_CACHE, dry screenshots only) makes state() serve that file marked
+age_s and speaking. A say that cannot reach the body (the probe refused, inside PROBE_BACKOFF_S, the dog down) is still
+one FAILED dog.say row and .say.error; the session keeps the last say, so a reconnect's fresh Body keeps the red badge.
+WTDD_STATE_FIXTURE=<json> (DEMO_CACHE, dry screenshots only) makes state() serve that file marked
 source "stub" without touching a dog.
 """
 from __future__ import annotations
@@ -94,6 +96,7 @@ class DogSession:
         self._follower: asyncio.Task | None = None
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
+        self.say_state: dict[str, Any] | None = None   # the last say, ok or failed, kept across a reconnect (GET /dog/state .say)
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -142,7 +145,7 @@ class DogSession:
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
-                "say": audio.served(self.body.say_state) if self.body else None,
+                "say": audio.served(self.body.say_state if self.body and self.body.say_state else self.say_state),
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
 
@@ -347,12 +350,22 @@ class DogSession:
 
     def say(self, text: str, volume: int | None = None) -> dict[str, Any]:
         """One of the two fixed lines on the dog's own speaker (wtdd/dog/audio.py), the volume set and read back first
-        when given. One dog.say row (and a dog.volume row); state().say is the last play."""
-        async def go(b: Body) -> dict[str, Any]:
-            if volume is not None:
-                await audio.volume(b, volume)
-            return await b.say(text)
-        return self.run(self.with_body(go))
+        when given. One dog.say row (and a dog.volume row); state().say is the last play. A body that cannot be reached
+        is that row, FAILED, and .say.error: audio.say never opens its own row then, and the hook has no caller to see it."""
+        async def go() -> dict[str, Any]:
+            try:
+                b = await self._ensure()
+            except Exception as e:
+                self.say_state = {"text": text, "code": None, "at": time.time(), "error": f"{type(e).__name__}: {e}"}
+                with step("dog", "dog.say", "unitree", {"text": text, "via": "audiohub"}, None):
+                    raise
+            try:
+                if volume is not None:
+                    await audio.volume(b, volume)
+                return await b.say(text)
+            finally:
+                self.say_state = b.say_state or self.say_state
+        return self.run(go())
 
     # ---- hold-to-move
     def drive(self, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict[str, Any]:
