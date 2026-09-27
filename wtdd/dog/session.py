@@ -45,11 +45,19 @@ are rows, reads are not.
 
 Re-correction (wtdd/dog/localize.py, 05b). Every window after the first is matched against the grid before it is drawn:
 its band cells through the correction held (self.corr, a rigid 2D transform in the odometry frame) against the cells
-seen MATCH_THRESHOLD+ times. Applied: one pose.corrected row, the window's delta composed into self.corr, the window
-drawn through it. Rejected past the cap: a pose.corrected row with ok false, not drawn, the correction kept (a streak of
+seen MATCH_THRESHOLD+ times. Applied: the window's delta composed into self.corr, the window drawn through it, one
+line per window. Rejected past the cap: a pose.corrected row with ok false, not drawn, the correction kept (a streak of
 them is a WARN: after a power cycle, clear the grid). Unmatched below MIN_SCORE: no row, one line per window (a WARN
 the first five times, then every 100th), drawn through the correction held; skipped under MIN_CELLS: the same with the
 rate-limited WARN only. Counts and the last verdict are on GET /dog/lidar .localize.
+The rows (S7, Johnny 2026-09-27: "one message every 30 seconds or new update"; live, 05b wrote 2,511 rows in 5 minutes,
+each a zero nudge). Applied windows wait in one summary pose.corrected row, written at most once per SUMMARY_S since
+the last pose.corrected row (the first at once). An update is its own row at once, the summary pending before it
+first: an applied nudge over one grid cell, or any rejection. Every row carries args.windows, every window since the
+last row (applied, rejected, unmatched and skipped also counted apart), and args.largest_m, the largest nudge among
+them; the rest is the newest window's. A grid clear, lidar off and a stale reconnect write the pending summary; a
+process exit does not (no hook: at most SUMMARY_S of zero-to-one-cell nudges, on stderr line by line, never reach the
+ledger).
 map_pose() is the odometry pose through self.corr, then nav.to_map; calibrate() ties that corrected pose and keeps the
 correction (the grid is drawn through it); grid_clear() resets it and, with a calibration, sets recheck (the dot moves
 by the dropped correction, so the remote asks for the drag). The match runs inline on the driver's dispatcher, as the
@@ -85,6 +93,7 @@ REC_HZ, REC_MIN_PX, REC_STEP_PX = 5.0, 10, 45   # route recording: sample rate, 
 LIVE_MAX_AGE_MS = 1000                        # S6: an older LiDAR window is no live view; the follower says so once
 START_PX = 90                                 # a dog this close to the path's first point replays from the start (a loop's end is also its start)
 STOP_TIMEOUT_S = 180.0                        # a stop without resume for this long fails the follow
+SUMMARY_S = 30.0                              # S7: small applied corrections are one pose.corrected row at most this often; an update is written at once
 
 
 class DogSession:
@@ -123,6 +132,8 @@ class DogSession:
         self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
         self.corr = localize.IDENTITY                # the scan-to-map correction (localize.py), odometry frame; identity until a window is applied
         self.loc: dict[str, Any] = {"applied": 0, "rejected": 0, "unmatched": 0, "skipped": 0, "rejected_streak": 0, "last": None}
+        self._pc: dict[str, Any] | None = None       # S7: applied windows no pose.corrected row has said yet {m, kind, before, after, largest_m}
+        self._pc_t, self._pc_n = -math.inf, {}       # when the last pose.corrected row was written, and loc's counts then
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -137,6 +148,8 @@ class DogSession:
                 self.recheck = True   # the page asks for the dog's position to be confirmed (a power cycle resets the odometry frame)
                 if (g := self.grid) is not None:   # not cleared here: the code cannot tell a hotspot drop (odometry kept) from a power cycle (reset)
                     log("dog", "WARN grid kept across the reconnect: if the dog was power-cycled its odometry frame reset; clear it (POST /dog/grid {clear: true})", grid_frames=g.frames)
+                with self._grid_lock:   # S7: the stream stopped with the peer: the pending summary is written
+                    self._pc_flush()
                 if self._driver:
                     self._driver.cancel()
                 try:
@@ -257,6 +270,9 @@ class DogSession:
         frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
+        if on is False:   # S7: the stream stopped: the pending summary is written
+            with self._grid_lock:
+                self._pc_flush()
         loc = {**{k: self.loc[k] for k in ("applied", "rejected", "unmatched", "skipped", "last")}, "corr": localize.describe(self.corr)}
         if self.body is None:
             return {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "grid_frames": g.frames if (g := self.grid) is not None else 0,
@@ -287,6 +303,8 @@ class DogSession:
                 touched = self.grid.update_frame(d)
             else:
                 touched = self._relocalize(d)
+            if self._pc is not None and time.monotonic() - self._pc_t >= SUMMARY_S:   # S7: at most one summary per SUMMARY_S
+                self._pc_flush()
             if touched is not None and self.grid.frames % 100 == 0:
                 log("dog", "grid", frames=self.grid.frames, cells=int((self.grid.counts > 0).sum()), shape=self.grid.shape,
                     touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1))
@@ -317,6 +335,8 @@ class DogSession:
         last = {"verdict": verdict, **kv, "why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
         if m["ms"] > localize.BUDGET_MS:
             log("dog", "WARN localize over budget on the driver's dispatcher", ms=m["ms"], budget_ms=localize.BUDGET_MS, n=m["n"])
+        if verdict == "rejected":   # S7: an update, its own row at once; the summary pending before it is written first
+            self._pc_flush()
         if verdict != "applied":   # an applied window is counted below, once the grid has taken it
             loc[verdict] += 1
             loc["last"] = last
@@ -331,7 +351,7 @@ class DogSession:
         before = snap()
         if verdict == "rejected":
             loc["rejected_streak"] += 1
-            append(localize.row(m, kind, before, before, why))
+            append(localize.row(m, kind, before, before, why, largest_m=round(math.hypot(m["dx"], m["dy"]), 4), **self._counts()))
             log("dog", "localize rejected", why=why, streak=loc["rejected_streak"], **kv)
             if loc["rejected_streak"] == 5 or (loc["rejected_streak"] > 5 and loc["rejected_streak"] % 50 == 0):
                 log("dog", "WARN windows past the cap in a row: was the dog power-cycled? POST /dog/grid {clear: true}",
@@ -339,13 +359,36 @@ class DogSession:
             return None
         delta = localize.delta_about(pivot, m["dx"], m["dy"], m["dtheta"])
         touched = self.grid.update(localize.apply_points(delta, xy))   # first: a grid that refuses the window (01's MAX_SIDE) raises here and nothing moves
+        nudge = round(math.hypot(m["dx"], m["dy"]), 4)
+        big = nudge > self.grid.resolution   # S7: more than one cell is an update: the summary pending first, then its own row, at once
+        if big:
+            self._pc_flush()
         self.corr = localize.compose(self.corr, delta)
         loc["applied"] += 1
         loc["rejected_streak"], loc["last"] = 0, last
-        append(localize.row(m, kind, before, snap()))
+        p = self._pc or {"before": before, "largest_m": 0.0}
+        self._pc = {**p, "m": m, "kind": kind, "after": snap(), "largest_m": max(p["largest_m"], nudge)}
+        if big:
+            self._pc_flush()
         c = localize.describe(self.corr)
         log("dog", "localize applied", corr_tx=c["tx"], corr_ty=c["ty"], corr_deg=c["theta_deg"], **kv)
         return touched
+
+    def _counts(self) -> dict[str, int]:
+        """S7: every window since the last pose.corrected row, by verdict (loc's counters), and their sum as windows; the
+        next row counts from here."""
+        n = {k: self.loc[k] - self._pc_n.get(k, 0) for k in ("applied", "rejected", "unmatched", "skipped")}
+        self._pc_t, self._pc_n = time.monotonic(), {k: self.loc[k] for k in n}
+        return {"windows": sum(n.values()), **n}
+
+    def _pc_flush(self) -> None:
+        """S7: the applied windows pending as one pose.corrected row: the counts since the last row, largest_m the largest
+        nudge among them, the rest the newest window's; state_before the first one's. Under _grid_lock. Nothing pending:
+        nothing written (windows unmatched or skipped since the last row are counted in the next row)."""
+        if (p := self._pc) is not None:
+            self._pc, n = None, self._counts()
+            append(localize.row(p["m"], p["kind"], p["before"], p["after"], largest_m=p["largest_m"], **n))
+            log("dog", "pose.corrected written", largest_m=p["largest_m"], latency_ms=round(p["m"]["ms"]), **n)
 
     def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
@@ -398,6 +441,7 @@ class DogSession:
         With a calibration, dropping a correction moves the dot by it, so recheck is set and the remote asks for the
         drag. One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
         with self._grid_lock:
+            self._pc_flush()   # S7: the summary pending is written before the grid it was measured against goes
             g = self.grid
             before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0,
                       "corr_before": localize.describe(self.corr)}
@@ -408,6 +452,7 @@ class DogSession:
                 self.grid = None
                 self.corr = localize.IDENTITY
                 self.loc.update(applied=0, rejected=0, unmatched=0, skipped=0, rejected_streak=0, last=None)
+                self._pc_t, self._pc_n = -math.inf, {}   # the new grid's first correction is written at once, counted from zero
                 r["state_after"] = {"cleared": True, "corr_reset": True, "recheck": self.recheck}
         return {"cleared": True, "frames_before": before["frames_before"]}
 
