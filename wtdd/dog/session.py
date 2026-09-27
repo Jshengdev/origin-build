@@ -31,6 +31,8 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+sniff(topic, seconds) is Body.sniff through this session (one dog.sniff row; a name not in RTC_TOPIC is refused, with its
+row, before any connect); streams() is GET /dog/streams: Body's counters merged with the dog.sniff rows, never connecting.
 """
 from __future__ import annotations
 import asyncio
@@ -225,6 +227,54 @@ class DogSession:
             return {**out, "points_px": [], "why": "not calibrated"}
         xy = lidar.top_down(lp["points"])
         return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, st["position"], st["rpy"][2])}
+
+    # ---- sniff (28): what the body publishes (wtdd/dog/body.py sniff, streams)
+    def sniff(self, topic: str, seconds: float = 5) -> dict[str, Any]:
+        """One topic for `seconds`, one dog.sniff row. A name not in RTC_TOPIC, or a window outside (0, 60] s, is refused
+        before any connect, and the refusal is its own dog.sniff row."""
+        from .body import CONNECT_TIMEOUT_S, sniff_topic
+        try:
+            sniff_topic(topic, seconds)
+        except (ValueError, TypeError):
+            with step("dog", "dog.sniff", "unitree", {"topic": topic, "seconds": seconds}):
+                raise
+        return self.run(self.with_body(lambda b: b.sniff(topic, seconds)), timeout=float(seconds) + CONNECT_TIMEOUT_S + 30)
+
+    def streams(self) -> list[dict[str, Any]]:
+        """GET /dog/streams; never connects. Body.streams() (the three owned topics always, then every topic counted this
+        connection) merged with the ledger's dog.sniff rows whose topic is an RTC_TOPIC name: {topic, owned, hz, age_ms,
+        messages, keys_n, seen, last_row_ts, source, error, why}. Live counters win once they counted something, else the
+        newest row's response. seen = a live Body counted it, or an ok live row had messages (a stub row never makes a
+        topic seen). error and why are the newest row's when it failed and nothing was counted live since."""
+        from ..ledger import rows
+        from .body import RTC_TOPIC, SNIFF_OWNED
+        live = {e["topic"]: e for e in (self.body.streams() if self.body else [])}
+        newest: dict[str, dict] = {}
+        seen: set[str] = set()
+        for r in rows():
+            t = (r.get("args") or {}).get("topic")
+            if r.get("tool") != "dog.sniff" or t not in RTC_TOPIC.values():
+                continue
+            newest[t] = r
+            res = r.get("response_or_error")
+            if r.get("ok") and r.get("source") == "live" and isinstance(res, dict) and (res.get("messages") or 0) > 0:
+                seen.add(t)
+        out = []
+        for t in dict.fromkeys([*SNIFF_OWNED, *live, *newest]):
+            e, r = live.get(t), newest.get(t)
+            counted = bool(e and e["messages"])
+            res = r.get("response_or_error") if r and r.get("ok") else None
+            res = res if isinstance(res, dict) else {}
+            keys = res.get("keys")
+            nums = {k: e[k] for k in ("hz", "age_ms", "messages", "keys_n", "source")} if counted else \
+                {"hz": res.get("hz"), "age_ms": None, "messages": res.get("messages", 0),
+                 "keys_n": len(keys) if isinstance(keys, dict) else None, "source": r.get("source") if r else None}
+            failed = bool(r) and not r.get("ok") and not counted
+            out.append({"topic": t, "owned": t in SNIFF_OWNED, **nums, "seen": bool(e and e["seen"]) or t in seen,
+                        "last_row_ts": r.get("ts") if r else None,
+                        "error": r.get("response_or_error") if failed else None,
+                        "why": (r.get("args") or {}).get("why") if failed else None})
+        return out
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:

@@ -25,6 +25,8 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /dog/streams               [{topic, owned, hz, age_ms, messages, keys_n, seen, last_row_ts, source, error, why}]: the three
+                                  owned topics plus every sniffed one (python -m wtdd sniff); never connects
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -113,6 +115,13 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "image/jpeg", DogSession.get().snapshot())
             except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+        # 28 · sniff
+        if u.path == "/dog/streams":   # Body's live counters merged with the ledger's dog.sniff rows; never connects
+            from .dog.session import DogSession
+            try:
+                return self._json(200, DogSession.get().streams())
+            except Exception as e:  # noqa: BLE001  (served as 500 {error}; the page draws "Streams FAILED: <reason>")
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name

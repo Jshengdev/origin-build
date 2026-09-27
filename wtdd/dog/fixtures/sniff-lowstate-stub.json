@@ -1,0 +1,300 @@
+{
+ "_about": "UNVERIFIED: a typed guess of one rt/lf/lowstate message, never a message from this dog. Field names are the ones Unitree's SDK IDL is expected to carry (the driver names the topic only, constants.py:63, and says the Go2 packs battery into lowstate and ships one IMU, :97-101); every value, the motor count (20 slots) and every array length are guesses. It drives wtdd/dog/test_sniff.py and the dry Streams row. Replace it with the keys of the first live `python -m wtdd sniff topic=rt/lf/lowstate seconds=5` row.",
+ "topic": "rt/lf/lowstate",
+ "data": {
+  "imu_state": {
+   "quaternion": [
+    0.9997,
+    0.0021,
+    -0.0183,
+    0.0112
+   ],
+   "gyroscope": [
+    0.0012,
+    -0.0031,
+    0.0004
+   ],
+   "accelerometer": [
+    0.12,
+    -0.05,
+    9.54
+   ],
+   "rpy": [
+    0.0042,
+    -0.0366,
+    0.0224
+   ],
+   "temperature": 79
+  },
+  "motor_state": [
+   {
+    "mode": 1,
+    "q": 0.0,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.35,
+    "temperature": 31,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0513,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.36,
+    "temperature": 32,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": -0.6974,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.37,
+    "temperature": 33,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0039,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.38,
+    "temperature": 34,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0552,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.39,
+    "temperature": 31,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": -0.6935,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.4,
+    "temperature": 32,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0078,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.41,
+    "temperature": 33,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0591,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.42,
+    "temperature": 34,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": -0.6896,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.43,
+    "temperature": 31,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0117,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.44,
+    "temperature": 32,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.063,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.45,
+    "temperature": 33,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": -0.6857,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.46,
+    "temperature": 34,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0156,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.47,
+    "temperature": 31,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0669,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.48,
+    "temperature": 32,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": -0.6818,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.49,
+    "temperature": 33,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0195,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.5,
+    "temperature": 34,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0708,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.51,
+    "temperature": 31,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": -0.6779,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.52,
+    "temperature": 32,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0234,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.53,
+    "temperature": 33,
+    "lost": 0
+   },
+   {
+    "mode": 1,
+    "q": 0.0747,
+    "dq": 0.0021,
+    "ddq": 0.0,
+    "tau_est": 0.54,
+    "temperature": 34,
+    "lost": 0
+   }
+  ],
+  "bms_state": {
+   "soc": 87,
+   "current": -1200,
+   "cycle": 41,
+   "bq_ntc": [
+    29,
+    28
+   ],
+   "mcu_ntc": [
+    33,
+    32
+   ],
+   "cell_vol": [
+    3712,
+    3709,
+    3714,
+    3711,
+    3710,
+    3713,
+    3708,
+    3712
+   ]
+  },
+  "foot_force": [
+   21,
+   19,
+   23,
+   20
+  ],
+  "foot_force_est": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "power_v": 29.41,
+  "power_a": 1.87,
+  "temperature_ntc1": 41,
+  "temperature_ntc2": 39,
+  "wireless_remote": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "fan_frequency": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "bit_flag": 36
+ }
+}

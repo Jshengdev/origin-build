@@ -33,6 +33,12 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
   lidar:      wtdd/dog/lidar.py (lidar_on/lidar_off/lidar_points here): disableTrafficSaving(True), set_decoder("native"),
               "on" to rt/utlidar/switch, subscribe rt/utlidar/voxel_map_compressed; frames arrive LZ4-decoded as meters
               in the voxel frame. Not yet run on this dog.
+  sniff:      the driver keeps ONE callback per topic (msgs/pub_sub.py:16) and subscribe() overwrites it (:128-129);
+              unsubscribe() only sends (:133-140) and its closed-channel guard only prints (:123-125). So sniff() never
+              subscribes the three topics Body owns (SNIFF_OWNED): it taps _on_state/_on_lidar/_on_utpose through
+              Body.taps. Any other RTC_TOPIC is subscribed for the window and unsubscribed after, unless its slot holds a
+              callback the sniff did not put there (refused: add that topic to SNIFF_OWNED and tap it); streams() counts
+              every arrival. UNVERIFIED on the dog: every topic but rt/lf/sportmodestate (the sniff exists to end that).
   auth:       firmware 1.1.15+ needs aes_128_key, fetched once with
               `unitree-fetch-aes-key --email <unitree account> --password '...' --device-type Go2`.
   discovery:  discover_ip_sn() is multicast 231.1.1.1:10131; a dog in STA mode on another subnet does not answer.
@@ -107,6 +113,16 @@ STATE_FRESH_S = 2.0        # wait for a state sample newer than the call
 MOTION_SWITCHER_GET, MOTION_SWITCHER_SET = 1001, 1002   # sportmode example
 PICTURES = Path.home() / "Pictures" / "wtdd"
 ROUTES = Path(__file__).parent / "routes"
+# 28 · sniff. The topics Body subscribes itself (connect(), lidar.subscribe): a second subscribe would silently replace
+# Body's callback in the driver (pub_sub.py:16, :128-129) and kill the follower's state, the LiDAR and the pose.
+SNIFF_OWNED = (RTC_TOPIC["LF_SPORT_MOD_STATE"], RTC_TOPIC["ULIDAR_ARRAY"], RTC_TOPIC["ROBOTODOM"])
+SNIFF_MAX_S = 60           # one sniff window; DogSession.sniff's run() timeout covers it
+PAYLOAD_MAX = 2048         # first_payload, in UTF-8 bytes
+UTLIDAR_WHY = ("the driver runs every binary payload on a utlidar topic through its voxel decoder before any callback "
+               "(webrtc_datachannel.py:143-145); a payload that is not a voxel frame raises there and the catch-all at "
+               ":83-84 logs and drops it, so the topic may publish and still count 0")
+LIDAR_OFF_WHY = ("the LiDAR stream is off: Body subscribes the utlidar topics only in lidar_on(). POST /dog/lidar {on: true} "
+                 "first; the sniff never switches it on")
 
 
 def probe(scan: bool = True) -> tuple[list[tuple[str, str, str]], bool]:
@@ -225,6 +241,32 @@ def validate_route(steps: Any) -> list[str]:
     return [desc for _kind, _arg, desc in _parse(steps)]
 
 
+def sniff_topic(topic: str, seconds: float = 5) -> str:
+    """The rt/ name for an RTC_TOPIC key (LOW_STATE) or name (rt/lf/lowstate). Refuses anything else, and a window
+    outside (0, SNIFF_MAX_S] s, with ValueError: before any send (Body.sniff) and before any connect (DogSession.sniff)."""
+    if not 0 < float(seconds) <= SNIFF_MAX_S:
+        raise ValueError(f"seconds must be 0 < s <= {SNIFF_MAX_S}, got {seconds}")
+    if topic in RTC_TOPIC.values():
+        return topic
+    if topic in RTC_TOPIC:
+        return RTC_TOPIC[topic]
+    raise ValueError(f"{topic} is not in RTC_TOPIC (a key like LOW_STATE or a name like rt/lf/lowstate); nothing was sent")
+
+
+def key_tree(v: Any) -> Any:
+    """The shape of a message: a dict is a dict of subtrees, a list is [length, subtree of its first item] ([0] when
+    empty), a leaf is its type name (int, float, str, bool, null; bytes[N]; ndarray[shape] dtype; else the class name)."""
+    if isinstance(v, dict):
+        return {k: key_tree(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [len(v), key_tree(v[0])] if v else [0]
+    if isinstance(v, (bytes, bytearray)):
+        return f"bytes[{len(v)}]"
+    if isinstance(v, np.ndarray):
+        return f"ndarray[{'x'.join(map(str, v.shape))}] {v.dtype}"
+    return {bool: "bool", int: "int", float: "float", str: "str", type(None): "null"}.get(type(v), type(v).__name__)
+
+
 class Body:
     """One connection, one asyncio loop. connect() then cmd/move/avoid/route/frame, then close();
     or `async with Body() as body:` which does both."""
@@ -251,6 +293,9 @@ class Body:
         self._lidar_at = 0.0
         self._lidar_on = False
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
+        self.taps: dict[str, list] = {}       # topic -> the running sniffs' taps, fed by _tap
+        self._streams: dict[str, dict] = {}   # topic -> {n, t0, at, keys_n}: every arrival counted this connection
+        self._sniffed: dict[str, Any] = {}    # topic -> the callback sniff() put in the driver's slot (a re-sniff finds it)
 
     # ---- connection
 
@@ -291,6 +336,7 @@ class Body:
     # ---- state
 
     def _on_state(self, message: dict) -> None:
+        self._tap(RTC_TOPIC["LF_SPORT_MOD_STATE"], message)
         d = message.get("data")
         if not isinstance(d, dict):
             log("dog", "WARN LF_SPORT_MOD_STATE message without a data dict", got=str(message)[:80])
@@ -529,6 +575,7 @@ class Body:
         """Runs inside the driver's message handler. A frame that fails to decode is counted, logged and re-raised (the
         driver prints the traceback); nothing stands in for it. The first frame logs its shape, its z layers and how far
         the window's center is from the LF_SPORT_MOD_STATE position (the frame check in lidar.py's docstring)."""
+        self._tap(RTC_TOPIC["ULIDAR_ARRAY"], message)
         try:
             d = lidar.decode(message)
         except Exception as e:  # noqa: BLE001  (counted and re-raised; lidar_points() reports the count)
@@ -552,6 +599,7 @@ class Body:
             log("dog", f"lidar frames={self._lidar_n}", voxels=d["n"], errors=self._lidar_err)
 
     def _on_utpose(self, message: dict) -> None:
+        self._tap(RTC_TOPIC["ROBOTODOM"], message)
         self._utpose = message.get("data")
 
     def lidar_points(self) -> dict:
@@ -563,6 +611,82 @@ class Body:
                 "frame": {"id": d["frame"], "stamp": d["stamp"], "origin": d["origin"], "resolution": d["resolution"],
                           "width": d["width"], "center": d["center"], "voxels": d["n"]} if d else None,
                 "points": d["points"] if d else None, "utlidar_pose": self._utpose}
+
+    # ---- sniff (28): what one topic actually publishes, as one row
+
+    def _tap(self, topic: str, message: dict) -> None:
+        """One arrival on `topic`: counted for streams(), then handed to every sniff tapping it. Runs inside the driver's
+        on_message, so it stays trivial: no log, no ledger, no await (a slow callback stalls the 20 Hz state stream)."""
+        now, d = time.monotonic(), message.get("data")
+        s = self._streams.setdefault(topic, {"n": 0, "t0": now})
+        s.update(n=s["n"] + 1, at=now, keys_n=len(d) if isinstance(d, dict) else None)
+        for f in self.taps.get(topic, ()):
+            f(message)
+
+    async def sniff(self, topic: str, seconds: float = 5) -> dict:
+        """Watches one topic for `seconds`; one dog.sniff row: {messages, hz, keys (key_tree of the first message's
+        data), first_payload (cut to PAYLOAD_MAX bytes), last_at}, or ok=false with "0 messages in N s" (args.why on a
+        utlidar topic). An owned topic is tapped from Body's own callback, never subscribed; any other RTC_TOPIC is
+        subscribed for the window and unsubscribed after; any other name, and any topic whose driver slot holds a
+        callback the sniff did not put there, is refused before any send. Never switches the LiDAR on."""
+        with step("dog", "dog.sniff", "unitree", {"topic": topic, "seconds": seconds}, self.state()) as r:
+            src = getattr(self.conn, "source", "live")
+            if src != "live":   # night-1 contracts E: a stub connection (only wtdd/dog/test_sniff.py builds one) says so on its row
+                r.update(cached=True, source=src)
+            name = r["args"]["topic"] = sniff_topic(topic, seconds)
+            if self.conn is None:
+                raise ConnectionError("not connected")
+            ps, owned = self.conn.datachannel.pub_sub, name in SNIFF_OWNED
+            if not owned and ps.channel.readyState != "open":   # the driver only prints here (pub_sub.py:123-125)
+                raise ConnectionError("data channel is not open")
+            if not owned and ps.subscriptions.get(name) not in (None, self._sniffed.get(name)):   # pub_sub.py:16, :128-129
+                raise RuntimeError(f"{name} already has a callback in the driver (Body subscribes it): add it to "
+                                   "SNIFF_OWNED and tap it; a subscribe here would silently replace that callback")
+            if not owned and self.taps.get(name):   # a second subscribe overwrites, and the first one's unsubscribe ends both
+                raise RuntimeError(f"a sniff of {name} is already running")
+            c: dict[str, Any] = {"n": 0}
+
+            def tap(m: dict) -> None:
+                now = time.monotonic()
+                if not c["n"]:
+                    c.update(first=m.get("data"), t0=now)
+                c.update(n=c["n"] + 1, t1=now, last_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+
+            self.taps.setdefault(name, []).append(tap)   # in place before the first await: no arrival is missed
+            try:
+                if not owned:
+                    ps.subscribe(name, self._sniffed.setdefault(name, lambda m: self._tap(name, m)))
+                for i in range(math.ceil(float(seconds))):
+                    await asyncio.sleep(min(1.0, float(seconds) - i))
+                    log("dog", f"{'' if c['n'] else 'WARN '}sniff {name} second {i + 1}", messages=c["n"])
+            finally:
+                self.taps[name].remove(tap)
+                if not owned:
+                    ps.unsubscribe(name)   # only sends: the driver keeps the callback, so streams() shows whether the dog obeys
+            if not c["n"]:
+                if "utlidar" in name:
+                    r["args"]["why"] = LIDAR_OFF_WHY if owned and not self._lidar_on else UTLIDAR_WHY
+                raise RuntimeError(f"0 messages in {float(seconds):g} s")
+            span = c["t1"] - c["t0"]
+            out = {"messages": c["n"], "hz": round((c["n"] - 1) / span, 1) if span > 0 else None,
+                   "keys": key_tree(c["first"]),
+                   "first_payload": json.dumps(c["first"], default=str).encode()[:PAYLOAD_MAX].decode("utf-8", "ignore"),
+                   "last_at": c["last_at"]}
+            r["response_or_error"], r["state_after"] = out, self.state()
+        return out
+
+    def streams(self) -> list[dict]:
+        """The three owned topics (always, in SNIFF_OWNED order) plus every topic counted this connection: {topic, owned,
+        hz, age_ms, messages, keys_n, seen, source}. seen = counted on a live connection; a stub is never this dog."""
+        src, now = getattr(self.conn, "source", "live"), time.monotonic()
+        out = []
+        for t in dict.fromkeys([*SNIFF_OWNED, *list(self._streams)]):
+            s = self._streams.get(t) or {"n": 0, "t0": now, "at": now}
+            n, span = s["n"], s["at"] - s["t0"]
+            out.append({"topic": t, "owned": t in SNIFF_OWNED, "hz": round((n - 1) / span, 1) if n > 1 and span > 0 else None,
+                        "age_ms": round((now - s["at"]) * 1000) if n else None, "messages": n, "keys_n": s.get("keys_n"),
+                        "seen": n > 0 and src == "live", "source": src})
+        return out
 
     # ---- camera
 
