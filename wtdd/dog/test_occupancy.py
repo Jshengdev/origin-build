@@ -22,7 +22,11 @@ The contract under test (the grid, in the odometry frame, metres):
                             driver's dispatcher; a frame the grid refuses is not counted in grid.frames
   to_map_px(xy, cal)        vectorised nav.to_map: map pixels through the same calibration as the dots
   response(grid, cal, threshold, source)   the GET /dog/grid JSON: {n, cells_px, cell_px, threshold, resolution,
-                            frames, extent_m, source, why?}; zero cells always says why
+                            frames, extent_m, source, why?}; zero cells always says why; S13 (the heat toggle): hits, each
+                            served cell's count in cells_px's order; absent with no grid
+  DogSession.lidar()        S13 (the memory toggle): beside points_px (unchanged), known, True where the point's cell is
+                            already a wall in the session grid (occupancy.THRESHOLD), False where it is new; absent with
+                            a why when there is no grid
   python -m wtdd.dog.occupancy --replay <npz> --png <out> [--threshold N] [--save <json>]
                             the driver decoder on each stored blob -> grid -> a PNG (PNG_SCALE px per cell: white
                             background, grey below threshold, black walls) and one stderr line per frame
@@ -196,6 +200,24 @@ class Projection(unittest.TestCase):
         self.assertNotIn("why", r)
         json.dumps(r)   # what the API sends
 
+    def test_response_hits_line_up_with_cells_px_and_the_world_counts(self):
+        """S13, the heat toggle: hits[i] is cells_px[i]'s count, the one the threshold is applied to (the fixture's
+        declared world, not the grid's own output). No grid: absent, the existing why."""
+        g, world = accumulated(), fx.world_cells()
+        for t in (1, 2):
+            r = occupancy.response(g, CAL, threshold=t, source="session")
+            self.assertIn("hits", r)
+            w = g.walls(t)   # cells_px is walls(t) through the calibration, in that order
+            cells = [(int(round(x / fx.RES)), int(round(y / fx.RES))) for x, y in w]
+            self.assertEqual(r["cells_px"], occupancy.to_map_px(w, CAL).tolist())
+            self.assertEqual(r["hits"], [world[c] for c in cells], f"threshold {t}")
+            self.assertTrue(all(isinstance(h, int) for h in r["hits"]))
+        self.assertEqual(r["hits"][cells.index((40, 0))], 3, "wall A, in every frame")
+        self.assertNotIn((1, -19), cells, "the blob seen once is not served at threshold 2")
+        r0 = occupancy.response(None, CAL, threshold=2, source=None)
+        self.assertNotIn("hits", r0)
+        self.assertTrue(r0["why"].startswith("no grid"), r0["why"])
+
     def test_response_uncalibrated_says_so(self):
         r = occupancy.response(accumulated(), None, threshold=2, source="session")
         self.assertEqual((r["n"], r["cells_px"]), (0, []))
@@ -294,6 +316,48 @@ class Hook(unittest.TestCase):
         np.testing.assert_array_equal(s.grid.counts, accumulated().counts)
         self.assertEqual((s.grid.frames, lr["grid_frames"], lr["cb_errors"], lr["n"]), (3, 3, 1, 4))
         self.assertIn("grid started", self.err.getvalue())
+
+
+class Known(unittest.TestCase):
+    """S13, the memory toggle: GET /dog/lidar's `known`, parallel to points_px. A stub body hands the session one frame
+    (lidar_points and state, the two reads lidar() makes); the grid remembers a wall seen THRESHOLD times and a faint
+    strip seen once fewer, built from points. The frame's points: on the wall, on the strip, on floor never seen."""
+
+    def setUp(self):
+        from .. import ledger
+        from . import session
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for mod, name in ((ledger, "LEDGER"), (session, "CAL_FILE"), (session, "GRID_FILE")):
+            self.enterContext(mock.patch.object(mod, name, tmp / name.lower()))
+        self.enterContext(redirect_stderr(io.StringIO()))
+        wall = [(x * fx.RES, 1.0, 0.5) for x in range(10)]            # x 0 .. 0.45 m
+        faint = [(0.6 + x * fx.RES, 1.0, 0.5) for x in range(5)]      # x 0.6 .. 0.8 m
+        floor = [(1.0 + x * fx.RES, 2.0, 0.5) for x in range(10)]     # x 1.0 .. 1.45 m: top_down sorts by x, so this order
+        self.grid = occupancy.Grid(fx.RES, (0.0, 0.0), fx.FRAME_ID, -0.3)
+        for k in range(occupancy.THRESHOLD):
+            self.grid.update(np.array(wall + (faint if k else [])))
+        self.pts = np.array(wall + faint + floor)
+        self.s = session.DogSession()
+        self.addCleanup(stop, self.s)
+        self.s.cal = dict(CAL)
+        self.s.body = mock.Mock(**{"lidar_points.return_value": {"on": True, "n": 1, "errors": 0, "cb_errors": 0, "age_ms": 5,
+                                                                 "frame": {"id": fx.FRAME_ID}, "utlidar_pose": None, "points": self.pts},
+                                   "state.return_value": {"position": [0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0]}})
+
+    def test_known_is_true_on_a_remembered_wall_and_false_on_new_floor_in_points_px_order(self):
+        self.s.grid = self.grid
+        r = self.s.lidar()
+        want_px = [[round(v) for v in nav.to_map(CAL, p[:2], 0.0)[:2]] for p in self.pts]
+        self.assertEqual(r["points_px"], want_px, "points_px unchanged")
+        self.assertIn("known", r, r.get("why"))
+        self.assertEqual(r["known"], [True] * 10 + [False] * 5 + [False] * 10)
+        self.assertNotIn("why", r)
+
+    def test_no_grid_serves_no_known_and_says_why(self):
+        r = self.s.lidar()
+        self.assertEqual(len(r["points_px"]), len(self.pts), "the dots are still drawn")
+        self.assertNotIn("known", r)
+        self.assertIn("no grid", r.get("why") or "")
 
 
 class Replay(unittest.TestCase):

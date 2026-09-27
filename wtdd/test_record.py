@@ -15,7 +15,9 @@ opens at the round's chat.wake (the nearest one before the first stamped row, wi
 at the first stamped row when there is no wake; it closes at the shift's ok record.signed row (inclusive), else at the
 next shift's opener, else at the end of the ledger (an open shift); when both exist, whichever comes first. A row
 stamped with another shift never joins. Expected numbers were counted by hand from the recipe, once, and are written
-here, not derived."""
+here, not derived.
+
+S13: the same record over HTTP, GET /record?shift=<id> and GET /record/shifts (wtdd/api.py), class Http."""
 from __future__ import annotations
 import contextlib
 import hashlib
@@ -341,6 +343,60 @@ class Cli(Guard):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("[wtdd:record]", p.stderr)          # one line per run, with its counts
         self.assertIn("Sam Stand-in", out.read_text())
+
+
+class Http(Guard):
+    """S13, the morning page over HTTP (wtdd/api.py on an ephemeral port in this process, on this module's scratch
+    ledger): GET /record?shift=<id> is exactly the JSON `python -m wtdd.record --shift <id>` prints, the default shift
+    the CLI's; GET /record/shifts is every stamped shift newest first and the run in force; an unknown shift is a 404
+    naming the shifts that exist, never an empty record. Both reads: Guard checks the ledger's bytes."""
+
+    def setUp(self):
+        super().setUp()
+        import threading
+        from http.server import ThreadingHTTPServer
+        from wtdd import api
+        self.enterContext(mock.patch.dict(os.environ, {"WTDD_SHIFT": A}))   # the run in force, as test_default_shift_is_wtdd_shift pins it
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), api.H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        self.base = f"http://127.0.0.1:{srv.server_address[1]}"
+        self.enterContext(contextlib.redirect_stderr(io.StringIO()))
+
+    def get(self, path: str) -> tuple[int, dict]:
+        import urllib.error
+        import urllib.request
+        try:
+            with urllib.request.urlopen(self.base + path, timeout=30) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def cli(self, *argv: str) -> dict:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(record.main(list(argv)), 0)
+        return json.loads(out.getvalue())
+
+    def test_get_record_is_the_cli_json_for_each_shift_and_the_default(self):
+        for sid in (A, B):
+            self.assertEqual(self.get(f"/record?shift={sid}"), (200, self.cli("--shift", sid)), sid)
+        self.assertEqual(self.get(f"/record?shift={A}")[1]["rows"], 36)
+        self.assertEqual(self.get(f"/record?shift={B}")[1]["signed"]["by"], "Sam Stand-in")
+        code, body = self.get("/record")
+        self.assertEqual((code, body), (200, self.cli()))
+        self.assertEqual(body["shift_id"], A)
+
+    def test_get_record_shifts_lists_them_newest_first_with_the_run_in_force(self):
+        self.assertEqual(self.get("/record/shifts"), (200, {"shifts": [B, A], "current": A}))
+
+    def test_an_unknown_shift_is_a_404_naming_the_shifts_that_exist(self):
+        code, body = self.get("/record?shift=nope")
+        self.assertEqual(code, 404, body)
+        for s in ("nope", A, B):
+            self.assertIn(s, body["error"])
+        self.assertNotIn("stops", body, "never an empty record")
 
 
 if __name__ == "__main__":
