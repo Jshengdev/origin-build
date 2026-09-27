@@ -28,7 +28,8 @@ run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written at
      dispatch.decided offering only ask / ignore, the planner's own words in the thread. Phase `planned`.
   4. One dispatch.decided row: app imessage (a person said yes: choice dispatch, no model call), openrouter (JEV_API_KEY
      set: Jev through decide._jev with CRITERIA and INSTRUCTIONS) or stub (# DEMO_CACHE, rows cached, source stub; also
-     a dry run with no sighting, whose words say no person was seen). Only
+     a dry run with no sighting, whose words say no person was seen). A dry run with no API (the saved grid's
+     calibration stands in for the pose) writes its rows cached, source ui/grid.json, whoever decided. Only
      a model's dispatch is demoted to ask: always while auto is off ("auto off"), below WTDD_DISPATCH_THRESHOLD while it
      is on ("below threshold 0.7"). A live failure is the FAILED row, never the stub. Phase `decided`.
   5. dry: stop here. ignore: a stderr line (phase `ignored`). ask: ask_line with the frame handed in (the camera hook's
@@ -381,6 +382,8 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         args["pt"] = c["pt"]
         page.update(label=c.get("label"), pt=c["pt"])
         s, g, cal, lock, source, pose, uncal = _body(dry)
+        if s is None and source == "ui/grid.json" and not label:   # _body's DEMO_CACHE stand-in pose: its rows never claim live
+            label = {"cached": True, "source": source}
         pend = _open_question()
         # DogSession.recheck: the calibration was loaded from dog_cal.json on an API restart, or kept across a reconnect,
         # and nobody has dragged the dog since; a power cycle resets the odometry frame, so the believed pose may be metres off
