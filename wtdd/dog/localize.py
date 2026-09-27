@@ -3,8 +3,9 @@
 
 Run. DogSession._on_frame (wtdd/dog/session.py) calls match() on every window after the first, before the window is
 drawn: the window's band cells, moved through the correction the session holds, against the grid. A match at or above
-MIN_SCORE inside the cap is applied (one `pose.corrected` row, the correction composed, the window drawn through it);
-past the cap it is rejected (a `pose.corrected` row with ok false naming the cap; the window is not drawn and the
+MIN_SCORE inside the cap is applied (the correction composed, the window drawn through it; its `pose.corrected` row
+at once when it moves the pose more than one grid cell, else in the session's summary row, at most one every 30 s);
+past the cap it is rejected (a `pose.corrected` row at once, ok false naming the cap; the window is not drawn and the
 correction is kept); below MIN_SCORE the window is unmatched (no row: a log line and a counter on GET /dog/lidar; the
 window is drawn through the correction held, so the map grows into rooms it has not seen). Nothing is written to the
 ledger here: row() builds the row, the session appends it. Offline: `python -m unittest wtdd.dog.test_localize`.
@@ -148,11 +149,12 @@ def shift_id() -> str:
     return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
 
 
-def row(m: dict, pivot: str, before: dict, after: dict, why: str | None = None) -> dict[str, Any]:
+def row(m: dict, pivot: str, before: dict, after: dict, why: str | None = None, **counts: Any) -> dict[str, Any]:
     """The pose.corrected row for ledger.append: ok when applied, ok false with the cap named when rejected;
-    before/after are {corr, map, grid_frames}; latency_ms is the match's own time."""
+    before/after are {corr, map, grid_frames}; latency_ms is the match's own time. counts (S7, the session's): windows
+    since the last row, by verdict, and largest_m, into args."""
     return {"step": "pose.corrected", "agent": "dog", "tool": "pose.corrected", "app": "map",
             "args": {"dx": round(m["dx"], 4), "dy": round(m["dy"], 4), "dtheta": round(m["dtheta"], 5), "dtheta_deg": m["dtheta_deg"],
                      "score": round(m["score"], 3), "score0": round(m["score0"], 3), "n": m["n"], "candidates": m["candidates"],
-                     "pivot": pivot, "cap_m": CAP_M, "cap_deg": CAP_DEG, "shift_id": shift_id()},
+                     "pivot": pivot, "cap_m": CAP_M, "cap_deg": CAP_DEG, "shift_id": shift_id(), **counts},
             "state_before": before, "state_after": after, "ok": why is None, "response_or_error": why, "latency_ms": round(m["ms"])}

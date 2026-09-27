@@ -9,9 +9,9 @@ The cost map (cost_map()), one of two, named on the plan.route row as args.cost_
          stated: ui/house.svg draws rooms as rectangles with no walls or doors between them, so a route can cross a
          shared wall). One WARN line says which and why; the row carries args.why.
 On both, no-go zones (map zones with nogo: true, wtdd/nogo.py, 04's schema; nogo.py is 04's file byte for byte until
-04 merges) are blocked before the same HALF_WIDTH inflation, so the dog's body and not only the route's line stays
+04 merges) are blocked before the same half_width() inflation, so the dog's body and not only the route's line stays
 out, and args.nogo names them; a malformed zone fails the row instead of being planned through. Every blocked cell
-(wall or zone) grows by HALF_WIDTH cells, the square the rooms' erosion already used.
+(wall or zone) grows by half_width() cells (HALF_WIDTH_M, S8), the square the rooms' erosion already used.
 
 replan(p, path, i, grid, cal): the dog at p was about to drive to path[i], which occupied() now says sits in an
 inflated wall (a blob the LiDAR saw after the route was taught): a detour from p to the first later waypoint that is
@@ -55,18 +55,27 @@ from .field import MAP, inside
 from .ledger import log, step
 
 CELL = 10            # px per grid cell, about 9 cm
-HALF_WIDTH = 4       # cells the walkable area shrinks by (the dog is about 0.35 m wide)
+HALF_WIDTH_M = 0.20  # S8: padding per side in metres: half the Go2's ~0.31 m body plus 5 cm (half_width() in cells)
+LIVE_TRUST_M = 3.0   # S8: a detour trusts the live view this far from the dog; memory's walls count only beyond it
 W, H = 1060, 1540    # the map's viewBox
 LIVE_SNAP_M = 0.5    # S6: a waypoint the live view covers moves at most this far to free floor, else a detour
 PERMANENT_SHARE = 0.5  # S6: a blocker whose live cells memory already held at least this share of is "permanent"
 
 
+def half_width() -> int:
+    """S8: the padding in lattice cells at the scale in force (nav.PX_PER_M: .env, the slider): HALF_WIDTH_M per side,
+    rounded up to whole cells, at least one. It was 4 cells of 10 px whatever the scale: 0.46 m a side at 87 px/m."""
+    from .dog import nav
+    return max(1, math.ceil(HALF_WIDTH_M * nav.PX_PER_M / CELL))
+
+
 def grid(rooms: list[dict[str, Any]], zones: list[dict[str, Any]] = ()):
-    """0 = blocked: outside every room or inside a no-go zone, then eroded by HALF_WIDTH cells; 1 = walkable."""
+    """0 = blocked: outside every room or inside a no-go zone, then eroded by half_width() cells; 1 = walkable."""
     cols, rows = W // CELL, H // CELL
+    k = half_width()
     free = [[1 if any(inside(q, R["poly"]) for R in rooms) and not any(inside(q, Z["poly"]) for Z in zones) else 0
              for c in range(cols) for q in [(c * CELL + CELL / 2, r * CELL + CELL / 2)]] for r in range(rows)]
-    walk = [[1 if all(0 <= r + dr < rows and 0 <= c + dc < cols and free[r + dr][c + dc] for dr in range(-HALF_WIDTH, HALF_WIDTH + 1) for dc in range(-HALF_WIDTH, HALF_WIDTH + 1)) else 0 for c in range(cols)] for r in range(rows)]
+    walk = [[1 if all(0 <= r + dr < rows and 0 <= c + dc < cols and free[r + dr][c + dc] for dr in range(-k, k + 1) for dc in range(-k, k + 1)) else 0 for c in range(cols)] for r in range(rows)]
     return walk
 
 
@@ -100,9 +109,10 @@ def _zone_cells(zs: list[dict[str, Any]]) -> np.ndarray:
     return m
 
 
-def _inflate(m: np.ndarray, k: int = HALF_WIDTH) -> np.ndarray:
+def _inflate(m: np.ndarray, k: int | None = None) -> np.ndarray:
     """Every True cell grown by k cells in every direction (a (2k+1)^2 square, like grid()'s erosion); cells past the
     lattice's edge are not walls."""
+    k = half_width() if k is None else k
     rows, cols = m.shape
     out = m.copy()
     for dr in range(-k, k + 1):
@@ -129,11 +139,11 @@ def _live_cells(px) -> np.ndarray:
 
 def blocker(p, live_px, g=None, cal: dict | None = None, threshold: int | None = None, lock=None) -> dict[str, Any] | None:
     """S6: what blocks map point p in the live view, or None when nothing does. The live view is the newest LiDAR
-    window's band in map pixels; a live cell within HALF_WIDTH cells of p's cell blocks it (the padding the cost map
+    window's band in map pixels; a live cell within half_width() cells of p's cell blocks it (the padding the cost map
     uses). Memory (the grid's walls through cal, grown by one cell for drift) only labels it: {cells, in_memory, kind},
     kind "permanent" when memory already held at least PERMANENT_SHARE of those cells, else "new obstacle"."""
     live = _live_cells(live_px)
-    r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, HALF_WIDTH
+    r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, half_width()
     box = (slice(max(r0 - k, 0), max(r0 + k + 1, 0)), slice(max(c0 - k, 0), max(c0 + k + 1, 0)))
     n = int(live[box].sum())
     if n == 0:
@@ -185,7 +195,7 @@ def cost_map(m: dict[str, Any], g=None, cal: dict | None = None, threshold: int 
 
 
 def occupied(p, g, cal: dict | None, threshold: int | None = None, lock=None) -> bool:
-    """True when map point p sits in a wall cell of the grid or within HALF_WIDTH cells of one, on cost_map()'s lattice
+    """True when map point p sits in a wall cell of the grid or within half_width() cells of one, on cost_map()'s lattice
     and inflation (zones are not obstacles here: a route through a zone is 04's refusal, never a replan). False with no
     grid or no calibration (nothing is known to be in the way) and off the map."""
     if g is None or cal is None:
@@ -219,7 +229,7 @@ def _route(matrix, a, b, info: dict[str, Any]) -> dict[str, Any]:
     rooms = info["cost_map"] == "rooms"
     if not start.walkable or not end.walkable:
         on = "inside a room, outside every no-go zone" if rooms else "clear of every wall cell the LiDAR saw and every no-go zone"
-        raise ValueError(f"{'start' if not start.walkable else 'end'} is not on walkable floor ({on}, {HALF_WIDTH * CELL} px from their edges)")
+        raise ValueError(f"{'start' if not start.walkable else 'end'} is not on walkable floor ({on}, {half_width() * CELL} px, {HALF_WIDTH_M} m and up to a cell, from their edges)")
     path, runs = AStarFinder(diagonal_movement=DiagonalMovement.only_when_no_obstacle).find_path(start, end, g)
     if not path:
         over = "the drawn rooms" if rooms else f"the grid's {info['walls']} wall cells"
@@ -252,7 +262,7 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
            live_px=None, rejoin: int | None = None, say: str | None = None) -> dict[str, Any]:
     """The dog at map point p, path[i] occupied: a detour to path[j], the first later waypoint not occupied. One
     plan.replanned row. When the dog's own cell is inside the inflation it starts from the nearest walkable cell within
-    HALF_WIDTH + 1 cells (args.start_snapped); none, no grid, no calibration, every waypoint i..end occupied, or no
+    half_width() + 1 cells (args.start_snapped); none, no grid, no calibration, every waypoint i..end occupied, or no
     detour: ValueError, the row ok false. S6: given the live view (live_px), its padded cells are blocked too, the
     follower names the waypoint to rejoin (rejoin), and the row carries the follower's sentence (args.say)."""
     m = json.loads(MAP.read_text())
@@ -265,8 +275,15 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
         r["args"].update(info)
         if say:
             r["args"]["say"] = say
-        if live_px is not None:   # S6: what the LiDAR sees now blocks the detour too
-            matrix = (np.asarray(matrix, dtype=bool) & ~_inflate(_live_cells(live_px))).astype(np.uint8).tolist()
+        if live_px is not None:   # S6, S8: where the LiDAR can see, it decides; memory's walls count only beyond LIVE_TRUST_M
+            from .dog import nav
+            mem = _cells(walls_px(grid, cal, threshold, lock))
+            rr, cc = np.mgrid[0:H // CELL, 0:W // CELL]
+            near = np.hypot(cc * CELL + CELL / 2 - p[0], rr * CELL + CELL / 2 - p[1]) <= LIVE_TRUST_M * nav.PX_PER_M
+            live = _live_cells(live_px)
+            matrix = (~_inflate((mem & ~near) | live | _zone_cells(nogo.zones(m)))).astype(np.uint8).tolist()
+            info |= {"cost_map": "live", "walls": int((mem & ~near).sum()), "live_cells": int(live.sum()), "trust_m": LIVE_TRUST_M}
+            r["args"].update(info)
             r["args"]["live"] = True
         j = rejoin if rejoin is not None else next((k for k in range(i + 1, len(path)) if not _at(occ, path[k])), None)
         if j is None:
@@ -275,7 +292,7 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
         r["args"] |= {"rejoin": rejoin, "skipped": skipped}
         start = p
         if 0 <= p[0] < W and 0 <= p[1] < H and not _at(matrix, p):   # the dog stands inside the inflation (beside a wall): leave it by the nearest free cell
-            r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, HALF_WIDTH + 1
+            r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, half_width() + 1
             free = [(math.hypot(dr, dc), (c0 + dc) * CELL + CELL // 2, (r0 + dr) * CELL + CELL // 2)
                     for dr in range(-k, k + 1) for dc in range(-k, k + 1)
                     if 0 <= r0 + dr < H // CELL and 0 <= c0 + dc < W // CELL and matrix[r0 + dr][c0 + dc]]
@@ -286,7 +303,7 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
             log("plan", "WARN the dog stands inside the inflation: the detour starts at the nearest free cell", at=args["from"], start=start)
         out = _route(matrix, start, path[j], info)
         r["state_after"] = {k: v for k, v in out.items() if k != "path"} | {"waypoints": len(out["path"])}
-    out |= {"blocked": args["blocked"], "rejoin": rejoin, "skipped": skipped, "cost_map": "grid"}
+    out |= {"blocked": args["blocked"], "rejoin": rejoin, "skipped": skipped, "cost_map": info["cost_map"]}
     log("plan", "replanned", at=i, rejoin=j, skipped=skipped, walls=info["walls"], nogo=len(info["nogo"]), waypoints=len(out["path"]),
         length_m=out["length_m"])
     return out
