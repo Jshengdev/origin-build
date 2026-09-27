@@ -59,7 +59,8 @@ The contract under test (wtdd/dog/scout_zones.py):
         state_before {state, labels}, response_or_error = the raw reply or the error, latency_ms = the call's round trip
         zone.proposed args {id, object_id, kind, label, p, cells, cells_n, poly, photo {path, sha256, bytes}, dist_m,
         area_m2, shift_id}
-  DogSession.scout (one Proposals) and DogSession.scout_state() -> the GET /dog/scout body with source "session"
+  DogSession.scout (one Proposals) and DogSession.scout_state() -> the GET /dog/scout body with source "session"; the
+        objects thread runs 07's tick, then scout_feed(), then 07's draft_due (a model call), the draft even when the feed raises
   GET /dog/scout (WTDD_SCOUT=<file>: # DEMO_CACHE, serves that file, source names it) · POST /dog/scout {id, action,
         by, _version} -> 200 | 400 | 404 | 409, the refusals before anything is written
   python -m wtdd.dog.scout_zones --replay <npz> --watch <watch json> --pose x,y,yaw --fov DEG --png <out> [--threshold N]
@@ -828,6 +829,27 @@ class Session(unittest.TestCase):
         json.dumps(d)
         self.assertEqual((d["n"], d["proposals"], d["failed"], d["source"]), (0, [], [], "session"))
         self.assertTrue(d["why"])
+
+    def test_the_scout_is_fed_right_after_07s_tick_and_before_the_draft_call(self):
+        # fix round 3: the hook ran after objects_state(draft=True), whose draft is a model call that can take seconds, so
+        # every new thing was first seen by the scout from a pose one model call later (a turn of a few degrees shifts the
+        # cone onto the wall beside the thing). The draft now runs after the feed, and still runs when the feed raises.
+        from . import session
+        calls, closed, err = [], iter([False, True]), io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(objects, "WATCH", Path(tmp) / "watch.json"):
+            s = session.DogSession()
+            try:
+                with mock.patch.object(objects, "TICK_S", 0), \
+                        mock.patch.object(s, "loop", mock.Mock(is_closed=lambda: next(closed))), \
+                        mock.patch.object(s, "objects_state", lambda draft=False: calls.append(("tick", draft))), \
+                        mock.patch.object(s, "scout_feed", mock.Mock(side_effect=lambda: (calls.append("feed"), 1 / 0))), \
+                        mock.patch.object(objects, "draft_due", lambda store: calls.append("draft")), \
+                        contextlib.redirect_stderr(err):
+                    s._objects_loop()
+            finally:
+                stop(s)
+        self.assertEqual(calls, [("tick", False), "feed", "draft"], "07's tick, the scout, then 07's draft: a feed that raises skips no draft")
+        self.assertIn("WARN tick FAILED", err.getvalue(), "the feed's raise is still the objects thread's line")
 
 
 class Fixture(unittest.TestCase):
