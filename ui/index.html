@@ -390,11 +390,11 @@ function LiveView({ dog, watch }) {
   const v = dog?.video, wasStale = useRef(false);
   useEffect(() => { if (wasStale.current && v && !v.stale) { setFailed(null); setEpoch(e => e + 1); } wasStale.current = !!v?.stale; }, [v?.stale]);
   if (!dog?.connected) return null;
-  const retry = () => { setFailed(null); setEpoch(e => e + 1); };
+  const retry = () => fetch(`${API}/dog/frame.jpg`).then(async r => { if (!r.ok) return setFailed((await r.json()).error); setFailed(null); setEpoch(e => e + 1); }).catch(e => setFailed(`${e}`));   // frame.jpg is the request that reconnects a dead peer (session._ensure); the stream reopens once it answers
   const onError = () => fetch(`${API}/dog/frame.jpg`).then(async r => setFailed(r.ok ? "stream closed by the server" : (await r.json()).error)).catch(e => setFailed(`${e}`));
   const tile = text => html`<div class="lv-tile"><span>${text}${v?.source === "stub" && html` <span class="lv-stub">stub</span>`}</span><button class="small" onClick=${retry}>retry</button></div>`;
-  if (v?.stale) return tile(`stream stalled · ${(v.age_ms / 1000).toFixed(1)} s`);
   if (failed) return tile(`video FAILED · ${failed}`);
+  if (v?.stale) return tile(`stream stalled · ${(v.age_ms / 1000).toFixed(1)} s`);
   const fresh = v && watch && watch.age_ms != null && watch.age_ms < 3000;   // the eye panel's rule for the detector
   const joined = fresh && watch.frame_sha && watch.frame_sha === v.sha;
   return html`<div>
