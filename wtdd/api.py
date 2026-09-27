@@ -30,6 +30,7 @@
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
+  GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -43,7 +44,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import tools
+from . import config, tools
 from .config import ROOT
 from .field import FIELD, MAP, STOP, check_path
 from pathlib import Path
@@ -130,6 +131,20 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().grid_px(t))
             except Exception as e:  # noqa: BLE001  (a bad threshold or an unreadable ui/grid.json is reported, the page shows it)
                 return self._json(500, {"n": 0, "cells_px": [], "error": f"{type(e).__name__}: {e}"})
+        # 07 · objects
+        if u.path == "/dog/objects":   # a read: never connects, no row of its own; the store's events are object.seen rows
+            try:
+                fixture = config.maybe("WTDD_OBJECTS")
+                if fixture:
+                    # DEMO_CACHE: WTDD_OBJECTS=<file> serves that file (wtdd/dog/fixtures/objects.json: two objects pinned on
+                    # WALL_A of the synthetic grid, one stale) so the remote's pins can be screenshotted with no dog, no
+                    # detector and no key; `source` names the file. Live: unset it; the session store fed by watch.json answers.
+                    f = Path(fixture) if Path(fixture).is_absolute() else ROOT / fixture
+                    return self._json(200, {**json.loads(f.read_text()), "source": f"fixture: {fixture}"})
+                from .dog.session import DogSession
+                return self._json(200, DogSession.get().objects_state())
+            except Exception as e:  # noqa: BLE001  (a missing fixture, a bad WTDD_CAM_FOV_DEG, an unreadable watch.json: the page shows it)
+                return self._json(500, {"n": 0, "objects": [], "error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
