@@ -436,10 +436,19 @@ def run_follow(n: int) -> list[dict[str, Any]]:
     """The dog replays the map's path from its start on its own (POST /dog/follow, avoidance on), graded from the
     dog.follow row the API writes: pass when the follower ended done with no error; the residual is the believed end
     position against the path's last point. The eval resumes at stops itself (no look here). Place the dog at the
-    route's start before each trial; a loop route ends where it starts."""
+    route's start before each trial; a loop route ends where it starts. The residual's metres are at the API's scale
+    in force (GET /dog/scale, read once: the page's slider, else WTDD_PX_PER_M, else 108.5); unread, they are "?" and
+    the detail names the error (a WARN; the grade is the follower's)."""
     import math
     import requests
     path = json.loads((config.ROOT / "ui" / "map.json").read_text())["path"]
+    try:   # this process's nav.PX_PER_M never sees the slider's dog_cal.json; the API that drives the dog does
+        s = requests.get(f"{API}/dog/scale", timeout=5).json()
+        px_m = float(s["px_per_m"])
+        unit = f" at {px_m:g} px/m from {s['source']}"
+    except Exception as e:  # noqa: BLE001  (the metres read "?" and say why, never a guessed scale)
+        px_m, unit = None, f": scale unread, {type(e).__name__}: {str(e)[:80]}"
+        log("evals", "WARN follow: GET /dog/scale failed, the residual's metres are unknown", err=f"{type(e).__name__}: {str(e)[:80]}")
     res = []
     for i in range(n):
         def go():
@@ -463,7 +472,7 @@ def run_follow(n: int) -> list[dict[str, Any]]:
             ok = bool(out.get("done")) and not out.get("error")
             why = out.get("error") or ""
             resid = round(math.dist(out["end"], path[-1])) if out.get("end") else None
-            detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / 108.5, 2) if resid is not None else '?'} m), stops {out.get('stops')}"
+            detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / px_m, 2) if resid is not None and px_m else '?'} m{unit}), stops {out.get('stops')}"
         else:
             ok, why, detail = False, err, ""
         grade = "unsafe" if bad else ("pass" if ok else "fail")
