@@ -25,6 +25,9 @@ cached true / source stub) and the table wtdd/livecheck/steps.json:
            (UNSAFE's code).
   Api      GET /livecheck serves livecheck.json with age_s (the remote's mono line), a stale waiting state is flagged,
            and with no file it says how to make one.
+  Page     the remote's LiveCheck component, run in node against a stubbed reply: a non-2xx reply (a 500, main's 404) and
+           a body with no `verdict` key draw red with the status and the reason, never the grey idle line; the API's
+           idle body still draws idle and a PASS green.
   Where    match() handles a plain value, gte/lte/in/re, and a missing path, and says which field failed.
   Rows     the table against the rows and log lines the branches write, each check seen failing on what it claims: 01.1
            grades frame_id from a dog.grid_save row and fails on a first lidar frame that is not odom (feat/01 refuses
@@ -488,6 +491,73 @@ class Api(unittest.TestCase):
         self.assertEqual(d["verdict"], "waiting")
         self.assertTrue(d["stale"], "a waiting state nobody rewrote for 30 s is a killed livecheck, flagged for the page to draw red")
 
+
+
+class Page(unittest.TestCase):
+    """The remote's LiveCheck component (ui/index.html, the `// 22 · livecheck` block, extracted verbatim) run in node
+    against one stubbed GET /livecheck reply each: a non-2xx reply (main's API has no route and answers 404) and a 2xx
+    body with no `verdict` key draw the red FAILED line with the status and the reason, never the grey idle line; the
+    API's own idle body and a PASS still draw idle and green. React's two hooks, htm's tag and fetch are stubbed in the
+    harness, so nothing is loaded from npm or the network; node is the one already on this Mac for the playwright
+    screenshots. No node is a failed test, never a skip."""
+    HARNESS = r"""
+let state, effect;
+const useState = init => [state === undefined ? init : state, v => { state = v; }];
+const useEffect = fn => { effect = fn; };
+const setInterval = () => 0, clearInterval = () => {};
+const html = (s, ...v) => s.reduce((a, x, i) => a + x + (i < v.length ? v[i] : ""), "");
+const REPLY = JSON.parse(process.argv[2]);
+const fetch = async () => ({ ok: REPLY.status >= 200 && REPLY.status < 300, status: REPLY.status,
+                             json: async () => JSON.parse(REPLY.body), text: async () => REPLY.body });
+/*COMPONENT*/
+LiveCheck(); effect();
+setTimeout(() => process.stdout.write(String(LiveCheck())), 50);
+"""
+
+    def draw(self, status: int, body) -> str:
+        """The component's markup after one poll answered with `status` and `body` (a dict is sent as JSON)."""
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.fail("node is not on PATH: the page test runs the LiveCheck component in node (the one playwright uses)")
+        src = (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text()
+        m = re.search(r"^// 22 · livecheck · start\n(.*?)^// 22 · livecheck · end$", src, re.S | re.M)
+        self.assertIsNotNone(m, "ui/index.html has no `// 22 · livecheck` block")
+        with tempfile.TemporaryDirectory() as d:
+            js = Path(d) / "page.js"
+            js.write_text(self.HARNESS.replace("/*COMPONENT*/", m.group(1)))
+            body = body if isinstance(body, str) else json.dumps(body)
+            p = subprocess.run([node, str(js), json.dumps({"status": status, "body": body})], capture_output=True, text=True, timeout=20)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def assertRed(self, out: str, *reason: str) -> None:
+        self.assertIn("class=lc-line bad", out, out)
+        self.assertIn("FAILED", out, out)
+        self.assertNotIn("no step running", out, "a failed poll drew the grey idle line: " + out)
+        self.assertNotIn("undefined", out, out)
+        for r in reason:
+            self.assertIn(r, out, out)
+
+    def test_a_500_draws_red_with_the_status_and_reason(self):
+        self.assertRed(self.draw(500, {"error": "livecheck.json is not JSON"}), "500", "livecheck.json is not JSON")
+
+    def test_mains_api_without_the_route_draws_red(self):
+        self.assertRed(self.draw(404, {"error": "no livecheck"}), "404", "no livecheck")   # main's api.py static fallthrough
+
+    def test_a_body_with_no_verdict_key_is_a_fail_never_idle(self):
+        self.assertRed(self.draw(200, {"error": "boom"}), "verdict", "boom")
+        self.assertRed(self.draw(200, {}), "verdict")
+
+    def test_the_idle_body_and_a_pass_still_draw(self):
+        why = "no livecheck.json yet: run python -m wtdd.livecheck --step <item>.<k>"
+        out = self.draw(200, {"verdict": None, "why": why})
+        self.assertIn("class=lc-line idle", out, out)
+        self.assertIn("livecheck · no step running · " + why, out)
+        out = self.draw(200, {"step": "01.3", "verdict": "PASS", "short": "PASS · 01.3 · dog.grid_save ok", "stale": False})
+        self.assertIn("class=lc-line ok", out, out)
+        self.assertIn(">PASS · 01.3 · dog.grid_save ok<", out, out)
 
 class Where(unittest.TestCase):
     ROW = {"tool": "dog.grid_save", "ok": True, "source": "live", "args": {"frame_id": "odom", "frames": 74}, "state_after": {"cells": 1510, "extent_m": 8.9}}
