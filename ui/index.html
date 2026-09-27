@@ -89,6 +89,7 @@
 <script type="module">
 import React, { useEffect, useRef, useState } from "https://esm.sh/react@18";
 import { createRoot } from "https://esm.sh/react-dom@18/client";
+import { createPortal } from "https://esm.sh/react-dom@18";   // 18 · dispatch: one mount draws into the map SVG's layer
 import htm from "https://esm.sh/htm@3";
 const html = htm.bind(React.createElement);
 
@@ -282,7 +283,7 @@ function App() {
             ${pending && html`<circle class="handle" cx=${pending[0]} cy=${pending[1]} r="9"/>`}
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
-            <${Dispatch} part="map"/>
+            <g id="dispatch-layer"/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
@@ -296,7 +297,7 @@ function App() {
             })()}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
           </svg>`}
-          <${Dispatch} part="block"/>
+          <${Dispatch}/>
         </div>
         <div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>The dog · body</h2>
@@ -434,8 +435,9 @@ function Cams({ cameras }) {
 }
 // 09 · fixed-cam · end
 // 18 · dispatch · start
-// A camera's person sends the dog (wtdd/dispatch.py): GET /dispatch every second, with or without a dog. part="map", inside
-// the map SVG: the planned route (solid; A* over the dog's own grid, on the page before anything moves), a ring at the
+// A camera's person sends the dog (wtdd/dispatch.py): GET /dispatch every second, with or without a dog, from one mount
+// under the map. Drawn through a portal into the map SVG's <g id="dispatch-layer"> (found on the next poll once the SVG
+// is up): the planned route (solid; A* over the dog's own grid, on the page before anything moves), a ring at the
 // camera's spot and a dot at the arrival. The block under the map: the phase, the three probabilities the decision came
 // back with, the demotion, then the words it was made on, verbatim. The page computes nothing but "stale", in red: a
 // phase that is not an end, older than its own window. `following` is rewritten every second (3 s); `asked` waits
@@ -445,18 +447,19 @@ function Cams({ cameras }) {
 // `ignored` and `failed` are ends, never stale. A failed or ignored dispatch shows that one phase, not the happy
 // path it never walked; a failure is FAILED in red with its reason (and the ring turns red); an error on an arrived
 // page (the detector FAILED) is in red too.
-function Dispatch({ part }) {
+function Dispatch() {
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => { const f = () => fetch(`${API}/dispatch`).then(r => r.json()).then(x => { setD(x); setErr(null); }).catch(e => setErr(String(e))); f(); const t = setInterval(f, 1000); return () => clearInterval(t); }, []);
   const PHASES = ["planned", "decided", "asked", "following", "arrived"], WINDOW_MS = { planned: 60000, decided: 60000, asked: 120000, following: 3000 };
   const stale = d?.age_ms > (WINDOW_MS[d?.phase] ?? Infinity) && !(d.dry && d.phase === "decided"), failed = d?.phase === "failed", pr = d?.probabilities;
-  if (part === "map") return d?.pt ? html`<g>
+  const layer = document.getElementById("dispatch-layer");
+  const onMap = layer && d?.pt && createPortal(html`<g>
     ${(d.path || []).length > 1 && html`<polyline class="dispatch" points=${d.path.map(p => p.join(",")).join(" ")}/>`}
     <circle class=${"dcam" + (failed ? " failed" : "")} cx=${d.pt[0]} cy=${d.pt[1]} r="26"/>
     ${d.arrival && html`<circle class="darr" cx=${d.arrival[0]} cy=${d.arrival[1]} r="7"/>`}
-    <text class=${"lbl" + (failed ? " bad" : "")} x=${d.pt[0] + 34} y=${d.pt[1] + 6}>camera ${d.cam}${d.label ? ` · ${d.label}` : ""}${failed ? " · FAILED" : ""}</text></g>` : null;
-  return html`<div class="dblock">
+    <text class=${"lbl" + (failed ? " bad" : "")} x=${d.pt[0] + 34} y=${d.pt[1] + 6}>camera ${d.cam}${d.label ? ` · ${d.label}` : ""}${failed ? " · FAILED" : ""}</text></g>`, layer);
+  return html`<div class="dblock">${onMap}
     ${err ? html`<div class="mono bad">dispatch · GET /dispatch FAILED · ${err}</div>` : !d ? html`<div class="mono">dispatch · …</div>`
       : !d.phase ? html`<div class="hint">dispatch · none yet · python -m wtdd dispatch cam=lap1 dry=true</div>` : html`
       <div class="mono">dispatch · camera ${d.cam}${d.label ? ` (${d.label})` : ""}${d.dry ? " · dry: nothing posts, nothing moves" : ""}${stale && html` · <span class="bad">stale${d.phase === "asked" ? " · no yes within 2 min" : ""}</span>`}</div>
