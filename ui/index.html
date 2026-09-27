@@ -378,11 +378,12 @@ function App() {
 // The dog's camera as one MJPEG stream, GET /dog/stream.mjpg: one connection at the rate the dog delivers, and the
 // request that switches the camera on. Everything drawn is served. dog.video comes from App's 1 s /dog/state poll
 // (fps, age_ms, bytes, w, h, sha, stale, source). watch comes from App's 500 ms /watch poll (boxes, frame_sha,
-// frames_behind). The boxes take the detector's class colours only when watch.frame_sha is video.sha, the frame they
-// were computed on; otherwise they are dimmed, with the server's frames_behind. A stall (video.stale) unmounts the image,
-// which closes the stream, and shows a red tile naming it. A refused stream reads /dog/frame.jpg once and names its error
-// in a red tile. Every mount of the image is a new ?e=, so a remount never re-shows an ended stream. 'ms' is the age of
-// the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp).
+// frames_behind). The boxes take the detector's class colours only when watch.frame_sha equals video.sha, the cached
+// frame at the last 1 s poll (the image may already show a newer part: JS cannot read a part's X-Frame-Sha); otherwise
+// they are dimmed, with the server's frames_behind. A stall (video.stale) unmounts the image, which closes the stream,
+// and shows a red tile naming it. A refused stream reads /dog/frame.jpg once and names its error in a red tile. Every
+// mount of the image is a new ?e=, so a remount never re-shows an ended stream. 'ms' is the age of the newest decoded
+// frame, not glass-to-page latency (the driver has no wall-clock stamp).
 const CLS = ["#042AFF", "#0BDBEB", "#F3F3F3", "#00DFB7", "#111F68", "#FF6FDD", "#FF444F", "#CCED00", "#00F344", "#BD00FF",
              "#00B4FF", "#DD00BA", "#00FFFF", "#26C000", "#01FFB3", "#7D24FF", "#7B0068", "#FF1B6C", "#FC6D2F", "#A2FF0B"];   // ultralytics 8.4.163 Colors (utils/plotting.py:117-138): watch.jpg strokes class cls % 20 in these
 function LiveView({ dog, watch }) {

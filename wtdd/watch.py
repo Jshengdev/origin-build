@@ -18,7 +18,8 @@ intruder_alarm tool (photo, boxes, "STRANGER DANGER!!!" to the castle, red/blue 
 (about 5 MB) next to the working directory. The API adds age_ms to /watch so the page hides stale boxes. From a URL,
 watch.json names the frame it boxed (frame_sha, frame_n from the API's X-Frame-Sha and X-Frame-N headers; a --source file
 writes neither) and each box carries cls, the model's class index: the page draws the boxes over the live stream in the
-detector's class colours only when frame_sha is the frame on screen, else dimmed with /watch's frames_behind."""
+detector's class colours only when frame_sha equals /dog/state's video.sha (the cached frame at the page's last 1 s poll;
+the stream may already show a newer part), else dimmed with /watch's frames_behind."""
 from __future__ import annotations
 import argparse
 import json
