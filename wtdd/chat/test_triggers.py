@@ -15,8 +15,8 @@ os.environ["WTDD_AGENT"] = "0"
 os.environ["WTDD_ALLOW_SELF"] = "0"
 os.environ["WTDD_TRIGGERS"] = "what the dog doin,what the dog doing,whats the dog doing,what is the dog doing,wtdd"
 os.environ["WTDD_COMMANDS"] = "do a round,lights on,lights off,dim,bright,show,sit,stand,hello,look,status,stop"
-os.environ.setdefault("WTDD_LEDGER", os.path.join(tempfile.mkdtemp(), "ledger.jsonl"))
-os.environ.setdefault("WTDD_MEMORY", os.path.join(tempfile.mkdtemp(), "memory.db"))
+os.environ["WTDD_LEDGER"] = os.path.join(tempfile.mkdtemp(), "ledger.jsonl")   # assigned, never setdefault: an exported
+os.environ["WTDD_MEMORY"] = os.path.join(tempfile.mkdtemp(), "memory.db")      # real ledger or memory.db must not get test rows
 
 from wtdd.chat import listen as L  # noqa: E402
 from wtdd.chat import triggers as T  # noqa: E402
