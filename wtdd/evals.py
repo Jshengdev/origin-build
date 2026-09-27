@@ -483,7 +483,7 @@ def run_twice() -> list[dict[str, Any]]:
     posts: list[tuple[str, str]] = []
     l = Listener("eval", lambda guid, key, kind, text, file: posts.append((key, text or "")), listen_s=60, dry_run=False)
     l.allowed = lambda m: True   # the gate on senders is not under test here
-    stamp = time.time_ns()   # one per run: epoch seconds let two runs in one second share the claim key and fail
+    stamp = f"{time.time_ns()}-{os.getpid()}"   # one per run: seconds (and, across processes, the 1 us clock) repeat
     for i in (1, 2):
         l.handle({"rowid": -i, "guid": f"eval-{stamp}-{i}", "text": "what the dog doin", "is_from_me": 0,
                   "sender": "+10000000000", "ts_utc": "", "attachments": []})
