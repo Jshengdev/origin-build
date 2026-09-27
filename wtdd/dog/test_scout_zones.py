@@ -613,6 +613,26 @@ class Feed(Base):
         self.assertIn("WARN", err.getvalue())
         self.assertIn("proposed=0", err.getvalue())
 
+    def test_a_feed_that_raises_is_named_on_the_get_not_an_absence(self):
+        # fix round 1: a mistyped WTDD_DECIDE_THRESHOLD stopped every proposal while state() said "no placed object yet";
+        # the objects thread's stderr line was the only trace. The raise stays on GET /dog/scout until a feed gets through.
+        p = self.props()
+        with mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "abc"}):
+            with self.assertRaises(ValueError):
+                self.feed(p)
+        st = p.state()
+        self.assertIn("WTDD_DECIDE_THRESHOLD", st.get("error") or "", st)
+        self.assertFalse(self.rows, "nothing was asked, so no row")
+        self.feed(p)
+        st = p.state()
+        self.assertNotIn("error", st, "a feed past the threshold and the map clears it")
+        self.assertEqual(st["n"], 1, "the placed objects were not taken by the failed feed: asked now")
+
+    def test_placed_objects_waiting_for_a_pose_say_so(self):
+        p = self.props()
+        p.feed(self.store.to_list(), frame(), None, self.g, CAL, FOV, threshold=THR)
+        self.assertIn("no pose", p.state()["why"], "not 'no placed object yet': 07 placed two")
+
 
 class Confirm(Base):
     def setUp(self):
