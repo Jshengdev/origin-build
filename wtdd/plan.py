@@ -67,6 +67,7 @@ LIVE_TRUST_M = 3.0   # S8: a detour trusts the live view this far from the dog; 
 W, H = 1060, 1540    # the map's viewBox
 LIVE_SNAP_M = 0.5    # S6: a waypoint the live view covers moves at most this far to free floor, else a detour
 PERMANENT_SHARE = 0.5  # S6: a blocker whose live cells memory already held at least this share of is "permanent"
+NO_VIEW = "zones only (no live view)"   # B16: a leg's cost_map when the LiDAR is off (B11), never "live"
 
 
 def half_width() -> int:
@@ -290,6 +291,8 @@ def _route(matrix, a, b, info: dict[str, Any]) -> dict[str, Any]:
         over = "the drawn rooms" if rooms else f"the grid's {info['walls']} wall cells"
         if info["cost_map"] == "live":
             over = f"the live view's {info['live_cells']} cells and {info['walls']} remembered wall cells"
+        elif info["cost_map"] == NO_VIEW:
+            over = "an empty floor (no live view)"
         raise ValueError(f"no route from {list(a)} to {list(b)} on {over} around {len(info['nogo'])} no-go zone(s) ({runs} nodes searched)")
     from .dog import nav   # the scale in force (S5b), not the first guess
     pts = corners([(n.x * CELL + CELL / 2, n.y * CELL + CELL / 2) for n in path])
@@ -382,25 +385,30 @@ def _leave(matrix, p, r) -> list:
     return start
 
 
-def leg(a, b, live_px, dots: list, say: str | None = None, again: bool = False) -> dict[str, Any]:
+def leg(a, b, live_px, dots: list, say: str | None = None, again: bool = False, live_view: bool = True) -> dict[str, Any]:
     """S6b: one leg of the drawn path, from the dog at map point a to the dot (or its snapped spot) b, over the live view
     alone (_live_map with no grid: the LiDAR's cells and the no-go zones, padded; memory only labels, so old grey never
     bends a leg and a dot beside it is never unreachable). One plan.route row, or with again one plan.replanned row (the
     follower re-planning from where the dog stands), args {from, to, dots (the leg's dot numbers as the page draws them,
-    from None at the first), live: true, cost_map "live", memory, walls, live_cells, nogo, say, start_snapped?}.
+    from None at the first), live, cost_map "live", memory, walls, live_cells, nogo, say, start_snapped?}. B16: live_view
+    False (B11's leg with the LiDAR off, live_px empty) writes live: false and cost_map NO_VIEW, never "live"; it is the
+    caller's word, not len(live_px), since a live window with no points in the band is still a live view.
     Returns {path: [a, (start), corners..., b], cells, searched, length_px, length_m}; no route: ValueError, the row ok
     false. UNVERIFIED on the dog: planned on synthetic live bands only."""
     m = json.loads(MAP.read_text())
-    args = {"from": [int(a[0]), int(a[1])], "to": [int(b[0]), int(b[1])], "dots": list(dots), "live": True, "cell_px": CELL,
+    args = {"from": [int(a[0]), int(a[1])], "to": [int(b[0]), int(b[1])], "dots": list(dots), "live": live_view, "cell_px": CELL,
             "shift_id": shift.current(), **({"say": say} if say else {})}
     with step("plan", "plan.replanned" if again else "plan.route", "map", args) as r:
         matrix, info = _live_map(m, a, live_px)
+        if not live_view:
+            info["cost_map"] = NO_VIEW
         args.update(info)
         start = _leave(matrix, a, r)
         out = _route(matrix, start, b, info)
         out["path"] = [args["from"], *([start] if start is not a else []), *out["path"][1:-1], args["to"]]
         turns = len(out["path"]) - 2
-        args.setdefault("say", f"I'm heading to dot {dots[-1]}" + (f" around what I see live, {turns} turns" if turns else ", straight") + f", {out['length_m']} m.")
+        around = "what I see live" if live_view else "the no-go zones, with no live view"
+        args.setdefault("say", f"I'm heading to dot {dots[-1]}" + (f" around {around}, {turns} turns" if turns else ", straight") + f", {out['length_m']} m.")
         r["state_after"] = {k: v for k, v in out.items() if k != "path"} | {"waypoints": len(out["path"]), "path": out["path"]}
     log("plan", "leg re-planned" if again else "leg planned", dots=args["dots"], live_cells=info["live_cells"], nogo=len(info["nogo"]),
         waypoints=len(out["path"]), length_m=out["length_m"])

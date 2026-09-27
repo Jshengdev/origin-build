@@ -571,6 +571,16 @@ class Legs(_Harness):
         self.assertEqual([(r["args"].get("cost_map"), r["args"].get("walls"), r["args"].get("memory")) for r in legs],
                          [("live", 0, "labels only")] * 2, "the row says memory was not read")
 
+    def test_a_live_view_with_no_points_still_says_live(self):
+        """B16: a clear live window (the LiDAR on, nothing in the band) is a live view: live: true, cost_map "live"."""
+        self.live([])
+        fs, _ = self.run_follow([], fx.grid(), path=LINE)
+        self.assertIsNone(fs.get("error"), fs)
+        legs = rows_since(self.n0, "plan.route")
+        self.assertEqual(len(legs), 2)
+        self.assertEqual([(r["args"].get("live"), r["args"].get("cost_map"), r["args"].get("live_cells")) for r in legs],
+                         [(True, "live", 0)] * 2, legs)
+
     def test_a_leg_blocked_mid_way_is_replanned_from_where_the_dog_stands(self):
         blob, later = fx.blob_px((475, 1400)), []
 
@@ -732,6 +742,43 @@ class NoViewZones(_Harness):
         self.assertIs(ref[0]["ok"], False)
         self.assertIn(ZONE["name"], ref[0]["args"]["reason"])
         self.assertSays(ref[0])
+
+    def test_with_no_live_view_the_route_row_says_there_was_none(self):
+        """B16: B11's leg around the zones wrote live: true and cost_map "live" on its plan.route row while the LiDAR was
+        off, so a judge reading the receipt saw a live view that was not there."""
+        line = [[400, 1150], [560, 1150]]
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)   # no self.live(): the LiDAR is off
+        self.assertIsNone(fs.get("error"), fs)
+        a = rows_since(self.n0, "plan.route")[0]["args"]
+        self.assertIs(a.get("live"), False, a)
+        self.assertNotEqual(a.get("cost_map"), "live", a)
+        self.assertIn("no live view", a.get("cost_map") or "", a)
+
+    def test_with_no_live_view_and_no_way_around_the_failed_row_names_no_live_view(self):
+        """B16: a no-go band across the whole floor between the dots: the refused leg's row error said "the live view's 0
+        cells" with the LiDAR off."""
+        m = json.loads(FIXTURE.read_text())
+        m["zones"].append({"name": "band", "label": "band", "poly": [[0, 1300], [1060, 1300], [1060, 1340], [0, 1340]], "nogo": True})
+        walled = _TMP / "map-band.json"
+        walled.write_text(json.dumps(m))
+        self.enterContext(mock.patch.object(plan, "MAP", walled))
+        line = [[300, 1200], [300, 1450]]
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)
+        self.assertIn("refused", fs.get("error") or "", fs)
+        row = rows_since(self.n0, "plan.route")[0]
+        self.assertIs(row["ok"], False, row)
+        self.assertNotIn("live view's", row["response_or_error"], row)
+        self.assertIn("no live view", row["response_or_error"], row)
+
+    def test_a_leg_with_no_live_view_and_no_sentence_never_says_it_sees_live(self):
+        """B16: leg()'s own sentence, when the caller gives none, names the zones and not a live view."""
+        plan.leg([400, 1150], [560, 1150], [], [None, 1], live_view=False)
+        a = rows_since(self.n0, "plan.route")[-1]["args"]
+        self.assertIs(a.get("live"), False, a)
+        self.assertNotIn("see live", a.get("say") or "", a)
+        self.assertIn("no live view", a.get("say") or "", a)
 
 
 class Stuck(_Harness):
