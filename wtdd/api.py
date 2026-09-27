@@ -49,6 +49,8 @@
   POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes a proposal as 04's nogo zone into ui/map.json,
                                   dismiss takes an auto zone (id = its name) off it (map.prev.json kept); 400 no name, 404 no open proposal or auto zone, 409 a stale page, each with its failed row
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
+An exception no route catches is answered 500 in the method's envelope (GET {error}, POST {ok: false, error}, each
+"<Type>: <msg>") with one `<METHOD> <path> FAILED` stderr line, never a connection dropped with no reply (B9).
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
 strip_temp, strip_fade, strip_set, light_show, hue_signal, dog_on_fire, dog_look, dog_say, dog_cmd, chat_post.
@@ -95,7 +97,21 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
 
+    def _dispatch(self, route, fail: dict) -> None:
+        """B9: an exception no route caught answers 500 with its reason in today's envelope, never a dropped connection."""
+        try:
+            route()
+        except Exception as e:  # noqa: BLE001  (reported to the caller and on stderr, never hidden)
+            log("api", f"{self.command} {urlparse(self.path).path} FAILED", err=f"{type(e).__name__}: {str(e)[:100]}")
+            self._json(500, {**fail, "error": f"{type(e).__name__}: {e}"})
+
     def do_GET(self):  # noqa: N802
+        self._dispatch(self._get, {})
+
+    def do_POST(self):  # noqa: N802
+        self._dispatch(self._post, {"ok": False})
+
+    def _get(self):
         u = urlparse(self.path)
         if u.path == "/tools":
             return self._json(200, tools.describe())
@@ -229,7 +245,7 @@ class H(BaseHTTPRequestHandler):
             return self._json(404, {"error": f"no {rel}"})
         self._send(200, mimetypes.guess_type(str(f))[0] or "application/octet-stream", f.read_bytes())
 
-    def do_POST(self):  # noqa: N802
+    def _post(self):
         u = urlparse(self.path)
         if u.path == "/field/stop":   # end the running walk at its next tick (lights off, its row written)
             STOP.write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")
