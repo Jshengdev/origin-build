@@ -14,7 +14,8 @@ own posts are refused by confirmed guid and by the opening words of its replies.
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" (a round's look with a person in frame, or
 intruder_alarm) is a flag to the on-call person and opens a question (pending.json, naming the chat that was asked):
-that chat's next answer within PENDING_WINDOW_S is read typed (verdict(), below); no answer = stood down quietly. A
+that chat's next answer within PENDING_WINDOW_S (a held flag: ACK_WINDOW_S) is read typed (verdict(), below); no
+answer = stood down, logged. A
 housemate's reply that starts like a correction ("that's socks", "not a bird", "actually ...") within 30 min of the
 dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
@@ -51,18 +52,20 @@ heads_up or decide question it stands down. standing_down: "ok, standing down" (
 acknowledged: the question stays open for handled, nothing posted; below WTDD_REPLY_THRESHOLD or unclear: "do you know
 them? yes or no" once (no verdict row yet; the round keeps holding; the next reply is read against the re-ask), then
 stand down, logged as unclear; a re-ask nobody answers gets that unclear row from the first reply's reading and acked
-fields when the hold times out or the window expires (_drop), never a silent unlink. A failed live reading: "couldn't read the reply: <error>", verdict unread, stand down,
-never the regex. Never an alarm on an unclear reply. A pending of kind halt (item 00) is never read as a reply. One
-acked_ms per flag: the verdict row after a hold carries closed_ms instead, and after a re-ask the final row keeps the
-first reply's time. A verdict read by the DEMO_CACHE stub (no JEV_API_KEY) is a cached/stub row, like its reply.decided
-row; an unread one is not. pending.json holds one question, so a held flag lasts until the next stop's question
-replaces it (one WARN naming it) or PENDING_WINDOW_S after its post (then logged as "no answer in time", though it was
-answered). Only the chat that was asked answers: the group's "not sure" names the group (dog_say's, which names no chat,
+fields when the hold times out or the window expires (_drop), never a silent unlink. A failed live reading: "couldn't
+read the reply: <error>", verdict unread, stand down, never the regex. Never an alarm on an unclear reply. A pending of
+kind halt (item 00) is never read as a reply. One acked_ms per flag: the verdict row after a hold carries closed_ms
+instead, and after a re-ask the final row keeps the first reply's time. A verdict read by the DEMO_CACHE stub (no
+JEV_API_KEY) is a cached/stub row, like its reply.decided row; an unread one is not. pending.json holds one question.
+A held flag is exempt from PENDING_WINDOW_S: it lasts until handled closes it, until the next stop's question replaces
+it (one WARN naming it), or ACK_WINDOW_S (1800 s, the head's choice for beat 2.4b) after the acknowledgement, whichever
+is first; then one intruder.verdict row, expired / stand_down, names the acknowledgement and the window, with a WARN.
+Only the chat that was asked answers: the group's "not sure" names the group (dog_say's, which names no chat,
 is the group's), so the on-call person's "handled" about a held flag never answers the group's question. A reply whose
 chat.db time is before the open question's confirmed post was typed about an earlier flag: one WARN, not read, the
 question stays open (a dry or failed post cannot prove this, and reads as before). UNVERIFIED until the first live run:
-the re-ask's answer read by Jev, a hold across two stops, and that a live reply's chat.db time is never before the post
-it answers."""
+the re-ask's answer read by Jev, a hold across two stops, that ACK_WINDOW_S (1800 s) is long enough for a real "handled"
+on camera, and that a live reply's chat.db time is never before the post it answers."""
 from __future__ import annotations
 import json
 import re
@@ -82,6 +85,7 @@ STATE = config.ROOT / "state.json"
 PENDING = config.ROOT / "pending.json"   # the open question from intruder_alarm ("who dis?!"): the chat's next answer decides
 HEARTBEAT = config.ROOT / "listen.json"  # written every poll: the remote's "group chat" status reads it (GET /chat)
 PENDING_WINDOW_S = 120
+ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
 IDK = re.compile(r"\b(idk|dunno|no idea|dont know|don t know|no clue|not me|nope|who|never seen|stranger)\b")
 GATHER_S = 6.0                # after "yo dog ...", the same sender's next messages within this long join the request
@@ -255,13 +259,32 @@ class Listener:
         log("chat", "VERDICT", by=hname(reply["from"]), verdict=verdict, meaning=meaning or "", p=p, action=did,
             text=reply["text"][:60], **{k: v for k, v in fields.items() if k.endswith("_ms")})
 
+    def _expired(self, pend: dict[str, Any]) -> bool:
+        """An open question past its window is dropped (_drop) and True. PENDING_WINDOW_S from its post; an acknowledged
+        flag is exempt from that and lasts ACK_WINDOW_S from the acknowledgement (a pending held before this names none:
+        from its post)."""
+        held = pend.get("acknowledged")
+        since = ((pend.get("held") or {}).get("t") or pend.get("t", 0)) if held else pend.get("t", 0)
+        if time.time() - since <= (ACK_WINDOW_S if held else PENDING_WINDOW_S):
+            return False
+        self._drop(pend, "who dis: no answer in time, standing down")
+        return True
+
     def _drop(self, pend: dict[str, Any], unanswered: str, **kv: Any) -> None:
         """An open question withdrawn with no final reading (the hold timed out, or its window expired), never silently.
-        A re-ask nobody answered: one intruder.verdict row, unclear / stand_down, from the first reply's reading and with
-        its acked fields (the person answered then). Nobody answered at all: the `unanswered` line, no row (no reply)."""
+        A held flag never closed: one intruder.verdict row, expired / stand_down, naming the acknowledgement it held on and
+        ACK_WINDOW_S, with no acked_ms (the hold's row has the flag's one), and a WARN. A re-ask nobody answered: one row,
+        unclear / stand_down, from the first reply's reading and with its acked fields (the person answered then).
+        Nobody answered at all: the `unanswered` line, no row (no reply)."""
         PENDING.unlink(missing_ok=True)
-        first = pend.get("first")
-        if pend.get("reasked") and not pend.get("acknowledged") and first:
+        first, held = pend.get("first"), pend.get("held")
+        if pend.get("acknowledged"):
+            if held:
+                self._row(pend, held, {"shift_id": held["shift_id"], "window_s": ACK_WINDOW_S}, held["stub"],
+                          "expired", held["meaning"], held["p"], "stand_down")
+            log("chat", "WARN a held flag was never closed: standing down", trigger=pend.get("trigger"),
+                held_on=(held or {}).get("text", "")[:40], window_s=ACK_WINDOW_S, **kv)
+        elif pend.get("reasked") and first:
             self._row(pend, first, pend.get("acked") or {}, first["stub"], "unclear", first["meaning"], first["p"], "stand_down")
             log("chat", "re-ask unanswered: standing down, unclear", trigger=pend.get("trigger"), **kv)
         else:
@@ -337,9 +360,10 @@ class Listener:
         intruder.verdict row {verdict, meaning, p, action} and what the meaning asks for. stranger: "STRANGER DANGER!!!"
         three times and light_alarm, only when the question was "who dis?!" (kind who_dis); a heads_up (17) or decide
         (02) question stands down, so WTDD_ALARM and the map's ask flags still gate the alarm. standing_down: "ok,
-        standing down"; handled: "ok, closed"; acknowledged: the question stays open for handled. Unclear or below
-        WTDD_REPLY_THRESHOLD: one re-ask (the pending's question becomes it, and keeps this reply's acked fields and
-        reading), no verdict row yet, then stand down as unclear (unanswered: _drop writes that row). After a hold, acked_ms is the hold row's; this row gets closed_ms.
+        standing down"; handled: "ok, closed"; acknowledged: the question stays open for handled (ACK_WINDOW_S from
+        now, exempt from PENDING_WINDOW_S; _expired). Unclear or below WTDD_REPLY_THRESHOLD: one re-ask (the pending's
+        question becomes it, and keeps this reply's acked fields and reading), no verdict row yet, then stand down as
+        unclear (unanswered: _drop writes that row). After a hold, acked_ms is the hold row's; this row gets closed_ms.
         Rows read by the stub say cached/stub. A failed reading is posted as its error and stands down (verdict unread),
         never the regex. A halt (00) is never read here. Only the chat that was asked answers (a decide question with no
         chat is dog_say's, posted to the group). A reply stamped before the question's confirmed post answers an earlier
@@ -347,8 +371,7 @@ class Listener:
         if not PENDING.exists():
             return False
         pend = json.loads(PENDING.read_text())
-        if time.time() - pend.get("t", 0) > PENDING_WINDOW_S:
-            self._drop(pend, "who dis: no answer in time, standing down")
+        if self._expired(pend):
             return False
         chat = m.get("chat") or self.guid
         kind = pend.get("kind")
@@ -395,8 +418,9 @@ class Listener:
         verdict, did = {"reask": ("unclear", "stand_down"), "alarm": ("stranger", "alarm" if kind == "who_dis" else "stand_down"),
                         "stand_down": ("known", "stand_down"), "close": ("handled", "close"),
                         "hold": ("acknowledged", "hold")}[r["action"]]
-        if did == "hold":   # on their way: the question stays open for "handled"
-            PENDING.write_text(json.dumps({**pend, "acknowledged": True}))
+        if did == "hold":   # on their way: the question stays open for "handled", ACK_WINDOW_S from now (_expired)
+            PENDING.write_text(json.dumps({**pend, "acknowledged": True, "held": {**reply, "meaning": r["meaning"], "p": r["p"],
+                                           "stub": stub, "shift_id": acked.get("shift_id"), "t": time.time()}}))
         else:
             PENDING.unlink(missing_ok=True)
         row(verdict, r["meaning"], r["p"], did)
@@ -506,8 +530,8 @@ class Listener:
         if self.armed_by and not self.armed:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None
-        if PENDING.exists() and time.time() - json.loads(PENDING.read_text()).get("t", 0) > PENDING_WINDOW_S:
-            self._drop(json.loads(PENDING.read_text()), "who dis: no answer in time, standing down")
+        if PENDING.exists():
+            self._expired(json.loads(PENDING.read_text()))
         msgs = self.read()
         for m in msgs:
             self.handle(m)
