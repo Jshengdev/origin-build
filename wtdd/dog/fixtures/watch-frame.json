@@ -1,0 +1,35 @@
+{
+ "ts": "2026-09-26T03:00:00",
+ "t": 1790420400.0,
+ "ms": 21,
+ "n": 2,
+ "classes": {
+  "chair": 1,
+  "backpack": 1
+ },
+ "boxes": [
+  {
+   "name": "chair",
+   "conf": 0.71,
+   "xyxy": [
+    280,
+    200,
+    360,
+    330
+   ]
+  },
+  {
+   "name": "backpack",
+   "conf": 0.55,
+   "xyxy": [
+    536,
+    260,
+    616,
+    350
+   ]
+  }
+ ],
+ "source": "fixture",
+ "model": "yolo11n.pt",
+ "file": "frame.jpg"
+}
