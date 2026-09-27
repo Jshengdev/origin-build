@@ -72,6 +72,12 @@
   .nogo-draft { fill: rgba(220,38,38,.08); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 2 4; pointer-events: none; }
   .lbl.nogo-lbl { fill: #dc2626; }
   /* 04 · nogo · end */
+  /* 07 · objects · start */
+  .obj .pin { fill: rgba(220,30,30,.85); stroke: #fff; stroke-width: 2; pointer-events: none; }
+  .obj image { pointer-events: none; }   /* the thumbnail never takes a click meant for the map */
+  .obj.stale { opacity: .35; }
+  .objmsg { font-size: 11px; opacity: .8; }
+  /* 07 · objects · end */
 </style>
 </head>
 <body>
@@ -163,6 +169,12 @@ function App() {
     return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); window.removeEventListener("blur", off); document.removeEventListener("visibilitychange", vis); clearInterval(t); };
   }, []);
   const markIf = (look, say, ask = false) => { if (dog?.rec) post("/dog/mark", { look, say, ask }).then(r => r.json()).then(setLast); };   // recording: the look pressed here becomes this stop's action, with a report
+  // S5b · the map scale (#admin): GET /dog/scale is what the slider shows; the native "change" (on release, not React's
+  // per-tick onChange) POSTs it, one dog.scale row, and the value is read back from the server, refused or not.
+  const [scale, setScale] = useState(null); const [scaleDraft, setScaleDraft] = useState(null); const scaleEl = useRef(null);
+  const readScale = () => fetch(`${API}/dog/scale`).then(r => r.json()).then(s => { setScale(s); setScaleDraft(null); }).catch(e => setScale({ error: `GET /dog/scale failed: ${e}` }));
+  useEffect(() => { if (admin) readScale(); }, [admin]);
+  useEffect(() => { const el = scaleEl.current; if (!el) return; const f = () => post("/dog/scale", { px_per_m: +el.value }).then(r => r.json()).then(o => { setLast({ ...o, tool: "dog.scale", args: { px_per_m: +el.value }, result: o }); readScale(); }); el.addEventListener("change", f); return () => el.removeEventListener("change", f); });
   const lookShot = async kind => { markIf(kind, true); const out = await run("dog_look", { look: kind }); if (out.ok) setPhoto({ url: `${API}/pictures/look-${kind}.jpg?t=${out.result.pitch_deg}-${Math.floor(performance.now())}`, down: out.result.file_down ? `${API}/pictures/look-down.jpg?t=${Math.floor(performance.now())}` : null, file: out.result.file, pitch: out.result.pitch_deg, pitchDown: out.result.pitch_down_deg, kind }); };
   const key = (k, label) => html`<button class="small" onPointerDown=${() => press(k)} onPointerUp=${() => release(k)} onPointerLeave=${() => release(k)}>${label}</button>`;
 
@@ -290,6 +302,7 @@ function App() {
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
+            <${ObjectsLayer}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
               const a = [x + L * Math.cos(h - half), y + L * Math.sin(h - half)], b = [x + L * Math.cos(h + half), y + L * Math.sin(h + half)], tip = [x + L * Math.cos(h), y + L * Math.sin(h)];
@@ -311,6 +324,7 @@ function App() {
           <div class="row tight">
             <button class="small" disabled=${!map || (map.path || []).length < 2} title="the dog stands on path point 1 facing point 2" onClick=${() => post("/dog/calibrate", { p: map.path[0], toward: map.path[1] }).then(r => r.json()).then(setLast)}>at path start, facing pt 2</button>
             <button class="small" disabled=${!dog?.map || !map || (map.path || []).length < 2} title="keep the position, point the nose at the next path point ahead of the dog" onClick=${() => { const P = map.path, q = dog.map.p; let k = 0, best = 1e9; P.forEach((pt, i) => { const d = Math.hypot(pt[0] - q[0], pt[1] - q[1]); if (d < best) { best = d; k = i; } }); const nxt = P[Math.min(k + 1, P.length - 1)]; post("/dog/calibrate", { p: q, toward: nxt }).then(r => r.json()).then(setLast); }}>facing next pt</button>
+            ${admin && html`<label class="k" title="pixels per metre on the floor plan: slide until the LiDAR's walls sit on the drawn ones; set on release, saved in dog_cal.json">scale ${scale?.px_per_m != null ? html`<input type="range" ref=${scaleEl} min="60" max="180" step="0.5" value=${scaleDraft ?? scale.px_per_m} onChange=${e => setScaleDraft(e.target.value)}/> ${scaleDraft ?? scale.px_per_m} px/m · ${scale.source}` : html`<span class=${scale?.error ? "bad" : ""}>${scale?.error || "…"}</span>`}${last?.tool === "dog.scale" ? html` <span class=${"mono " + (last.ok ? "ok" : "bad")}>${last.ok ? "set" : `FAILED ${last.error}`}</span>` : ""}</label>`}
             <button class=${"small" + (dog?.rec ? " on" : "")} disabled=${!dog?.calibrated} title="drive it with the controller; the trace of where it thinks it is becomes the route" onClick=${() => post("/dog/record", { on: !dog?.rec }).then(r => r.json()).then(o => { setLast(o); if (o.ok && o.rec && !o.rec.active) fetch("/map").then(r => r.json()).then(setMap); })}>${dog?.rec ? `stop & save route (${dog.rec.n} pts)` : "record route"}</button>
             ${dog?.rec && html`<button class="small" onClick=${() => post("/dog/mark", {}).then(r => r.json()).then(setLast)}>mark stop here (${dog.rec.marks.length})</button>`}
             <button class=${"small" + (dog?.avoid ? " on" : "")} disabled=${!dog?.connected} title="the dog's own obstacle avoidance; velocities go through it while on" onClick=${() => post("/dog/avoid", { on: !dog?.avoid }).then(r => r.json()).then(setLast)}>${dog?.avoid ? "avoid on" : "avoid off"}</button>
@@ -432,6 +446,25 @@ function NoGoButtons({ mode, setMode, draft, setDraft, map, setMap, clear }) {
     ${mode !== "nogo" && zones.some(z => z.nogo === true) && html`<button title="take every no-go zone off the map and save it (the lighting zones stay)" onClick=${clear}>clear no-go</button>`}`;
 }
 // 04 · nogo · end
+// 07 · objects · start
+// The live object layer (GET /dog/objects, wtdd/dog/objects.py): one pin per placed object at the LiDAR cell its bearing
+// met, its label and probability as text, its thumbnail and its drafted line (or FAILED when the draft failed); stale
+// ones fade. No polygon, rect or path per object: shapes come from the points (the grid and the dots), words and photos
+// from the store. Polled every 2 s with or without a dog (objects decay by detector windows, not by the connection). The
+// body line is always drawn; zero objects says why, a failed read says FAILED.
+function ObjectsLayer() {
+  const [o, setO] = useState(null);
+  useEffect(() => { const f = () => fetch(`${API}/dog/objects`).then(r => r.json()).then(setO).catch(e => setO({ n: 0, objects: [], error: `GET /dog/objects failed: ${e}` })); f(); const t = setInterval(f, 2000); return () => clearInterval(t); }, []);
+  const all = o?.objects || [], placed = all.filter(x => x.pos_px), stale = all.filter(x => x.stale).length, off = all.find(x => !x.pos_px);
+  return html`<g>
+    ${placed.map(x => { const [cx, cy] = x.pos_px, line = x.message || (x.message_source?.startsWith("FAILED") ? `draft ${x.message_source}` : null); return html`<g key=${x.id} class=${"obj" + (x.stale ? " stale" : "")} data-id=${x.id}>
+      <circle class="pin" cx=${cx} cy=${cy} r="9"/>
+      ${x.thumb && html`<image href=${x.thumb} x=${cx + 14} y=${cy - 52} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
+      <text class="lbl objlbl" x=${cx + 14} y=${cy + 8}>${x.label} · ${(+x.p).toFixed(2)}${x.stale ? " · stale" : ""}</text>
+      ${line && html`<text class="lbl objmsg" x=${cx + 14} y=${cy + 24}>${line}</text>`}</g>`; })}
+    <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
+}
+// 07 · objects · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>

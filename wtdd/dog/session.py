@@ -20,6 +20,9 @@ records the believed pose while Johnny drives, mark(look, say) adds a stop at th
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
 row; a failed or cancelled follow says so in state().follow.error.
+The map scale (S5b): scale(v) is the page's slider (GET/POST /dog/scale), nav.set_scale inside one dog.scale row, saved as
+px_per_m beside the tie in dog_cal.json; a new session takes that over WTDD_PX_PER_M (an out-of-range one is a WARN and
+ignored) and names the scale's source in one stderr line. Only the process that holds the session sees the saved value.
 A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
 calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
 Before each waypoint the follower asks the session's occupancy grid (wtdd/plan.py occupied) whether it now sits in an
@@ -41,7 +44,8 @@ Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
-are rows, reads are not.
+are rows, reads are not. Objects: every detector window (<repo>/watch.json) is placed on that grid behind GET
+/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen.
 
 Re-correction (wtdd/dog/localize.py, 05b). Every window after the first is matched against the grid before it is drawn:
 its band cells through the correction held (self.corr, a rigid 2D transform in the odometry frame) against the cells
@@ -74,8 +78,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import append, log, step
-from . import lidar, localize, nav, occupancy
-from .. import plan
+from . import lidar, localize, nav, objects, occupancy
+from .. import config, plan
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -119,8 +123,15 @@ class DogSession:
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
         self.recheck = False   # no calibration loaded; state() reads this before any connect
-        if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
-            self.cal = json.loads(CAL_FILE.read_text())
+        saved = json.loads(CAL_FILE.read_text()) if CAL_FILE.exists() else {}
+        if (v := saved.pop("px_per_m", None)) is not None:   # the page's scale, saved beside the tie, wins over WTDD_PX_PER_M
+            try:
+                nav.set_scale(v, CAL_FILE.name)
+            except ValueError as e:
+                log("dog", f"WARN saved scale ignored, keeping {nav.SCALE_SOURCE}", file=CAL_FILE.name, err=str(e))
+        log("dog", f"scale {nav.PX_PER_M} px/m from {nav.SCALE_SOURCE}")
+        if saved:   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
+            self.cal = saved
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
             log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=self.cal.get("map"), at=self.cal.get("at"))
         self.follow_state: dict[str, Any] = {}       # the follower's live status (GET /dog/state .follow)
@@ -134,6 +145,9 @@ class DogSession:
         self.loc: dict[str, Any] = {"applied": 0, "rejected": 0, "unmatched": 0, "skipped": 0, "rejected_streak": 0, "last": None}
         self._pc: dict[str, Any] | None = None       # S7: applied windows no pose.corrected row has said yet {m, kind, before, after, largest_m}
         self._pc_t, self._pc_n = -math.inf, {}       # when the last pose.corrected row was written, and loc's counts then
+        self.objects = objects.Store(draft=objects.drafter())   # what the detector boxed, placed on the grid (GET /dog/objects)
+        self._objects_lock = threading.Lock()        # one detector window at a time: the objects thread and GET /dog/objects both tick
+        self._objects_ticker: threading.Thread | None = None   # started by the first objects_state()
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -456,6 +470,47 @@ class DogSession:
                 r["state_after"] = {"cleared": True, "corr_reset": True, "recheck": self.recheck}
         return {"cleared": True, "frames_before": before["frames_before"]}
 
+    # ---- the object layer (wtdd/dog/objects.py): detector boxes placed on the grid along their bearing
+    def objects_state(self, draft: bool = False) -> dict[str, Any]:
+        """GET /dog/objects: takes the detector's newest window from watch.json if it is new, places its boxes on the
+        session grid from the dog's odometry pose, and returns {n, objects, windows, fov_deg, source, why?}. The first
+        call starts the 'objects' thread, which does the same every objects.TICK_S with draft=True: the one-line drafts
+        (a model call) run there, outside every lock, never on the session loop and never inside a GET. WTDD_CAM_FOV_DEG
+        is read here, at the point of use. No ledger row for the read; the store's events are object.seen rows."""
+        fov = config.maybe("WTDD_CAM_FOV_DEG")
+        fov_deg = float(fov) if fov else None
+        st = self.body.state() if self.body else None
+        pose = {"position": list(st["position"][:2]), "yaw": st["rpy"][2]} if st and st.get("position") and st.get("rpy") else None
+        with self._objects_lock:
+            why = objects.tick(self.objects, objects.WATCH, pose, self.grid, self.cal, fov_deg, self._grid_lock)
+            body = {**self.objects.state(), "fov_deg": fov_deg, "source": "session"}
+            if self._objects_ticker is None:
+                self._objects_ticker = threading.Thread(target=self._objects_loop, name="objects", daemon=True)
+                self._objects_ticker.start()
+        if why:
+            body["why"] = why
+        if draft:
+            objects.draft_due(self.objects)
+        return body
+
+    def _objects_loop(self) -> None:
+        """The 'objects' thread: windows are taken and objects decay and get drafted while the page is closed. Ends when
+        the session loop is closed (a test's teardown); a raise is logged each time it changes, never silent, never fatal
+        (GET /dog/objects answers the same raise as a 500)."""
+        last = None
+        while True:
+            time.sleep(objects.TICK_S)
+            if self.loop.is_closed():
+                return
+            try:
+                self.objects_state(draft=True)
+                last = None
+            except Exception as e:  # noqa: BLE001  (logged; the next tick tries again, the GET shows it)
+                err = f"{type(e).__name__}: {e}"
+                if err != last:
+                    log("objects", "WARN tick FAILED", err=err[:160])
+                last = err
+
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
         st = st if st is not None else (self.body.state() if self.body else None)
@@ -474,10 +529,29 @@ class DogSession:
         with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1), "corr": localize.describe(c)}, self.map_pose(st)) as r:
             self.cal = {**nav.calibration((x, y), yaw, p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
             self.recheck = False
-            CAL_FILE.write_text(json.dumps(self.cal))
+            self._save_cal()
             r["state_after"] = {"cal": self.cal, "map": self.map_pose(st)}
         log("dog", "calibrated", p=list(p), heading_deg=round(math.degrees(heading), 1))
         return self.map_pose(st)
+
+    def _save_cal(self) -> None:
+        """dog_cal.json: the tie and, once the page has set it, the scale beside it; each write keeps the other."""
+        keep = {"px_per_m": nav.PX_PER_M} if nav.SCALE_SOURCE in ("page", CAL_FILE.name) else {}
+        CAL_FILE.write_text(json.dumps({**(self.cal or {}), **keep}))
+
+    def scale(self, px_per_m: Any = None) -> dict[str, Any]:
+        """GET/POST /dog/scale, the page's slider. None reads {px_per_m, source}, no row. A value goes through
+        nav.set_scale inside one dog.scale row (px_per_m before and after) and is saved beside the tie; a value that is
+        not a number or outside 20..400 fails the row (ValueError naming it) and changes nothing."""
+        now = {"px_per_m": nav.PX_PER_M, "source": nav.SCALE_SOURCE}
+        if px_per_m is None:
+            return now
+        with step("dog", "dog.scale", "map", {"px_per_m": px_per_m, "source": "page"}, now) as r:
+            nav.set_scale(px_per_m, "page")
+            self._save_cal()
+            r["state_after"] = {"px_per_m": nav.PX_PER_M, "source": nav.SCALE_SOURCE, "file": CAL_FILE.name}
+        log("dog", "scale set", px_per_m=nav.PX_PER_M, was=now["px_per_m"])
+        return r["state_after"]
 
     # ---- following the drawn path
     def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = False, avoid: bool = True) -> dict[str, Any]:
