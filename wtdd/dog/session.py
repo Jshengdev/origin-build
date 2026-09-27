@@ -40,8 +40,9 @@ it on local code, no model: the follower cancelled as stop() cancels it and wait
 first), _halt(), then one stop.person row. `halted` gates _set_vel and the drive loop, and drive, follow, the tilt
 and sit looks and any cmd outside halt.STILL_CMDS raise (the level look, BalanceStand and a frame, stays: the armed
 intruder alarm calls it) until resume_halt(by, via) (POST /dog/resume {by}, or the one word in the chat)
-writes stop.resumed; a halt read back from the ledger survives an API restart. A stale or missing watch.json is one
-WARN line per change and state().person_watch for the page's chip, never a silent no-halt. UNVERIFIED on the dog:
+writes stop.resumed; a halt read back from the ledger survives an API restart. A stale or missing watch.json, a frame
+the tick cannot read, or a tick that raises is one WARN line per change and state().person_watch for the page's
+chip, never a silent no-halt. UNVERIFIED on the dog:
 halt.NEAR_FRAC and halt.HALT_MS (00.1, 00.2); the frame read after watch.json can be one 4 Hz frame newer than its
 boxes (frame_sha names the bytes read); that the zero through the avoidance service stops a walking dog (00.3).
 """
@@ -108,6 +109,7 @@ class DogSession:
         self._person_lock = threading.Lock()         # one person tick (or resume) at a time: the thread and a direct call
         self._person_thread: threading.Thread | None = None
         self._pw_last: str | None = None             # the last person-watch WARN, so it is logged once per change
+        self._pw_fail: str | None = None             # the tick's own failure (a frame it cannot read, a raise): freshness alone would say fresh
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -149,12 +151,15 @@ class DogSession:
 
     def state(self) -> dict[str, Any]:
         st = self.body.state() if self.body else None
+        pw = halt.freshness(halt.WATCH)
+        if pw["fresh"] and self._pw_fail:   # 00: a watch.json that is fresh but a tick that could not use it is no person watch
+            pw = {**pw, "fresh": False, "why": self._pw_fail}
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None,
-                "halted": self.halted, "person_watch": halt.freshness(halt.WATCH)}   # 00: the page's STOPPED line and stale chip
+                "halted": self.halted, "person_watch": pw}   # 00: the page's STOPPED line and stale chip
 
     # ---- recording a route by driving (the trace of where it thinks it is becomes the map's path)
     def record(self, on: bool) -> dict[str, Any]:
@@ -501,31 +506,31 @@ class DogSession:
 
     def person_watch(self) -> None:
         """Starts the 'person-watch' thread once (07's objects-thread pattern): person_tick at halt.HZ until the session
-        loop is closed; a raise is logged each time it changes, never silent, never fatal."""
+        loop is closed; a raise is logged each time it changes and is state().person_watch's why, never silent, never
+        fatal."""
         with DogSession._lock:   # several HTTP threads may start it at once: one thread
             if self._person_thread is None:
                 self._person_thread = threading.Thread(target=self._person_loop, name="person-watch", daemon=True)
                 self._person_thread.start()
 
     def _person_loop(self) -> None:
-        last = None
         while not self.loop.is_closed():
             try:
                 self.person_tick()
-                last = None
-            except Exception as e:  # noqa: BLE001  (logged once per change; the next tick tries again)
-                err = f"{type(e).__name__}: {e}"
-                if err != last:
-                    log("halt", "WARN person watch tick FAILED", err=err[:160])
-                last = err
+            except Exception as e:  # noqa: BLE001  (logged once per change and on the page; the next tick tries again)
+                err = f"person watch tick FAILED: {type(e).__name__}: {str(e)[:120]}"
+                if err != self._pw_fail:
+                    log("halt", "WARN " + err)
+                self._pw_fail = err
             time.sleep(1 / halt.HZ)
 
     def person_tick(self) -> dict[str, Any] | None:
         """One tick: while activity() moves the body, a fresh watch.json with a person box in the band (halt.near) halts
         it: halted set first (it gates _set_vel), the follower cancelled as stop() does and waited for, the velocity
         zeroed, then _halt() inside ONE stop.person row. Idle, already halted, far or no person: nothing. Stale or missing
-        watch.json: one WARN line per change and nothing (the page shows the chip). A failed _halt is the row's ok false
-        and the halt stays set."""
+        watch.json: one WARN line per change and nothing (the page shows the chip). A frame it cannot read, or a raise,
+        is also the chip (_pw_fail) until a tick gets through. A failed _halt is the row's ok false and the halt stays
+        set."""
         with self._person_lock:
             was = self.activity()
             if self.halted or was is None:
@@ -537,19 +542,20 @@ class DogSession:
                     log("halt", "WARN no person watch: " + why, age_ms=fr["age_ms"], was=was)
                 self._pw_last = why
                 return None
+            d: dict[str, Any] = {}
             try:
                 d = json.loads(halt.WATCH.read_text())
                 data, W, H = halt.frame(d["file"])
-            except Exception as e:  # noqa: BLE001  (no frame is no person watch: WARN once per change, never a silent no-halt)
-                why = f"frame unreadable: {type(e).__name__}: {str(e)[:80]}"
+            except Exception as e:  # noqa: BLE001  (no frame is no person watch: WARN once per change and the page's chip, never a silent no-halt)
+                why = f"frame unreadable: {Path(str(d.get('file') or halt.WATCH)).name}: {type(e).__name__}"   # the file named; the full text is on the log line
                 if why != self._pw_last:
-                    log("halt", "WARN no person watch: " + why, was=was)
-                self._pw_last = why
+                    log("halt", "WARN no person watch: " + why, err=str(e)[:120], was=was)
+                self._pw_last = self._pw_fail = why
                 return None
-            if self._pw_last:
+            box = halt.near(d.get("boxes") or [], W, H)   # a raise here is _person_loop's FAILED, on the page too
+            if self._pw_last or self._pw_fail:
                 log("halt", "person watch back", age_ms=fr["age_ms"], was=was)
-            self._pw_last = None
-            box = halt.near(d.get("boxes") or [], W, H)
+            self._pw_last = self._pw_fail = None
             if box is None:
                 return None
             self.halted = {"was": was, "pending": True}   # first: from here no tick re-arms the drive loop
