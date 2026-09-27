@@ -3,21 +3,29 @@
 Johnny, 2026-09-27: "The dog also has its built in avoidance which should always be on for safety." Before S3 only
 follow() switched it on; hold-to-drive went through the sport service until someone pressed the avoid toggle. Offline:
 the session's Body is replaced by a fake whose avoid() records the call, so no dog is needed.
+B12: the round (Body.route, what a chat "do a round" runs) ended with avoid(False), so hand-driving after a round went
+unprotected until the next connect or follow. The real plan runner runs here on the fake's avoid/cmd/move, the ledger a
+temp file.
   python -m unittest wtdd.dog.test_avoid_on
 """
 import asyncio
 import contextlib
 import io
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from . import session
+from .. import ledger
+from . import body, session
 
 
 class FakeBody:
     fail: Exception | None = None
+    move_fail: Exception | None = None
     made: list["FakeBody"] = []
+    route = body.Body.route   # the real plan runner, on this fake's avoid/cmd/move
 
     def __init__(self):
         self._avoid = None
@@ -36,6 +44,17 @@ class FakeBody:
 
     def state(self):
         return {"age_ms": 0, "n": 1}
+
+    async def fresh_state(self, required=False):
+        return self.state()
+
+    async def cmd(self, name, parameter=None):
+        return 0
+
+    async def move(self, x=0.0, y=0.0, z=0.0, seconds=1.0):
+        if FakeBody.move_fail is not None:
+            raise FakeBody.move_fail
+        return {"via": "avoid" if self._avoid else "sport"}
 
     async def _tick(self, *a):
         return None
@@ -87,6 +106,48 @@ class AvoidOnConnect(unittest.TestCase):
         second = self.connect()
         self.assertIsNot(second, first)
         self.assertEqual(second.calls, [True])
+
+
+class AvoidStaysOnAfterARound(unittest.TestCase):
+    STEPS = [{"cmd": "StandUp"}, {"move": {"x": 0.3, "seconds": 1}}, {"cmd": "StandDown"}]
+
+    def setUp(self):
+        FakeBody.fail, FakeBody.move_fail, FakeBody.made = None, None, []
+        self.s = session.DogSession()
+        self.enterContext(mock.patch.object(ledger, "LEDGER", Path(tempfile.mkdtemp()) / "ledger.jsonl"))
+        self.enterContext(mock.patch.object(session, "Body", FakeBody))
+        self.enterContext(contextlib.redirect_stderr(io.StringIO()))
+
+    def tearDown(self):
+        stop(self.s)
+
+    def round(self):   # commands.do_round's call, on this session
+        return self.s.run(self.s.with_body(lambda b: b.route(self.STEPS, "corridor")), timeout=10)
+
+    def route_row(self):
+        rows = [r for r in ledger.rows() if r["tool"] == "dog.route"]
+        self.assertEqual(len(rows), 1, rows)
+        return rows[0]
+
+    def assert_on(self):
+        b = self.s.body
+        self.assertNotIn(False, b.calls, "the round never switches avoidance off")
+        self.assertIs(b._avoid, True)
+        self.assertIs(self.s.state()["avoid"], True, "GET /dog/state reads avoid true after the round")
+        self.assertIs((self.route_row()["state_after"] or {}).get("avoid"), True, "the round's row says avoidance is on")
+
+    def test_a_round_ends_with_avoidance_on_and_its_row_says_so(self):
+        self.assertEqual(len(self.round()), 3)
+        self.assertTrue(self.route_row()["ok"])
+        self.assert_on()
+
+    def test_a_round_that_fails_inside_the_plan_still_ends_with_avoidance_on(self):
+        FakeBody.move_fail = RuntimeError("Move refused at tick 3/10: code=3203")
+        with self.assertRaisesRegex(RuntimeError, "code=3203"):
+            self.round()
+        self.assertFalse(self.route_row()["ok"])
+        self.assertIn("code=3203", self.route_row()["response_or_error"])
+        self.assert_on()
 
 
 if __name__ == "__main__":
