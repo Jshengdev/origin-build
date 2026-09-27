@@ -432,10 +432,13 @@ class DogSession:
         yet (dog.calibrate, source "dropoff"; done here, not in the task: calibrate runs on the loop through run()) and
         starts the spin. A POST /dog/stop that lands before the spin has a task to cancel (the press connecting, tying,
         or just handing over) is read here and again by the task before the LiDAR switch: the same FAILED row naming
-        the stop, nothing held. Returns state().scout."""
+        the stop, nothing held. A tie nobody confirmed this power-on (dog_cal.json loaded, or kept across a stale
+        reconnect: recheck) stays the tie, and the press says so: args.recheck true and one stderr WARN. Returns
+        state().scout."""
         num = lambda v: v if math.isfinite(v) else str(v)  # noqa: E731  (a bare Infinity/NaN in the ledger breaks the page's JSON.parse of GET /ledger)
         args = {"z_rad_s": num(z), "target_deg": num(target_deg), "timeout_s": num(timeout_s), "shift_id": maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"),
-                "source": self.cal.get("source", "tap") if self.cal else None}   # None only on a press refused before any tie
+                "source": self.cal.get("source", "tap") if self.cal else None,   # None only on a press refused before any tie
+                "recheck": self.recheck}
         mine = False
         try:
             if self._follower and not self._follower.done():
@@ -454,6 +457,7 @@ class DogSession:
             self.run(self._ensure())
             if self.cal is None and not self._scout_stop:   # nose at drop-off is up: a stated convention, not a measurement (no map to orient against yet)
                 self.calibrate(scout.CANVAS_CENTRE, math.radians(scout.DROPOFF_HEADING_DEG), source="dropoff")
+            args["recheck"] = self.recheck   # after the connect (a stale reconnect sets it) and the drop-off tie (which clears it)
             if self._scout_stop:   # the page reads "stop" from the claim on; there was no task to cancel, so the press reads it
                 raise RuntimeError("stopped (POST /dog/stop) before the spin started")
         except Exception as e:
@@ -462,6 +466,8 @@ class DogSession:
             with step("dog", "dog.scout", "map", args):   # the refusal is this press's one row, then the caller's error
                 raise e
         args["source"] = self.cal.get("source", "tap")   # a dog_cal.json from before item 14 has no source: a person's tie
+        if self.recheck:   # the tie is kept (re-tying here is Johnny's call); the receipt and the log say it was not confirmed
+            log("dog", "WARN scout under an unconfirmed tie (dog_cal.json loaded or reconnected; recheck): drag the dog, or move dog_cal.json aside for a drop-off")
         self._scouter = asyncio.run_coroutine_threadsafe(self._scout(args, z, target_deg, timeout_s), self.loop)
         log("dog", "scout started", z=z, target_deg=target_deg, timeout_s=timeout_s, source=args["source"])
         return dict(self.scout_state)
