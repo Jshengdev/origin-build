@@ -37,8 +37,9 @@ which runs person_tick() at halt.HZ. While a task moves the body (activity(): fo
 recording; 14 and 18a add scout and dispatch there; a follower paused at a stop is still, so the stop's own look is
 never inside a halt), a fresh <repo>/watch.json with a person box inside the band halts
 it on local code, no model: the follower cancelled as stop() cancels it and waited for (its dog.follow row lands
-first), _halt(), then one stop.person row. `halted` gates _set_vel and the drive loop, and drive, follow, look and
-any cmd outside halt.STILL_CMDS raise until resume_halt(by, via) (POST /dog/resume {by}, or the one word in the chat)
+first), _halt(), then one stop.person row. `halted` gates _set_vel and the drive loop, and drive, follow, the tilt
+and sit looks and any cmd outside halt.STILL_CMDS raise (the level look, BalanceStand and a frame, stays: the armed
+intruder alarm calls it) until resume_halt(by, via) (POST /dog/resume {by}, or the one word in the chat)
 writes stop.resumed; a halt read back from the ledger survives an API restart. A stale or missing watch.json is one
 WARN line per change and state().person_watch for the page's chip, never a silent no-halt. UNVERIFIED on the dog:
 halt.NEAR_FRAC and halt.HALT_MS (00.1, 00.2); the frame read after watch.json can be one 4 Hz frame newer than its
@@ -417,7 +418,8 @@ class DogSession:
 
     # ---- the looks
     def look(self, kind: str = "tilt") -> dict[str, Any]:
-        self._refuse_if_halted(f"look {kind}")
+        if kind != "level":   # 00: level is BalanceStand and a frame, still; the armed intruder alarm calls it near a person
+            self._refuse_if_halted(f"look {kind}")
         if kind not in LOOKS:
             raise ValueError(f"look must be one of {LOOKS}, got {kind!r}")
         return self.run(self.with_body(lambda b: self._look(b, kind)))
