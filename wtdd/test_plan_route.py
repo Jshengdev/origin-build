@@ -207,6 +207,20 @@ class Route(Fresh):
         self.assertEqual(r["args"]["legs"], 2)
         self.assert_nothing_written()
 
+    def test_a_double_tap_is_a_failed_leg_never_a_repeated_stop(self):
+        """Two points in one lattice cell (a double tap, or a tap on the dog's own cell) leave that leg nothing to
+        route: stops would repeat (or be 0) with fewer actions than stops. It fails the route by the leg instead."""
+        for taps, leg in (([(300, 900), (650, 900), (650, 900)], "leg 2 of 2"), ([(300, 900), (302, 901)], "leg 1 of 1")):
+            n1 = len(ledger.rows())
+            with self.assertRaises(ValueError, msg=f"{taps}: a same-cell leg must fail, not repeat a stop") as cm:
+                plan.route(taps, grid=self.g, cal=CAL)
+            self.assertIn(leg, str(cm.exception))
+            self.assertEqual(cm.exception.failed_leg["to"], list(taps[-1]))
+            rows = rows_since(n1, "plan.multistop")
+            self.assertEqual([r["ok"] for r in rows], [False], "one plan.multistop row, failed")
+            self.assertIn(leg, rows[0]["response_or_error"])
+            self.assert_nothing_written()
+
     def test_no_grid_is_the_rooms_fallback_and_the_row_says_so(self):
         err = io.StringIO()
         with redirect_stderr(err):
