@@ -19,6 +19,8 @@ close after a hold carries closed_ms instead; after a re-ask the final row keeps
 numbers.shifts() on the remote fixture counts one; a verdict read by the stub is a cached/stub row, an unread one is not.
 From the second review: the stub reads a yes or no against the re-ask itself ("no" to "do you know them?" is a stranger,
 so a who_dis flag sounds the alarm; "yes" stands down), where 02's CORRECTION had read a bare "no" as standing_down.
+From the third review: a reply stamped before the open question's confirmed post is not its answer (the person typed it
+about an earlier flag): no reading, no verdict, the question stays open.
 
 Offline: the scratch ledger and memory.db are set through WTDD_LEDGER / WTDD_MEMORY before wtdd.ledger is imported. Run
 alone, they are this module's; after wtdd.test_decide in one process they are that module's (wtdd.ledger reads the
@@ -442,6 +444,37 @@ class Verdict(unittest.TestCase):
         call.assert_not_called()
         self.assertEqual(self._verdicts(), [("known", "stand_down")])
         self.assertEqual(self._texts(), [REASK, STANDING_DOWN])
+
+    # ---------- fix round 3 (third review of 17): seen failing before its fix
+
+    def test_a_reply_older_than_the_open_question_is_not_its_answer(self):
+        """The demo path: "on it" holds the opening at stop 10, the round walks on, the person on call types "handled"
+        while the dog walks, then stop 22 flags "who dis?!" in the same 1:1. The "handled" was typed before that flag's
+        confirmed post, so it cannot answer it: no reading, no verdict, the who-dis stays open (one WARN), and the next
+        reply decides it. Only a confirmed post can prove this; a dry or failed post reads as before."""
+        self.trigger = f"decide:{self._testMethodName}:10"
+        self._ask("heads_up")
+        self._flagged("2026-09-27 12:18:10")
+        self._say("on it", 1, "2026-09-27 12:18:22")                   # held
+        self.trigger = f"alarm:{self._testMethodName}:22"
+        self._ask("who_dis")                                            # the next stop's question replaces the held flag
+        self._flagged("2026-09-27 12:19:30")                            # its confirmed post, T2
+        with mock.patch.object(L, "log") as log:
+            got, call = self._say("handled, cover is back on", 2, "2026-09-27 12:19:05")   # typed at T1 < T2
+        self.assertFalse(got)
+        call.assert_not_called()
+        self.assertEqual(self._rows("reply.decided"), [])
+        self.assertEqual(self._rows("intruder.verdict"), [])
+        self.assertEqual(json.loads(self.pend.read_text())["kind"], "who_dis")
+        self.assertEqual(self.posts, [])
+        warns = [c for c in log.call_args_list if str(c.args[1]).startswith("WARN")]
+        self.assertEqual(len(warns), 1, log.call_args_list)
+        self.assertEqual((warns[0].kwargs["trigger"], warns[0].kwargs["reply"]), (self.trigger, f"R-{self._testMethodName}-2"))
+        got, call = self._say("idk who that is", 3, "2026-09-27 12:19:40")
+        self.assertTrue(got)
+        call.assert_called_once_with("light_alarm", seconds=5)
+        self.assertEqual(self._verdicts(), [("stranger", "alarm")])
+        self.assertEqual(self._rows("intruder.verdict")[0]["args"]["acked_ms"], 10000)
 
 
 class Fixture(unittest.TestCase):

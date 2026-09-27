@@ -23,7 +23,9 @@ default), the `decided` row's state_after.action, args.rule and args.policy_sour
 the person on call), rules() (what the page's Rules panel prints), the CLI's action and rule, and the chat round
 escalating on action == escalate through 03's escalate(). wtdd/fixtures/stop_opening.txt is the open-cover state of a
 scratch Jev probe on this Mac, 2026-09-26 (docs/evidence/night-2/jev-probe-2026-09-26.jsonl, case open_cover_agree),
-where Jev chose the action list's dispatch_alarm at 0.68: which labels go to a person is this table, not the model."""
+where Jev chose the action list's dispatch_alarm at 0.68: which labels go to a person is this table, not the model.
+From the third review: only the chat that was asked answers, so the group's "not sure" question names the group (and
+dog_say's, which names no chat, is the group's); a reply's receipt names the line that was posted, never a guess."""
 from __future__ import annotations
 import json
 import os
@@ -756,6 +758,67 @@ class ListenEscalate(unittest.TestCase):
         self.assertEqual([k for _, k, _, _, _ in self.posts], ["say:g1:10"])
         self.assertFalse(self.pending.exists())
         wait.assert_not_called()
+
+    # ---------- fix round 3 (third review of 17): each check below was seen failing before its fix
+
+    def _reply(self, text, chat, n):
+        """One message from `chat` read by verdict() (who may answer is 03's allowed(), tested there); tools.call patched."""
+        m = {"rowid": n, "guid": f"R-{self._testMethodName}-{n}", "text": text, "is_from_me": 0, "attachments": [],
+             "sender": "+15550002222" if chat == ONCALL else "+15550003333", "ts_utc": "2026-09-27 12:19:45", "chat": chat}
+        with mock.patch.object(self.L, "PENDING", self.pending), \
+                mock.patch("wtdd.tools.call", return_value={"signaled": [], "errors": []}) as call:
+            return self.l.verdict(m), call
+
+    def _read_since(self, n0, trigger):
+        return [r for r in ledger.rows()[n0:] if r.get("tool") in ("reply.decided", "intruder.verdict")
+                and trigger in ((r.get("args") or {}).get("trigger"), (r.get("args") or {}).get("asked"))]
+
+    def test_the_on_call_persons_reply_never_answers_the_groups_question(self):
+        """A held heads_up ("on it") in the on-call 1:1, then the next stop asks the group "not sure: ...". The on-call
+        person's "handled" is about their opening: it is never read as the answer to a question they were not asked
+        (its receipt would name that question, and Jev would read it). The group's answer still is."""
+        n0 = len(ledger.rows())
+        self._stop(10, False, {"label": "opening", "p": 0.98, "needs_person": False, "model": "stub", "action": "escalate"})
+        self.pending.write_text(json.dumps({**json.loads(self.pending.read_text()), "acknowledged": True}))   # "on it": held
+        self._stop(23, False, {"label": "other", "p": 0.5, "needs_person": True, "model": "stub", "action": "ask"})
+        pend = json.loads(self.pending.read_text())
+        self.assertEqual((pend["kind"], pend["trigger"], pend["chat"]), ("decide", "decide:g1:23", self.GROUP))
+        got, call = self._reply("handled, cover is back on", ONCALL, 1)
+        self.assertFalse(got)
+        call.assert_not_called()
+        self.assertEqual(self._read_since(n0, "decide:g1:23"), [])
+        self.assertEqual(json.loads(self.pending.read_text())["trigger"], "decide:g1:23")   # still the group's question
+        got, _ = self._reply("its a tarp", self.GROUP, 2)
+        self.assertTrue(got)
+        self.assertEqual([r["tool"] for r in self._read_since(n0, "decide:g1:23")], ["reply.decided", "intruder.verdict"])
+
+    def test_the_tool_paths_question_is_the_groups_and_its_receipt_names_the_line_posted(self):
+        """`python -m wtdd dog_say` (dog_say.run) posts ask_line(decision) to the group and writes a pending of kind decide
+        with the decision but no chat and no question. Only the group answers it, and the reply.decided row names the
+        line the dog posted, never a guessed "what is it?"."""
+        n0, trigger = len(ledger.rows()), f"say-{self._testMethodName}:decide"
+        d = {"label": "person", "p": 0.6, "needs_person": True, "model": "stub", "action": "escalate"}
+        self.pending.write_text(json.dumps({"kind": "decide", "t": time.time(), "file": self.FILE, "seconds": 5,
+                                            "trigger": trigger, "classes": {}, "decision": d}))   # dog_say.py:215's keys
+        got, _ = self._reply("handled", ONCALL, 1)
+        self.assertFalse(got)
+        self.assertEqual(self._read_since(n0, trigger), [])
+        got, _ = self._reply("its my friend", self.GROUP, 2)
+        self.assertTrue(got)
+        read = [r for r in self._read_since(n0, trigger) if r["tool"] == "reply.decided"]
+        self.assertEqual([r["args"]["question"] for r in read], ["not sure: person at 60 percent. what is it?"])
+        self.assertEqual(read[0]["args"]["question"], decide.ask_line(d))
+
+    def test_a_question_that_does_not_name_itself_fails_loud(self):
+        """A pending of a kind that should carry its question (listen writes one on every kind it opens) and does not is
+        a KeyError, never read against a made-up question."""
+        n0 = len(ledger.rows())
+        self.pending.write_text(json.dumps({"kind": "heads_up", "t": time.time(), "file": self.FILE, "seconds": 5,
+                                            "trigger": f"decide:{self._testMethodName}", "chat": ONCALL}))
+        with self.assertRaises(KeyError):
+            self._reply("on it", ONCALL, 1)
+        self.assertEqual(self._read_since(n0, f"decide:{self._testMethodName}"), [])
+        self.assertTrue(self.pending.exists())
 
 
 if __name__ == "__main__":
