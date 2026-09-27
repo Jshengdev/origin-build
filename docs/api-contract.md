@@ -1,12 +1,13 @@
 # The API contract
 
-Every route `wtdd/api.py` serves on main (read at 96f9b63), what it takes and what it answers. It is read from the handler code and the
+Every route `wtdd/api.py` serves on main (read at 4665be9), what it takes and what it answers. It is read from the handler code and the
 functions each route calls (`wtdd/dog/session.py`, `scout_zones.py`, `objects.py`, `occupancy.py`, `floorplan.py`,
 `record.py`, `shift.py`, `decide.py`), then checked against a dry API (no dog) with curl. The shapes are today's, including
 their inconsistencies: a client builds against these, and a change to one is a change to this file.
 
 ## Where it listens
-- `python -m wtdd.api` serves `http://127.0.0.1:7788/`; `python -m wtdd.api <port>` serves another port.
+- `python -m wtdd.api` serves `config.API`, `http://127.0.0.1:<WTDD_API_PORT, default 7788>/`, the address every
+  caller in `wtdd/` uses. `python -m wtdd.api <port>` overrides the port for the server alone.
 - **It binds 127.0.0.1 only.** Nothing off this Mac reaches it; there is no auth.
 - Every answer carries `Access-Control-Allow-Origin: *`. `OPTIONS` on any path is 204 with
   `Allow-Headers: Content-Type` and `Allow-Methods: GET, POST, OPTIONS`.
@@ -149,7 +150,7 @@ What the keys hold:
 | POST | `/shift` | `{name: morning \| night}` | `{ok, shift_id, started}` | 400 bad name; 500 | `shift.started`, ok or not |
 | POST | `/map` | the map, plus `_version` | `{ok, _version}` | 409 stale `_version`; 400 unrunnable path (points named); 500 | none (`map.prev.json` kept) |
 | POST | `/dog/drive` | `{x, y, z}` | `{ok, vel, hold_s}` | 500 | none; **connects** |
-| POST | `/dog/stop` | | `{ok, vel, halt?}` (`halt`: `{stop_code, velocity}` with a dog) | 500 | `dog.cmd` StopMove with a dog |
+| POST | `/dog/stop` | | `{ok, vel, halt?}` (`halt`: `{stop_code, velocity}` with a dog; `velocity` is null when the state read back has none) | 500 | `dog.cmd` StopMove with a dog |
 | POST | `/dog/calibrate` | `{p: [x, y], heading_deg}` or `{p, toward: [x, y]}` | `{ok, map: {p, heading_deg}}` | 500 | `dog.calibrate`; **connects** |
 | POST | `/dog/follow` | `{reach_px?, avoid?}` | `{ok, follow}` | 500 (a no-go refusal too) | `dog.follow` when the follow ends, or `route.refused`; **connects** |
 | POST | `/dog/resume` | | `{ok, follow}` (also with no follow) | 500 | none |
