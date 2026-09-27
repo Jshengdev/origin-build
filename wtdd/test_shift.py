@@ -7,7 +7,10 @@ after a start, in this process and in a separate one (the API, the chat listener
 that read the same file), and no module but shift.py reads WTDD_SHIFT. GET /shift and POST /shift (wtdd/api.py) run on
 an ephemeral port in this process. The remote (ui/index.html) has both buttons in the receipts panel and reads GET /shift.
 The scratch ledger is set through WTDD_LEDGER before wtdd.ledger is imported; shift.json sits beside the ledger, so
-these checks never read or write <repo>/shift.json. WTDD_SHIFT is set to "", never popped (docs/gotchas/02-2)."""
+these checks never read or write <repo>/shift.json. WTDD_SHIFT is set to "", never popped (docs/gotchas/02-2). Run in one
+process with another test module, the ledger is whichever module imported wtdd.ledger first (docs/gotchas/10-2), so FILE
+is taken from ledger.LEDGER, a child is handed that ledger, and each check deletes shift.json and restores WTDD_SHIFT
+after itself: no module after this one finds a run started here."""
 from __future__ import annotations
 import json
 import os
@@ -29,7 +32,7 @@ os.environ["WTDD_SHIFT"] = ""
 from wtdd import config, ledger  # noqa: E402
 
 ROOT = config.ROOT
-FILE = _TMP / "shift.json"
+FILE = ledger.LEDGER.with_name("shift.json")
 
 
 def _shift():
@@ -49,7 +52,10 @@ def _today() -> str:
 class Clean(unittest.TestCase):
     def setUp(self):
         FILE.unlink(missing_ok=True)
-        os.environ["WTDD_SHIFT"] = ""
+        self.addCleanup(FILE.unlink, missing_ok=True)
+        env = mock.patch.dict(os.environ, {"WTDD_SHIFT": ""})
+        env.start()
+        self.addCleanup(env.stop)
 
 
 class Current(Clean):
@@ -91,7 +97,7 @@ class Start(Clean):
         self.assertEqual(out["shift_id"], f"{_today()}-night")
         time.strptime(out["started"], "%Y-%m-%dT%H:%M:%S")
         self.assertEqual(json.loads(FILE.read_text()), out)
-        self.assertEqual(sorted(p.name for p in _TMP.iterdir()), ["ledger.jsonl", "shift.json"], "the temp file was renamed over it")
+        self.assertEqual(list(FILE.parent.glob("*.tmp")), [], "the temp file was renamed over it")
         rows = _started()
         self.assertEqual(len(rows), n0 + 1)
         row = rows[-1]
@@ -138,7 +144,7 @@ class Stamps(Clean):
         out = _shift().start("morning")
         code = ("from wtdd import decide; from wtdd.chat import oncall; from wtdd.dog import localize; "
                 "print(decide.shift_id(), oncall.shift_id(), localize.shift_id())")
-        r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=dict(os.environ), capture_output=True, text=True, timeout=60)
+        r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env={**os.environ, "WTDD_LEDGER": str(ledger.LEDGER)}, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr[-400:])
         self.assertEqual(r.stdout.split(), [out["shift_id"]] * 3)
 
