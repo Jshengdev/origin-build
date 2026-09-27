@@ -33,7 +33,9 @@ un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
 are rows, reads are not. Objects: every detector window (<repo>/watch.json) is placed on that grid behind GET
-/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen.
+/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen. The same
+thread feeds each placed object once to the scout (wtdd/dog/scout_zones.py) behind GET/POST /dog/scout; its rows are
+zone.decided, zone.proposed, zone.confirmed and zone.dismissed.
 """
 from __future__ import annotations
 import asyncio
@@ -46,7 +48,7 @@ from typing import Any, Awaitable, Callable
 
 from .. import config
 from ..ledger import log, step
-from . import lidar, nav, objects, occupancy
+from . import lidar, nav, objects, occupancy, scout_zones
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
@@ -100,6 +102,7 @@ class DogSession:
         self.objects = objects.Store(draft=objects.drafter())   # what the detector boxed, placed on the grid (GET /dog/objects)
         self._objects_lock = threading.Lock()        # one detector window at a time: the objects thread and GET /dog/objects both tick
         self._objects_ticker: threading.Thread | None = None   # started by the first objects_state()
+        self.scout = scout_zones.Proposals()         # the scout's proposed no-go zones, fed by the objects thread (GET/POST /dog/scout)
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -346,12 +349,32 @@ class DogSession:
                 return
             try:
                 self.objects_state(draft=True)
+                self.scout_feed()
                 last = None
             except Exception as e:  # noqa: BLE001  (logged; the next tick tries again, the GET shows it)
                 err = f"{type(e).__name__}: {e}"
                 if err != last:
                     log("objects", "WARN tick FAILED", err=err[:160])
                 last = err
+
+    # ---- the scout (wtdd/dog/scout_zones.py): each placed object asked once; a hazard is a proposed zone until a named tap
+    def scout_state(self) -> dict[str, Any]:
+        """GET /dog/scout: {n, proposals, failed, why, source: "session"}. A read, no row."""
+        return {**self.scout.state(), "source": "session"}
+
+    def scout_feed(self) -> None:
+        """The objects thread's hook: 07's objects (under the objects lock) and the newest detector frame to the scout,
+        whose blob runs under the grid's lock and whose model call runs outside every lock. WTDD_CAM_FOV_DEG is read
+        here, at the point of use. No detector frame: nothing to feed (07's tick already says why)."""
+        fov = config.maybe("WTDD_CAM_FOV_DEG")
+        st = self.body.state() if self.body else None
+        pose = {"position": list(st["position"][:2]), "yaw": st["rpy"][2]} if st and st.get("position") and st.get("rpy") else None
+        if not objects.WATCH.exists():
+            return
+        frame = json.loads(objects.WATCH.read_text())
+        with self._objects_lock:
+            objs = self.objects.to_list()
+        self.scout.feed(objs, frame, pose, self.grid, self.cal, float(fov) if fov else None, grid_lock=self._grid_lock)
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
