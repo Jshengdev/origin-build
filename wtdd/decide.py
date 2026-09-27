@@ -20,7 +20,7 @@ OpenRouter's example), so WTDD_DECIDE_THRESHOLD is tuned against the per-label p
 request, no retry, no fallback model, no fallback to the stub: a live failure is the decided row with ok=False, raised.
 Row: tool "decided", agent "decide", app "stub" | "openrouter"; args {stop, shift_id, state_chars, threshold};
 state_before {labels}; state_after = the returned decision; response_or_error = the stub's rule or Jev's raw reply.
-Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD, WTDD_SHIFT.
+Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD; shift_id is shift.current().
 UNVERIFIED: the live Jev call has not been run with a key. The body and the parse follow OpenRouter's own API reference,
 "Submit a System One request" (POST https://openrouter.ai/api/v1/systemone, Bearer key; {model, state, questions} in;
 {id, model, provider, answers: {<question>: {type, choice, confidence, probabilities}}, usage} out), and its Jev guide;
@@ -38,7 +38,7 @@ from pathlib import Path
 
 import requests
 
-from . import config, ledger
+from . import config, ledger, shift
 
 DEFAULT_LABELS = ["clear", "out_of_place", "hazard", "person"]
 DESCRIBE = {"clear": "nothing to report at this stop",
@@ -85,7 +85,7 @@ def threshold() -> float:
 
 
 def shift_id() -> str:
-    return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    return shift.current()
 
 
 def _word(n: int) -> str:

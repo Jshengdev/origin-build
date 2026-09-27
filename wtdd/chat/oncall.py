@@ -14,8 +14,9 @@ S10, the demo: WTDD_ON_CALL_GUID (the group's guid, the same value as WTDD_CHAT_
 itself the on-call target: the flag goes there, any member's first clear reply decides (listen.py), and the handle is
 not needed. The send gate is not loosened: a guid that is neither the group nor the on-call 1:1 is still refused.
 
-The shift: every row of this item and every chat.post row carries args.shift_id = env WTDD_SHIFT, else today's local
-date YYYY-MM-DD. record_sign closes a shift with one ok record.signed row; the ledger is the record.
+The shift: every row of this item and every chat.post row carries args.shift_id = shift.current() (wtdd/shift.py: the
+run started from the remote, else env WTDD_SHIFT, else today's local date YYYY-MM-DD). record_sign closes a shift with
+one ok record.signed row; the ledger is the record.
 
 The clock for acked_ms: the post's confirmed from-me row (chat.post state_after.ts) to the reply's ts_utc, both read
 from chat.db, UTC, one-second resolution. Never the ledger's local ts (7 h off in PT). So acked_ms is a multiple of 1000
@@ -27,7 +28,7 @@ import calendar
 import time
 from typing import Any
 
-from .. import config
+from .. import config, shift
 from ..ledger import log, rows as ledger_rows
 
 UTC = "%Y-%m-%d %H:%M:%S"   # chat.db's datetime(... 'unixepoch') text
@@ -49,7 +50,7 @@ def person() -> dict[str, Any]:
 
 
 def shift_id() -> str:
-    return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    return shift.current()
 
 
 def post_for(trigger: str | None, rows: list[dict[str, Any]]) -> dict[str, Any] | None:

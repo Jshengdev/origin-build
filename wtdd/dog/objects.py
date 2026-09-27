@@ -55,7 +55,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .. import config
+from .. import config, shift
 from ..config import ROOT
 from ..ledger import append as ledger_append, log
 from . import occupancy
@@ -321,7 +321,7 @@ class Store:
         after["thumb_bytes"] = len(o["thumb"] or "")
         self.append({"step": "object.seen", "agent": "objects", "tool": "object.seen", "app": "map",
                      "args": {"id": o["id"], "label": o["label"], "p": o["p"], "pos_px": o["pos_px"], "event": event,
-                              "shift_id": config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")},
+                              "shift_id": shift.current()},
                      "state_before": before, "state_after": after, "ok": ok, "response_or_error": message or err,
                      "latency_ms": int(latency_ms), **flags})
         log("objects", f"object.seen {event} {o['id']} ok={ok}", label=o["label"], p=o["p"], pos_px=o["pos_px"],

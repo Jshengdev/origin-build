@@ -50,12 +50,11 @@ from __future__ import annotations
 import contextlib
 import json
 import math
-import time
 from typing import Any
 
 import numpy as np
 
-from . import config
+from . import shift
 from . import nogo
 from .config import ROOT
 from .field import MAP, inside
@@ -323,7 +322,7 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
     follower names the waypoint to rejoin (rejoin), and the row carries the follower's sentence (args.say)."""
     m = json.loads(MAP.read_text())
     args = {"from": [int(p[0]), int(p[1])], "blocked": {"index": i, "waypoint": [int(path[i][0]), int(path[i][1])]}, "cell_px": CELL,
-            "shift_id": config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")}
+            "shift_id": shift.current()}
     with step("plan", "plan.replanned", "map", args) as r:
         if grid is None or cal is None:
             raise ValueError(f"replan needs the grid and a calibration ({'no grid' if grid is None else 'not calibrated'})")
@@ -390,7 +389,7 @@ def leg(a, b, live_px, dots: list, say: str | None = None, again: bool = False) 
     false. UNVERIFIED on the dog: planned on synthetic live bands only."""
     m = json.loads(MAP.read_text())
     args = {"from": [int(a[0]), int(a[1])], "to": [int(b[0]), int(b[1])], "dots": list(dots), "live": True, "cell_px": CELL,
-            "shift_id": config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"), **({"say": say} if say else {})}
+            "shift_id": shift.current(), **({"say": say} if say else {})}
     with step("plan", "plan.replanned" if again else "plan.route", "map", args) as r:
         matrix, info = _live_map(m, a, live_px)
         args.update(info)

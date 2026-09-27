@@ -179,6 +179,13 @@ function App() {
   const readScale = () => fetch(`${API}/dog/scale`).then(r => r.json()).then(s => { setScale(s); setScaleDraft(null); }).catch(e => setScale({ error: `GET /dog/scale failed: ${e}` }));
   useEffect(() => { readScale(); }, [admin]);
   useEffect(() => { const el = scaleEl.current; if (!el) return; const f = () => post("/dog/scale", { px_per_m: +el.value }).then(r => r.json()).then(o => { setLast({ ...o, tool: "dog.scale", args: { px_per_m: +el.value }, result: o }); readScale(); }); el.addEventListener("change", f); return () => el.removeEventListener("change", f); });
+  // S11 · the run in force (GET /shift, wtdd/shift.py): a morning or a night run, the shift_id every row carries from the
+  // next row on, the listener's and the watch's too. A start is POST /shift {name}: one shift.started row; the reply's
+  // shift_id is shown, or FAILED and the reason in red.
+  const [shiftNow, setShiftNow] = useState(null); const [shiftOut, setShiftOut] = useState(null);
+  const readShift = () => fetch(`${API}/shift`).then(r => r.json()).then(setShiftNow).catch(e => setShiftNow({ error: `GET /shift failed: ${e}` }));
+  useEffect(() => { readShift(); }, []);
+  const startRun = name => post("/shift", { name }).then(r => r.json()).then(o => { setShiftOut(o); readShift(); }).catch(e => setShiftOut({ ok: false, error: `POST /shift failed: ${e}` }));
   const lookShot = async kind => { markIf(kind, true); const out = await run("dog_look", { look: kind }); if (out.ok) setPhoto({ url: `${API}/pictures/look-${kind}.jpg?t=${out.result.pitch_deg}-${Math.floor(performance.now())}`, down: out.result.file_down ? `${API}/pictures/look-down.jpg?t=${Math.floor(performance.now())}` : null, file: out.result.file, pitch: out.result.pitch_deg, pitchDown: out.result.pitch_down_deg, kind }); };
   const key = (k, label) => html`<button class="small" onPointerDown=${() => press(k)} onPointerUp=${() => release(k)} onPointerLeave=${() => release(k)}>${label}</button>`;
 
@@ -373,7 +380,11 @@ function App() {
                 </div></div>` : html`<div class="hint">no look yet · python -m wtdd dog_say</div>`}`;
           })()}
         </div>
-        <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
+        <div class="panel"><h2>Receipts · ledger.jsonl</h2>
+          <div class="row tight"><span class=${"mono" + (shiftNow?.error ? " bad" : "")}>${shiftNow ? shiftNow.error || `run · ${shiftNow.shift_id} · ${shiftNow.source}` : "run · …"}</span>
+            <button class="small" onClick=${() => startRun("morning")}>start morning run</button><button class="small" onClick=${() => startRun("night")}>start night run</button>
+            ${shiftOut && html`<span class=${"mono " + (shiftOut.ok ? "ok" : "bad")}>${shiftOut.ok ? `started ${shiftOut.shift_id}` : `FAILED ${shiftOut.error}`}</span>`}</div>
+          <div class="ledger">
           ${(pc => pc && html`<div key="pc"><span>${(pc.ts || "").slice(11)}</span><span class=${pc.ok ? "" : "bad"}>pose.corrected${pc.ok ? "" : " FAILED"} · ${pc.args?.windows} windows · largest nudge ${pc.args?.largest_m} m${pc.ok ? "" : ` · ${String(pc.response_or_error ?? "").slice(0, 200)}`}</span><span>${pc.latency_ms} ms</span></div>`)([...ledger].reverse().find(r => r.tool === "pose.corrected"))}
           ${[...ledger].reverse().filter(r => r.tool !== "pose.corrected").slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? redact(r.args.say) : r.args ? redact(JSON.stringify(r.args)).slice(0, 60) : ""}${r.ok ? "" : ` · ${redact(String(r.response_or_error ?? "")).slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>

@@ -11,6 +11,8 @@
   GET  /evals                     <repo>/evals.json, every scenario's newest trials (python -m wtdd.evals --write)
   GET  /watch                     <repo>/watch.json, the detector's newest counts and boxes plus age_ms and the intruder flag
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)
+  GET  /shift                     the run in force {shift_id, source: file | WTDD_SHIFT | date} (a read, no row; wtdd/shift.py)
+  POST /shift {name}              start a "morning" or "night" run: <repo>/shift.json, one shift.started row; any other name is a 400
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status); POST /dog/drive {x,y,z}, /dog/stop
@@ -44,7 +46,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import config, tools
+from . import config, shift, tools
 from .config import ROOT
 from .field import FIELD, MAP, STOP, check_path
 from pathlib import Path
@@ -107,6 +109,11 @@ class H(BaseHTTPRequestHandler):
                 d["age_ms"] = round((time.time() - f.stat().st_mtime) * 1000)
             d["intruder"] = (ROOT / "intruder.on").exists()
             return self._json(200, d)
+        if u.path == "/shift":   # the run in force, a read (no row); a malformed shift.json is a 500 naming the file
+            try:
+                return self._json(200, shift.read())
+            except ValueError as e:
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path == "/dog/state":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().state())
@@ -180,6 +187,11 @@ class H(BaseHTTPRequestHandler):
                 f.unlink(missing_ok=True)
             log("api", "intruder watch " + ("armed" if on else "disarmed"))
             return self._json(200, {"ok": True, "intruder": on})
+        if u.path == "/shift":   # {name: morning | night}: one shift.started row, ok or not; a bad name is the caller's 400
+            try:
+                return self._json(200, {"ok": True, **shift.start(self._body().get("name"))})
+            except Exception as e:  # noqa: BLE001  (the row has it; a bad name or a malformed shift.json is a 400, anything else ours)
+                return self._json(400 if isinstance(e, ValueError) else 500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if u.path == "/map":
             data = self._body()
             seen = data.pop("_version", None)

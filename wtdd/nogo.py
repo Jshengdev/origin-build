@@ -20,10 +20,9 @@ UNVERIFIED: nothing here has run on the dog; the follower's refusal was exercise
 from __future__ import annotations
 import json
 import math
-import time
 from typing import Any
 
-from . import config
+from . import shift
 from .field import MAP, inside
 from .ledger import append, log
 
@@ -75,7 +74,7 @@ def refuse(path: list, agent: str, m: dict[str, Any] | None = None, dots_only: b
            else f"route refused: point {n} at {x},{y} is inside no-go zone {h['zone']} (drawn on the map)")
     append({"step": "route.refused", "agent": agent, "tool": "route.refused", "app": "map", "source": "map",
             "args": {"zone": h["zone"], "waypoint": h["waypoint"], "index": h["index"], "source": "map", "path_pts": len(path),
-                     "shift_id": config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")},
+                     "shift_id": shift.current()},
             "state_before": None, "state_after": None, "ok": False, "response_or_error": why, "latency_ms": 0})
     log("nogo", "route REFUSED", zone=h["zone"], waypoint=f"{x},{y}", index=h["index"], by=agent)
     raise ValueError(why)
