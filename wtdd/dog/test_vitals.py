@@ -3,9 +3,11 @@
 What it checks. A state message typed in the shape rt/lf/sportmodestate had on 2026-09-13 (fixtures/sportmodestate.json;
 typed values, never a recorded row) through Body._on_state gives Body.state() six more keys (gyroscope, accelerometer,
 imu_temp, error_code, skew_ms, foot_force) and one stderr line per state second, `[wtdd:dog] state zeros=...`, a WARN
-while any of foot_force / range_obstacle is all zeros. The driver's pushed fault messages (errors / add_error / rm_error)
-through the wrapper Body._watch_faults installs on the data channel's handle_response become Body.faults and one dog.fault
-row each, written on the loop after the callback has returned, never inside it (a slow callback stalls the 20 Hz stream).
+while any of foot_force / range_obstacle is all zeros or any of the six is absent. The driver's pushed fault messages
+(errors / add_error / rm_error) through the wrapper Body._watch_faults installs on the data channel's handle_response become
+Body.faults and one dog.fault row each, written on the loop after the callback has returned, never inside it (a slow
+callback stalls the 20 Hz stream). A push that does not parse is a WARN and one dog.fault row with ok false, raised to the
+loop's handler, and still reaches the driver; an rm for an id not held is a WARN.
 DogSession.state() serves the faults with age_s and the health of every stream; WTDD_STATE_FIXTURE serves a typed state
 (fixtures/state-vitals.json, a DEMO_CACHE for the screenshot) that says it is a fixture and carries no key the live path
 does not serve. The ledger is a temp file: WTDD_LEDGER is set before wtdd.ledger is imported.
@@ -129,6 +131,17 @@ class ZeroRule(unittest.TestCase):
         lines = _state_lines(_fed(times=20)[1])
         self.assertEqual(len(lines), 1, "20 messages inside one second must print one state line, not 0 and not 20")
 
+    def test_an_absent_key_is_a_warn_that_names_it(self):
+        msg = copy.deepcopy(MSG)
+        msg["data"]["foot_force"], msg["data"]["range_obstacle"] = [21, 19, 22, 20], [1.2, 0.8, 2.0, 1.5]   # no zeros: absent is the only reason to WARN
+        del msg["data"]["imu_state"]["temperature"]
+        lines = _state_lines(_fed(msg)[1])
+        self.assertTrue(lines, "no `[wtdd:dog] state zeros=...` line on the first state message")
+        warn, zeros, line = lines[0]
+        self.assertEqual(zeros, ["-"])
+        self.assertTrue(warn, f"an absent key must be a WARN: {line}")
+        self.assertIn(" absent=imu_temp ", line)
+
 
 class Faults(unittest.TestCase):
     def test_add_error_is_one_row_written_after_the_callback_returns(self):
@@ -191,6 +204,43 @@ class Faults(unittest.TestCase):
             self.assertEqual(seen, [hb])
             self.assertEqual(b.faults, [])
             self.assertEqual(len(_fault_rows()), n0)
+        asyncio.run(go())
+
+    def test_a_push_that_does_not_parse_is_a_failed_row_and_still_reaches_the_driver(self):
+        async def go():
+            raised: list = []
+            asyncio.get_running_loop().set_exception_handler(lambda _loop, ctx: raised.append(ctx.get("exception")))
+            b, (dc, seen) = Body(), _dc()
+            b._watch_faults(dc)
+            bad = [{"type": "add_error", "data": [time.time() - 12, 600]}, {"type": "add_error", "data": "junk"}]
+            n0, err = len(_fault_rows()), io.StringIO()
+            with contextlib.redirect_stderr(err):
+                for m in bad:
+                    await dc.handle_response(m)
+                await asyncio.sleep(0.05)
+            self.assertEqual(seen, bad, "the driver's own handler must still get a message that did not parse")
+            self.assertEqual(b.faults, [])
+            rows = _fault_rows()[n0:]
+            self.assertEqual([r["ok"] for r in rows], [False, False], "one failed dog.fault row per push that did not parse")
+            for r in rows:
+                self.assertTrue(str(r["response_or_error"]).startswith("ValueError: fault message not parsed"), r["response_or_error"])
+            self.assertEqual(err.getvalue().count("WARN fault message not parsed"), 2)
+            self.assertEqual(len(raised), 2, "the parse error is raised to the loop's handler, never swallowed")
+        asyncio.run(go())
+
+    def test_rm_for_an_id_not_held_is_a_warn_and_its_row(self):
+        async def go():
+            b, (dc, seen) = Body(), _dc()
+            b._watch_faults(dc)
+            msg = {"type": "rm_error", "data": [time.time() - 12, 600, 8]}
+            n0, err = len(_fault_rows()), io.StringIO()
+            with contextlib.redirect_stderr(err):
+                await dc.handle_response(msg)
+                await asyncio.sleep(0.05)
+            self.assertIn("WARN fault rm for an id not held id=600_8", err.getvalue())
+            self.assertEqual(seen, [msg])
+            self.assertEqual(b.faults, [])
+            self.assertEqual([(r["args"]["kind"], r["ok"]) for r in _fault_rows()[n0:]], [("rm", True)])
         asyncio.run(go())
 
 
