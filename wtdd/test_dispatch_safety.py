@@ -32,6 +32,10 @@ Fix round 4:
   OneYes         one person's yes is one walk: a second approved call on the same verdict (POST /tools/dispatch, the
                  model loop, the CLI) is one FAILED dispatch.decided (app imessage), "this yes already sent the dog",
                  before any plan or follow.
+  QuestionWords  the open-question refusal is worded in the thread by the question's kind, with no trigger key: a
+                 dispatch's own ask is "still waiting for a yes on the last ask about camera <id>" (no dog's eye is
+                 involved, and the ask is not withdrawn); a who-dis or a decide is "the dog's own question is open".
+                 The key and the kind stay on the row.
 
 It reuses wtdd/test_dispatch.py whole: imported FIRST, so its scratch ledger, memory, cams and forced-empty keys are set
 before the package loads; its setUpModule/tearDownModule and RunCase (the fake session, post, look, alarms).
@@ -147,7 +151,7 @@ class AskRace(td.RunCase):
                 self.assertIn("question open", dec[1]["response_or_error"])
                 texts = [p["text"] for p in self.posts]
                 self.assertEqual(texts[:-1], [self.D.ask_line(td.CAM)] if asked else [], texts)
-                self.assertTrue(texts[-1].startswith("couldn't dispatch: question open"), texts)
+                self.assertEqual(texts[-1], "couldn't dispatch: the dog's own question is open", texts)
                 self.assertIsNone(self.posts[-1]["file"], "two eyes: the refusal is text only")
                 self.assertEqual(self.s.follows, [])
 
@@ -176,6 +180,7 @@ class RefusedSighting(td.RunCase):
             self.refused("lap1", trigger="cam:lap1:1790004100", file=str(td.FRAME))
             self.assertEqual(len(self.posts), 1, self.posts)
             self.assertIsNone(self.posts[0]["file"])
+            self.assertEqual(self.posts[0]["text"], "couldn't dispatch: the dog's own question is open")
 
 
 class Recheck(td.RunCase):
@@ -384,6 +389,34 @@ class OneYes(td.RunCase):
         rows = td.rows_since(n1)
         self.assertEqual([(r["tool"], r["ok"], r["app"]) for r in rows], [("dispatch.decided", False, "imessage")], "no plan.route, no follow")
         self.assertIn("this yes already sent the dog", rows[0]["response_or_error"])
+
+
+class QuestionWords(td.RunCase):
+    def test_the_open_question_refusal_says_whose_question_in_words(self):
+        open_key = "cam:lap1:1790009000"
+        cases = {"dispatch": ({"kind": "dispatch", "cam": "lap1", "trigger": open_key, "file": str(td.FRAME)},
+                              "couldn't dispatch: still waiting for a yes on the last ask about camera lap1"),
+                 "who_dis": ({"kind": "who_dis", "trigger": "alarm:watch:1790009001", "seconds": 5},
+                             "couldn't dispatch: the dog's own question is open"),
+                 "decide": ({"kind": "decide", "trigger": "decide:2:1790009002", "seconds": 5},
+                            "couldn't dispatch: the dog's own question is open")}
+        for k, (kind, (pend, said)) in enumerate(cases.items()):
+            with self.subTest(kind):
+                self.s, self.posts[:] = td.FakeSession(self.out), []
+                self.pending.write_text(json.dumps({**pend, "t": time.time()}))
+                n0 = len(td.ledger.rows())
+                self.refused("lap1", trigger=f"cam:lap1:{1790009060 + k}", file=str(td.FRAME))
+                self.assertEqual([(p["text"], p["file"]) for p in self.posts], [(said, None)])
+                (row,) = td.rows_since(n0, "dispatch.decided")
+                self.assertIn(pend["trigger"], row["response_or_error"], "the key stays on the row")
+                self.assertIn(kind, row["response_or_error"])
+                if kind == "dispatch":
+                    self.assertNotIn("dog's own", row["response_or_error"], "no dog's eye is involved in the camera's own ask")
+        with self.subTest("an unreadable pending.json"):
+            self.s, self.posts[:] = td.FakeSession(self.out), []
+            self.pending.write_text('{"kind": "who')
+            self.refused("lap1", trigger="cam:lap1:1790009070", file=str(td.FRAME))
+            self.assertEqual([(p["text"], p["file"]) for p in self.posts], [("couldn't dispatch: a question is open in the thread", None)])
 
 
 if __name__ == "__main__":
