@@ -33,7 +33,9 @@ run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written at
      DANGER, never light_alarm: only the thread's verdict on a who-dis sounds the alarm.
 Every refusal and failure raises, after its FAILED row, one "couldn't dispatch: ..." post (never in dry; the walk's own
 failures are told by whoever ran it: the listener, the API's reply) and the page's `failed` phase naming why, unless
-another dispatch owns the page (the lock is held, or the open question is a dispatch's).
+another dispatch owns the page (the lock is held, or the open question is a dispatch's). A camera's refused sighting
+(its frame given, no person's yes yet) is named in that post, "(person at camera <id>, <label>)", with the frame, so
+the person on call still learns of the person; the open-question refusal stays text only (two eyes).
 
 Rows: plan.route (06's, unchanged) precedes dispatch.decided {agent dispatch, app, args {cam, trigger, shift_id,
 threshold, auto, choices, pt, arrival, route {exists, length_m, nogo}, state_chars, approved, by}, state_before {dog {p,
@@ -298,14 +300,14 @@ def _frame(cam_id: str) -> str | None:
     return None
 
 
-def _tell(dry: bool, key: str, text: str) -> str | None:
+def _tell(dry: bool, key: str, text: str, file: str | None = None) -> str | None:
     """One post to the thread (never in dry); returns the post's own failure, if any, for the caller's error."""
     if dry:
-        ledger.log("dispatch", f"DRY would post: {text}")
+        ledger.log("dispatch", f"DRY would post: {text}", file=file)
         return None
     from .tools import chat_post
     try:
-        chat_post.run(text=text, trigger=key)
+        chat_post.run(text=text, file=file, trigger=key)
         return None
     except Exception as e:  # noqa: BLE001  (its chat.* row has it; the caller's raise carries it too)
         ledger.log("dispatch", "FAILED to tell the thread", err=f"{type(e).__name__}: {str(e)[:100]}")
@@ -324,7 +326,15 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
     before: dict[str, Any] = {"dog": None}
     page: dict[str, Any] = {"cam": cam, "auto": args["auto"], "dry": bool(dry), "phase": None}
 
-    def refuse(why: str, own_page: bool = True):
+    def tell(why: str, frame: bool = True) -> str | None:
+        """"couldn't dispatch: <why>" in the thread. A camera's sighting (its frame given, no person's yes yet) is named
+        and carries the frame, so a person at the camera is never lost to a refusal; the open-question refusal passes
+        frame=False (two eyes: the dog's own question is the one in the thread)."""
+        seen = bool(frame and file and not approved)
+        where = f" (person at camera {cam}" + (f", {page['label']}" if page.get("label") else "") + ")" if seen else ""
+        return _tell(dry, f"{trigger}:refused", f"couldn't dispatch: {why}{where}", file if seen else None)
+
+    def refuse(why: str, own_page: bool = True, frame: bool = True):
         """The refusal list: one FAILED dispatch.decided naming why, the page failed (unless another dispatch owns it),
         "couldn't dispatch: <why>" in the thread (never in dry), then raise. Nothing has moved."""
         ledger.append({"step": "dispatch.decided", "agent": "dispatch", "tool": "dispatch.decided", "app": app, "args": args,
@@ -333,7 +343,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         ledger.log("dispatch", "dispatch.decided ok=False REFUSED", app=app, cam=cam, why=why[:100])
         if own_page:
             _publish(page, phase="failed", error=why)
-        told = _tell(dry, f"{trigger}:refused", f"couldn't dispatch: {why}")
+        told = tell(why, frame)
         raise RuntimeError(why + (f" (and the thread was not told: {told})" if told else ""))
 
     if not _lock.acquire(blocking=False):
@@ -357,7 +367,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
             refuse("recording: a route is being recorded")
         if pend:
             refuse(f"question open: {pend.get('kind')} {pend.get('trigger') or ''} is waiting for an answer; one question at a time, "
-                   "the dog's own eye wins", own_page=pend.get("kind") != "dispatch")
+                   "the dog's own eye wins", own_page=pend.get("kind") != "dispatch", frame=False)
 
         m = json.loads(plan.MAP.read_text())
         try:
@@ -403,7 +413,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
                 r["state_after"], r["response_or_error"] = d, raw[:600]
         except Exception as e:  # noqa: BLE001  (the FAILED dispatch.decided row above has it; told, drawn, re-raised)
             _publish(page, phase="failed", error=f"{type(e).__name__}: {e}")
-            _tell(dry, f"{trigger}:refused", f"couldn't dispatch: {type(e).__name__}: {e}")
+            tell(f"{type(e).__name__}: {e}")
             raise
         page.update(choice=d["choice"], p=d["p"], probabilities=d["probabilities"], demoted=d["demoted"])
         done = _publish(page, phase="decided")
