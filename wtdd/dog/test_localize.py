@@ -29,8 +29,15 @@ The contract under test (all in the odometry frame, metres and radians; a correc
                             through it) | rejected past the cap (a pose.corrected row ok=False naming the cap, nothing
                             drawn, the correction kept) | unmatched below MIN_SCORE (no row, a WARN line, drawn through
                             the correction held: the map grows into new rooms); counts in lidar()["localize"]
-  pose.corrected row        {tool: "pose.corrected", agent: "dog", args: {dx, dy, dtheta, score, shift_id, ...},
-                            state_before/after: {corr, ...}, ok, response_or_error, latency_ms}; cached False, source live
+  pose.corrected row        {tool: "pose.corrected", agent: "dog", args: {dx, dy, dtheta, score, shift_id, windows,
+                            applied, rejected, unmatched, skipped, largest_m, ...}, state_before/after: {corr, ...}, ok,
+                            response_or_error, latency_ms}; cached False, source live
+  S7 (Johnny 2026-09-27)    "one message every 30 seconds or new update": applied windows wait in one summary row,
+                            written at most once per SUMMARY_S (30 s) since the last pose.corrected row; a new update (an
+                            applied nudge over one grid cell, any rejection) is its own row at once, the summary before
+                            it first; every row counts every window since the last row (windows, and by verdict); a
+                            grid clear or a stream stop writes the pending summary. The receipts panel (ui/index.html)
+                            keeps pose.corrected out of its 25 rows and shows the newest one as one line.
   DogSession.map_pose       the believed pose is the odometry pose through the correction, then nav.to_map
   DogSession.calibrate      the drag still works and still logs: it ties the corrected pose to the dragged point (the
                             dot lands exactly there), keeps the correction (the grid stays consistent with it), and its
@@ -329,6 +336,100 @@ class Session(unittest.TestCase):
         n = self.s.lidar()["localize"]["unmatched"]
         self.assertGreater(n, 5, "past the WARN's rate limit")
         self.assertEqual(len([ln for ln in self.err.getvalue().splitlines() if "localize unmatched" in ln]), n)
+
+    # ---- S7, Johnny 2026-09-27: "one message every 30 seconds or new update". Live, 05b wrote 2,511 pose.corrected rows
+    # in 5 minutes, each applied with zero nudge, and a decision scrolled off the receipts panel's 25 rows in seconds.
+    def clock(self) -> list[float]:
+        """The session's monotonic clock, set by the test (the rest of `time` passes through); starts now, so setUp's
+        row (the session's first correction, written at once) is the last row."""
+        from . import session
+        now = [time.monotonic()]
+        self.enterContext(mock.patch.object(session, "time", mock.Mock(wraps=time, monotonic=lambda: now[0])))
+        return now
+
+    def feed(self, now: list[float], t: float, blob: bytes) -> None:
+        now[0] = t
+        self.body._on_lidar(fx.decode_wire(blob))
+
+    def corrected(self) -> list[dict]:
+        return [r for r in self.ledger.rows()[self.n0:] if r["tool"] == "pose.corrected"]
+
+    def test_zero_nudges_at_ten_windows_a_second_for_65_s_are_at_most_3_rows(self):
+        now = self.clock()
+        t0, blob = now[0], fx.blobs()[1]   # the map's middle window again: applied with zero nudge, as live
+        for k in range(650):
+            self.feed(now, t0 + k / 10, blob)
+        self.enterContext(mock.patch.object(lidar, "unsubscribe", mock.Mock()))
+        self.s.lidar(False)   # the stream stops: the pending summary is written, nothing dropped
+        rows = self.corrected()
+        self.assertEqual(self.s.lidar()["localize"]["applied"] - self.loc0["applied"], 650, "every window applied")
+        self.assertLessEqual(len(rows), 3, [r["args"].get("windows") for r in rows][:5])
+        self.assertEqual(sum(r["args"]["windows"] for r in rows), 650, "the rows' counts cover every window")
+        self.assertEqual(sum(r["args"]["applied"] for r in rows), 650)
+        self.assertEqual({r["args"]["largest_m"] for r in rows}, {0.0})
+        self.assertTrue(all(r["ok"] for r in rows))
+
+    def test_a_nudge_over_one_cell_is_written_at_once(self):
+        now = self.clock()
+        t0 = now[0]
+        self.feed(now, t0 + 0.1, fx.blobs()[1])    # zero nudge: pending, the last row was setUp's
+        self.feed(now, t0 + 0.2, dfx.blobs()[0])   # the drift fixture's jump, 0.10 m and -0.05 m: over one 0.05 m cell
+        rows = self.corrected()
+        self.assertEqual([(r["args"].get("windows"), r["args"].get("applied")) for r in rows], [(1, 1), (1, 1)],
+                         "the pending window as its summary first, then the jump as its own row, inside the same second")
+        jump = rows[-1]["args"]
+        self.assertAlmostEqual(jump["dx"], 0.10, delta=TOL_M)
+        self.assertAlmostEqual(jump["dy"], -0.05, delta=TOL_M)
+        self.assertGreater(jump["largest_m"], fx.RES)
+        self.assertAlmostEqual(jump["largest_m"], math.hypot(jump["dx"], jump["dy"]), places=3)
+        self.assertEqual(rows[0]["args"]["largest_m"], 0.0)
+
+    def test_a_rejection_is_written_at_once(self):
+        now = self.clock()
+        t0, blobs = now[0], dfx.blobs()
+        for k in range(3):   # the jump (its own row), a one-cell step (pending), the 0.35 m jump past the cap
+            self.feed(now, t0 + 0.1 * (k + 1), blobs[k])
+        rows = self.corrected()
+        self.assertEqual([(r["ok"], r["args"].get("windows"), r["args"].get("rejected")) for r in rows],
+                         [(True, 1, 0), (True, 1, 0), (False, 1, 1)])
+        self.assertIn("cap", rows[-1]["response_or_error"].lower())
+
+    def test_a_clear_writes_the_pending_summary_first(self):
+        now = self.clock()
+        for k in range(3):
+            self.feed(now, now[0] + 0.1, fx.blobs()[1])
+        self.s.grid_clear("test: the summary is not lost with the grid")
+        got = [(r["tool"], r["args"].get("windows")) for r in self.ledger.rows()[self.n0:]]
+        self.assertEqual(got, [("pose.corrected", 3), ("dog.grid_clear", None)])
+
+    def test_a_clear_counts_the_windows_no_pose_corrected_row_will(self):
+        """Unmatched windows since the last pose.corrected row have no applied window to ride on and their counters
+        reset with the grid: the dog.grid_clear row counts them, so every window is in a row."""
+        with mock.patch.object(localize, "MIN_SCORE", 1.01):   # nothing clears the gate: every window is unmatched
+            self.assertEqual(self.feed_drift(), [])
+        self.s.grid_clear("test: four unmatched windows")
+        row = [r for r in self.ledger.rows() if r["tool"] == "dog.grid_clear"][-1]
+        self.assertEqual(row["args"].get("windows_since_pose_corrected"),
+                         {"windows": 4, "applied": 0, "rejected": 0, "unmatched": 4, "skipped": 0})
+
+
+class Page(unittest.TestCase):
+    """S7: the receipts panel (ui/index.html) shows the 25 newest rows that are not pose.corrected, plus one line for the
+    newest pose.corrected row from that row's own windows and largest_m (the page counts nothing). Reads the source, as
+    wtdd/test_drive_keys.py does; the headless check is in the PR body."""
+    PAGE = (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text()
+
+    def line(self, needle: str) -> str:
+        return next((l for l in self.PAGE.splitlines() if needle in l), "")
+
+    def test_corrections_are_filtered_out_of_the_25(self):
+        self.assertIn('.filter(r => r.tool !== "pose.corrected").slice(0, 25)', self.line(".slice(0, 25)"))
+
+    def test_the_newest_correction_is_one_line_from_its_own_fields(self):
+        pc = self.line('.find(r => r.tool === "pose.corrected")')
+        self.assertIn("[...ledger].reverse()", pc, "the newest, not the oldest")
+        self.assertIn("args?.windows", pc)
+        self.assertIn("args?.largest_m", pc)
 
 
 if __name__ == "__main__":

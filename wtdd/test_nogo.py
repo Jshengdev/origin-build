@@ -38,7 +38,7 @@ ZONE = next(z for z in json.loads(FIXTURE.read_text())["zones"] if z.get("nogo")
 POLY = ZONE["poly"]
 PATH_THROUGH = [[300, 1100], [480, 1100], [650, 1100]]              # point 2 is inside the zone
 PATH_ACROSS = [[300, 1100], [430, 1100], [540, 1100], [650, 1100]]  # no point inside; the 430->540 segment crosses it
-CLEAR_PX = (plan.HALF_WIDTH - 1) * plan.CELL   # the dog is HALF_WIDTH cells wide: its body, not just the route's line, stays out (same erosion the rooms get)
+CLEAR_PX = (plan.half_width() - 1) * plan.CELL   # the dog is HALF_WIDTH cells wide: its body, not just the route's line, stays out (same erosion the rooms get)
 
 
 def _samples(pts, step=1.0):

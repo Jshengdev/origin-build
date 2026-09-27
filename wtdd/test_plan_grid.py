@@ -83,7 +83,7 @@ CAL = fx.CAL
 MAP_DICT = json.loads(FIXTURE.read_text())
 ZONE = next(z for z in MAP_DICT["zones"] if z.get("nogo"))
 POLY = ZONE["poly"]
-CLEAR_PX = (plan.HALF_WIDTH - 1) * plan.CELL   # the dog is HALF_WIDTH cells wide: its body, not just the route's line, stays out
+CLEAR_PX = (plan.half_width() - 1) * plan.CELL   # the dog is HALF_WIDTH cells wide: its body, not just the route's line, stays out
 ROUTE = [[300 + 50 * k, 1400] for k in range(8)]   # a taught route along the living room's bottom, x 300..650 at y 1400
 BLOB_AT = (500, 1400)                              # a blob on waypoint 4; its inflation covers waypoints 3..5 (measured in Replan)
 
@@ -231,8 +231,8 @@ class Occupied(unittest.TestCase):
         g = fx.grid()
         wx = round(fx.px(fx.WALL["x"], 0)[0])   # the wall's map x, about 474
         self.assertTrue(plan.occupied((wx, 900), g, CAL), "on the wall")
-        self.assertTrue(plan.occupied((wx + (plan.HALF_WIDTH - 1) * plan.CELL, 900), g, CAL), "within the dog's half-width of the wall")
-        self.assertFalse(plan.occupied((wx + (plan.HALF_WIDTH + 2) * plan.CELL, 900), g, CAL), "beyond the inflation")
+        self.assertTrue(plan.occupied((wx + (plan.half_width() - 1) * plan.CELL, 900), g, CAL), "within the dog's half-width of the wall")
+        self.assertFalse(plan.occupied((wx + (plan.half_width() + 2) * plan.CELL, 900), g, CAL), "beyond the inflation")
         self.assertFalse(plan.occupied((300, 900), g, CAL), "open floor")
         self.assertFalse(plan.occupied((wx, 700), g, CAL), "past the wall's end")
 
@@ -257,18 +257,21 @@ class Occupied(unittest.TestCase):
 class Replan(unittest.TestCase):
     def test_a_blob_on_the_route_makes_a_detour_that_rejoins(self):
         g, blob = fx.grid(blob_px=BLOB_AT), fx.blob_px(BLOB_AT)
-        self.assertEqual([i for i, p in enumerate(ROUTE) if plan.occupied(p, g, CAL)], [3, 4, 5], "the blob and its inflation cover waypoints 3..5")
+        cov = [i for i, p in enumerate(ROUTE) if plan.occupied(p, g, CAL)]   # S8: the padding is metres, so which waypoints it covers follows the scale
+        self.assertIn(4, cov, "the blob sits on waypoint 4")
+        self.assertEqual(cov, list(range(cov[0], cov[-1] + 1)), "one run of covered waypoints")
+        b, j = cov[0], cov[-1] + 1
         n0 = len(ledger.rows())
-        p = ROUTE[2]   # the dog has reached waypoint 2 and is about to drive to 3
-        det = plan.replan(p, ROUTE, 3, g, CAL)
-        self.assertEqual(det["blocked"], {"index": 3, "waypoint": [450, 1400]})
-        self.assertEqual(det["rejoin"], {"index": 6, "waypoint": [600, 1400]})
-        self.assertEqual(det["skipped"], [3, 4, 5])
+        p = ROUTE[b - 1]   # the dog has reached the waypoint before the blob and is about to drive to the first covered one
+        det = plan.replan(p, ROUTE, b, g, CAL)
+        self.assertEqual(det["blocked"], {"index": b, "waypoint": ROUTE[b]})
+        self.assertEqual(det["rejoin"], {"index": j, "waypoint": ROUTE[j]})
+        self.assertEqual(det["skipped"], cov)
         self.assertEqual(det["cost_map"], "grid")
         pts = det["path"]
         self.assertGreaterEqual(len(pts), 3, f"a straight line to the rejoin crosses the blob; the detour must bend: {pts}")
         self.assertLessEqual(math.dist(pts[0], p), plan.CELL, "the detour starts where the dog is")
-        self.assertLessEqual(math.dist(pts[-1], ROUTE[6]), plan.CELL, "the detour ends on the rejoin waypoint")
+        self.assertLessEqual(math.dist(pts[-1], ROUTE[j]), plan.CELL, "the detour ends on the rejoin waypoint")
         d, at = nearest(samples(pts), blob)
         self.assertGreaterEqual(d, CLEAR_PX, f"detour passes {at} within {d:.0f} px of the blob: {pts}")
         self.assertEqual([q for q in pts if plan.occupied(q, g, CAL)], [], "no detour waypoint is occupied")
@@ -278,10 +281,10 @@ class Replan(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertEqual((r["agent"], r["app"]), ("plan", "map"))
         a = r["args"]
-        self.assertEqual(a["from"], [400, 1400])
-        self.assertEqual((a["blocked"], a["rejoin"], a["skipped"]), (det["blocked"], det["rejoin"], [3, 4, 5]))
+        self.assertEqual(a["from"], [int(v) for v in ROUTE[b - 1]])
+        self.assertEqual((a["blocked"], a["rejoin"], a["skipped"]), (det["blocked"], det["rejoin"], cov))
         self.assertEqual((a["cost_map"], a["threshold"], a["nogo"], a["cell_px"]), ("grid", occupancy.THRESHOLD, [ZONE["name"]], plan.CELL))
-        self.assertGreater(a["walls"], 31, "the wall's cells and the blob's")
+        self.assertGreater(a["walls"], int(plan._cells(plan.walls_px(fx.grid(), CAL)).sum()), "the wall's cells and the blob's")
         self.assertTrue(isinstance(a.get("shift_id"), str) and a["shift_id"], "every shift row carries args.shift_id")
         self.assertEqual(r["state_after"]["waypoints"], len(pts))
         self.assertEqual(rows_since(n0, "plan.route"), [], "a replan is its own row, not a plan.route")
@@ -291,7 +294,7 @@ class Replan(unittest.TestCase):
         somewhere else."""
         g = fx.grid(blob_px=tuple(ROUTE[-1]))
         i = next(k for k, p in enumerate(ROUTE) if plan.occupied(p, g, CAL))
-        self.assertEqual(i, 6, "the blob on the end and its inflation cover waypoints 6..7")
+        self.assertIn(i, (6, 7), "the blob on the end and its padding cover the last waypoint or the last two (S8: the padding follows the scale)")
         n0 = len(ledger.rows())
         with self.assertRaises(ValueError) as cm:
             plan.replan(ROUTE[i - 1], ROUTE, i, g, CAL)
@@ -300,7 +303,7 @@ class Replan(unittest.TestCase):
         self.assertEqual(len(rows), 1, "one plan.replanned row, failed")
         self.assertIs(rows[0]["ok"], False)
         self.assertIn("occupied", rows[0]["response_or_error"].lower())
-        self.assertEqual(rows[0]["args"]["blocked"], {"index": 6, "waypoint": [600, 1400]})
+        self.assertEqual(rows[0]["args"]["blocked"], {"index": i, "waypoint": ROUTE[i]})
 
 
 class _Harness(unittest.TestCase):
@@ -426,7 +429,9 @@ class FollowerLive(_Harness):
         self.assertIsNone(fs.get("error"), fs)
         self.assertTrue(fs.get("done"), fs)
         snaps = [r for r in self.decided() if r["args"]["action"] == "snapped"]
-        self.assertEqual([r["args"]["at"] for r in snaps], [3, 4, 5], "each covered waypoint, in order")
+        cov = [k for k, q in enumerate(ROUTE) if plan.blocker(q, blob) is not None]   # S8: the padding follows the scale
+        self.assertIn(4, cov)
+        self.assertEqual([r["args"]["at"] for r in snaps], cov, "each covered waypoint, in order")
         for r in snaps:
             a = r["args"]
             self.assertEqual(a["blocker"]["kind"], "new obstacle", a)
@@ -491,13 +496,48 @@ class FollowerLive(_Harness):
         self.assertEqual(fs["reached"], list(range(len(ROUTE))))
 
 
+class Padding(unittest.TestCase):
+    """S8 (live on main 93605f1, 03:29): the padding was 4 lattice cells of 10 px, so at the measured 87 px/m every side
+    grew 0.46 m and any gap under ~0.9 m read as closed; the Go2 is ~0.31 m wide. Johnny, at the gap: "can it seriously not
+    go through this gap?" The padding is now HALF_WIDTH_M per side in metres, converted at the scale in force, and a
+    detour trusts the live view where it can see (memory counts only beyond LIVE_TRUST_M of the dog)."""
+
+    def at_scale(self, v):
+        from wtdd.dog import nav
+        return mock.patch.object(nav, "PX_PER_M", v)
+
+    def test_the_padding_is_metres_at_the_scale_in_force(self):
+        with self.at_scale(87.0):
+            self.assertEqual(plan.half_width(), 2)
+        with self.at_scale(108.5):
+            self.assertEqual(plan.half_width(), 3)
+
+    def test_a_detour_goes_through_a_seventy_centimetre_gap(self):
+        with self.at_scale(87.0):
+            gap = 0.7 * 87.0
+            live = [[600, y] for y in range(0, plan.H, 4) if abs(y - 1400) > gap / 2]   # a wall across the whole map, one 0.7 m gap
+            path = [[500, 1400], [650, 1400], [700, 1400]]
+            out = plan.replan((500, 1400), path, 1, fx.grid(), CAL, live_px=live, rejoin=2)   # no way round: only the gap
+            cross = [a[1] + (b[1] - a[1]) * (600 - a[0]) / (b[0] - a[0]) for a, b in zip(out["path"], out["path"][1:])
+                     if a[0] != b[0] and min(a[0], b[0]) <= 600 <= max(a[0], b[0])]
+            self.assertEqual(len(cross), 1, out["path"])
+            self.assertLess(abs(cross[0] - 1400), gap / 2, f"it crosses the wall inside the gap: {out['path']}")
+
+    def test_a_detour_ignores_remembered_walls_the_live_view_shows_gone(self):
+        with self.at_scale(87.0):
+            path = [[500, 1400], [600, 1400], [700, 1400]]
+            out = plan.replan((500, 1400), path, 1, fx.grid(blob_px=(600, 1400)), CAL, live_px=[], rejoin=2)
+            self.assertLessEqual(out["length_px"], 210, f"a straight run, not a bend around a blob that is gone: {out}")
+            self.assertEqual(out.get("cost_map"), "live")
+
+
 class Receipts(unittest.TestCase):
     """S6, Johnny 03:15: the receipts panel reads like the agent talking. A row's first-person sentence (args.say) is its
     main line, and a red row shows its error (response_or_error), which the panel never showed before S6."""
     PAGE = (Path(__file__).resolve().parent.parent / "ui" / "index.html").read_text()
 
     def receipt_line(self) -> str:
-        return next(l for l in self.PAGE.splitlines() if "[...ledger].reverse().slice(0, 25)" in l)
+        return next(l for l in self.PAGE.splitlines() if ".slice(0, 25)" in l)   # S7 filters pose.corrected before the slice
 
     def test_the_sentence_is_the_main_line(self):
         self.assertIn("r.args?.say", self.receipt_line())
