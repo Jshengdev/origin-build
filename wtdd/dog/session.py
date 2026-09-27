@@ -44,7 +44,9 @@ writes stop.resumed; a halt read back from the ledger survives an API restart. A
 the tick cannot read, or a tick that raises is one WARN line per change and state().person_watch for the page's
 chip, never a silent no-halt. UNVERIFIED on the dog:
 halt.NEAR_FRAC and halt.HALT_MS (00.1, 00.2); the frame read after watch.json can be one 4 Hz frame newer than its
-boxes (frame_sha names the bytes read); that the zero through the avoidance service stops a walking dog (00.3).
+boxes (frame_sha names the bytes read); that the zero through the avoidance service stops a walking dog, and
+halt.STILL_MPS and halt.SETTLE_S, the read-back that decides it did (00.3: above it after the settle, stop.person is ok
+false and the halt stands).
 """
 from __future__ import annotations
 import asyncio
@@ -530,7 +532,8 @@ class DogSession:
         zeroed, then _halt() inside ONE stop.person row. Idle, already halted, far or no person: nothing. Stale or missing
         watch.json: one WARN line per change and nothing (the page shows the chip). A frame it cannot read, or a raise,
         is also the chip (_pw_fail) until a tick gets through. A failed _halt is the row's ok false and the halt stays
-        set."""
+        set; so is a body whose read-back velocity is still above halt.STILL_MPS halt.SETTLE_S after the first read-back
+        (state_after.velocity_settled): ok is what the device says, not that _halt() returned."""
         with self._person_lock:
             was = self.activity()
             if self.halted or was is None:
@@ -587,6 +590,14 @@ class DogSession:
                     except Exception as e:  # noqa: BLE001  (the body is stopped, only the picture failed: on the row, the log line and the page)
                         r["state_after"]["file_error"] = f"{type(e).__name__}: {str(e)[:120]}"
                         log("halt", "WARN thumbnail not written", err=r["state_after"]["file_error"])
+                    v = h["velocity"]
+                    if max(abs(x) for x in v) > halt.STILL_MPS:   # 00.3: ok only when the device reads back still, not when _halt() returned
+                        time.sleep(halt.SETTLE_S)
+                        v = self.run(self.body.fresh_state(required=True), timeout=10).get("velocity")
+                        r["state_after"]["velocity_settled"] = v
+                        if v is None or max(abs(x) for x in v) > halt.STILL_MPS:
+                            raise RuntimeError(f"body still moving after the halt: velocity {v} above STILL_MPS {halt.STILL_MPS} m/s "
+                                               f"{halt.SETTLE_S} s after the first read-back {h['velocity']}")
             except Exception as e:  # noqa: BLE001  (the row has it; the halt stays set, the page shows it FAILED)
                 log("halt", "stop.person FAILED: the halt stays set", err=f"{type(e).__name__}: {str(e)[:120]}")
             self.halted = halt.summary(r)

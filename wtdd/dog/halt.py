@@ -17,10 +17,12 @@ body): fresh watch.json, a near person box -> the task cancelled, _halt() (zero 
 state read back), one stop.person row whose latency_ms is the read-back's wall clock minus watch.json's own t.
 
 UNVERIFIED on the real dog: NEAR_FRAC (a box-height proxy for distance, not a range; a tape at 1 m and 2 m sets it,
-00.1) and HALT_MS (the eval's ceiling, 00.2). watch.py rewrites watch.jpg about 4 times a second, so the frame read
-right after watch.json can be one frame newer than the boxes (frame_sha names the bytes actually read). The detector
-writes watch.detect only after its HOLD frames, so a person who enters already near can be halted before that row
-lands, and the eval then grades fail: the gate as written, not loosened.
+00.1), HALT_MS (the eval's ceiling, 00.2), STILL_MPS and SETTLE_S (what a stopped body reads back, 00.3: the session
+fails the stop.person row when the velocity is still above STILL_MPS SETTLE_S after the first read-back). watch.py
+rewrites watch.jpg about 4 times a second, so the frame read right after watch.json can be one frame newer than the
+boxes (frame_sha names the bytes actually read). The detector writes watch.detect only after its HOLD frames, so a
+person who enters already near can be halted before that row lands, and the eval then grades fail: the gate as
+written, not loosened.
 """
 from __future__ import annotations
 import argparse
@@ -39,6 +41,10 @@ NEAR_FRAC = 0.5          # UNVERIFIED (00.1): a person box at least this fractio
 FRESH_S = 3.0            # watch.json older than this, by its own t, is no person watch
 HZ = 4.0                 # the person watch's rate (watch.py publishes at about 4 Hz)
 HALT_MS = 1000           # UNVERIFIED (00.2): the eval's ceiling on stop.person latency_ms (watch.json t -> state read back)
+STILL_MPS = 0.1          # UNVERIFIED (00.3): a read-back velocity component above this (m/s) is a body still moving; the
+                         # take's rows (docs/evidence/ledger-take-2026-09-13.jsonl) read at most 0.03 standing, and 0.24
+                         # and 0.54 in the read-back of a StopMove sent while moving (rows 71 and 51)
+SETTLE_S = 0.5           # UNVERIFIED (00.3): how long a body above STILL_MPS at the first read-back gets before one more read
 WATCH = ROOT / "watch.json"
 PICTURES = Path("~/Pictures/wtdd").expanduser()
 STILL_CMDS = ("StopMove", "BalanceStand", "Damp", "GetState", "GetBodyHeight", "GetSpeedLevel")   # dog.cmd names that do not move the body
