@@ -3,7 +3,8 @@ Every number on any screen (the remote's ledger panel, the brief's measured tabl
 
   step(agent, tool, app, args, state_before)   context manager: exactly one timed row, ok or raised (recorded, re-raised)
   append(row)                                  a row without timing (the chat listener's wake/command/ask events)
-  rows(n)                                      the last n rows (all rows when n is None)
+  rows(n)                                      the last n rows (all rows when n is None); only the returned lines are json-parsed,
+                                               so a malformed line older than the last n is not read (rows() still raises on it)
   log(tag, msg, **kv)                          the `[wtdd:<tag>] msg k=v` stderr line
   python -m wtdd ledger_tail n=20              the same rows from the CLI; GET /ledger?n=25 from the API
 Row keys: ts, run_id, step, agent, tool, app, args, ok, response_or_error, state_before, state_after, latency_ms,
@@ -67,5 +68,5 @@ def step(agent: str, tool: str, app: str, args: dict[str, Any] | None = None, st
 def rows(n: int | None = None) -> list[dict[str, Any]]:
     if not LEDGER.exists():
         return []
-    out = [json.loads(l) for l in LEDGER.read_text().splitlines() if l.strip()]
-    return out[-n:] if n else out
+    lines = [l for l in LEDGER.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in (lines[-n:] if n else lines)]   # parse only what is returned: GET /ledger?n=25 is polled every 2 s
