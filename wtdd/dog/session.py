@@ -422,11 +422,14 @@ class DogSession:
 
     # ---- 14 · scout-spin: one 360 in place at drop-off while the LiDAR fills the grid (wtdd/dog/scout.py)
     def scout(self, z: float = 0.5, target_deg: float = 360, timeout_s: float = 30) -> dict[str, Any]:
-        """POST /dog/scout. Refused while following, recording or scouting, or with |z| over DRIVE_MAX z (never clamped):
-        one FAILED dog.scout row, raised, nothing moved so nothing halted; a connect failure is the same FAILED row. Else
-        it ties the pose to the canvas centre facing up when nothing is tied yet (dog.calibrate, source "dropoff"; done
-        here, not in the task: calibrate runs on the loop through run()) and starts the spin. Returns state().scout."""
-        args = {"z_rad_s": z, "target_deg": target_deg, "timeout_s": timeout_s, "shift_id": maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"),
+        """POST /dog/scout. Refused while following, recording or scouting, with |z| over DRIVE_MAX z (never clamped), or
+        with a z, target_deg or timeout_s that is not finite, or a target or timeout not over 0 (the timeout is the spin's
+        one end guard, and inf never passes it): one FAILED dog.scout row, raised, nothing moved so nothing halted; a
+        connect failure is the same FAILED row. Else it ties the pose to the canvas centre facing up when nothing is tied
+        yet (dog.calibrate, source "dropoff"; done here, not in the task: calibrate runs on the loop through run()) and
+        starts the spin. Returns state().scout."""
+        num = lambda v: v if math.isfinite(v) else str(v)  # noqa: E731  (a bare Infinity/NaN in the ledger breaks the page's JSON.parse of GET /ledger)
+        args = {"z_rad_s": num(z), "target_deg": num(target_deg), "timeout_s": num(timeout_s), "shift_id": maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d"),
                 "source": self.cal.get("source", "tap") if self.cal else None}   # None only on a press refused before any tie
         mine = False
         try:
@@ -436,8 +439,11 @@ class DogSession:
                 raise RuntimeError("scout refused: recording a route; stop the recording first")
             if self.scout_state["active"]:
                 raise RuntimeError("scout refused: already scouting; POST /dog/stop first")
-            if abs(z) > DRIVE_MAX["z"]:
-                raise ValueError(f"scout refused: |z| {abs(z)} rad/s is over DRIVE_MAX z {DRIVE_MAX['z']} (never clamped)")
+            if not abs(z) <= DRIVE_MAX["z"]:   # nan fails this too
+                raise ValueError(f"scout refused: |z| {abs(z):g} rad/s is not within DRIVE_MAX z {DRIVE_MAX['z']} (never clamped)")
+            if not (math.isfinite(target_deg) and target_deg > 0 and math.isfinite(timeout_s) and timeout_s > 0):
+                raise ValueError(f"scout refused: target_deg {target_deg:g} and timeout_s {timeout_s:g} must be finite and over 0 "
+                                 "(the timeout is the spin's one end guard)")
             self.scout_state, mine = {"active": True, "target_deg": target_deg, "turned_deg": 0.0, "frames": 0, "cells_added": 0,
                                       "seconds": 0.0, "ranges": None, "error": None}, True   # claimed before the connect: a double click is refused above
             self.run(self._ensure())
@@ -508,6 +514,8 @@ class DogSession:
                 try:
                     await self._halt()   # the scout halts once itself on every path out of the spin (a zero through avoidance first
                     # when it is on); main's drive loop also sends its release halt when vel drops, so the dog may see two StopMoves
+                except asyncio.CancelledError:   # POST /dog/stop inside this halt: stop() sends its own, so the body is still halted
+                    err = err or RuntimeError("stopped (POST /dog/stop) during the halt")
                 except Exception as e:  # noqa: BLE001  (a failed halt outranks the spin's own error: it becomes the row's error)
                     err = RuntimeError(f"halt FAILED: {type(e).__name__}: {e}" + (f" (after {type(err).__name__}: {err})" if err else ""))
                 st, lp, el = b.state() or {}, b.lidar_points(), time.monotonic() - t0
