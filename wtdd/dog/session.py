@@ -52,7 +52,9 @@ are rows, reads are not. The floor plan (wtdd/dog/floorplan.py) runs on a copy o
 by lidar(on=True), at most once per FLOORPLAN_S and only when the grid advanced, and on POST /dog/floorplan; each run
 is one dog.floorplan row, and GET /dog/floorplan is a read.
 Objects: every detector window (<repo>/watch.json) is placed on that grid behind GET
-/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen.
+/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen. The same
+thread feeds each placed object once to the scout (wtdd/dog/scout_zones.py) behind GET/POST /dog/scout; its rows are
+zone.decided, zone.proposed, zone.confirmed and zone.dismissed.
 Blob labels: POST /dog/blobs at a stop names what the floor plan drew from a photo of it (wtdd/dog/blobs.py, one
 blob.labelled row per label); GET /dog/blobs pins the newest labels and GET /dog/floorplan greys the runs a furniture
 label moved.
@@ -90,7 +92,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..ledger import append, log, step
-from . import blobs, floorplan, lidar, localize, nav, objects, occupancy
+from . import blobs, floorplan, lidar, localize, nav, objects, occupancy, scout_zones
 from .. import config, decide, plan
 from .body import MOVE_HZ, Body
 
@@ -179,6 +181,7 @@ class DogSession:
         self._fp_thread: threading.Thread | None = None   # the ticker, started once by lidar(on=True), never by _on_frame
         self.fp_errors = 0                    # ticks that raised (each already a failed row)
         self._labels: dict[str, Any] | None = None   # the newest blob press: {labels, source, ts, why?}; a FAILED press is labels [] and why
+        self.scout = scout_zones.Proposals()         # the scout's auto no-go zones, fed by the objects thread (GET/POST /dog/scout)
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -509,12 +512,13 @@ class DogSession:
         return {"cleared": True, "frames_before": before["frames_before"]}
 
     # ---- the object layer (wtdd/dog/objects.py): detector boxes placed on the grid along their bearing
-    def objects_state(self, draft: bool = False) -> dict[str, Any]:
+    def objects_state(self) -> dict[str, Any]:
         """GET /dog/objects: takes the detector's newest window from watch.json if it is new, places its boxes on the
         session grid from the dog's odometry pose, and returns {n, objects, windows, fov_deg, source, why?}. The first
-        call starts the 'objects' thread, which does the same every objects.TICK_S with draft=True: the one-line drafts
-        (a model call) run there, outside every lock, never on the session loop and never inside a GET. WTDD_CAM_FOV_DEG
-        is read here, at the point of use. No ledger row for the read; the store's events are object.seen rows."""
+        call starts the 'objects' thread, which does the same every objects.TICK_S, feeds the scout, then runs the
+        one-line drafts (objects.draft_due, a model call) outside every lock, never on the session loop and never inside a
+        GET. WTDD_CAM_FOV_DEG is read here, at the point of use. No ledger row for the read; the store's events are
+        object.seen rows."""
         fov = config.maybe("WTDD_CAM_FOV_DEG")
         fov_deg = float(fov) if fov else None
         st = self.body.state() if self.body else None
@@ -527,8 +531,6 @@ class DogSession:
                 self._objects_ticker.start()
         if why:
             body["why"] = why
-        if draft:
-            objects.draft_due(self.objects)
         return body
 
     def _objects_loop(self) -> None:
@@ -541,7 +543,11 @@ class DogSession:
             if self.loop.is_closed():
                 return
             try:
-                self.objects_state(draft=True)
+                self.objects_state()
+                try:   # the scout first: its cone is taken from the pose now, milliseconds after this thread's own tick pinned
+                    self.scout_feed()
+                finally:   # 07's draft (a model call that can take seconds) after it, even when the feed raised
+                    objects.draft_due(self.objects)
                 last = None
             except Exception as e:  # noqa: BLE001  (logged; the next tick tries again, the GET shows it)
                 err = f"{type(e).__name__}: {e}"
@@ -702,6 +708,25 @@ class DogSession:
         if cal is None:
             out["why"] = " · ".join(filter(None, [lab.get("why"), "not calibrated: drag the dog to where it is (POST /dog/calibrate)"]))
         return out
+
+    # ---- the scout (wtdd/dog/scout_zones.py): each placed object asked once; a hazard at p >= the threshold is on the map at once, a named tap dismisses it
+    def scout_state(self) -> dict[str, Any]:
+        """GET /dog/scout: {n, proposals, zones, _version, failed, why, source: "session"}. A read, no row."""
+        return {**self.scout.state(), "source": "session"}
+
+    def scout_feed(self) -> None:
+        """The objects thread's hook: 07's objects (under the objects lock) and the newest detector frame to the scout,
+        whose blob runs under the grid's lock and whose model call runs outside every lock. WTDD_CAM_FOV_DEG is read
+        here, at the point of use. No detector frame: nothing to feed (07's tick already says why)."""
+        fov = config.maybe("WTDD_CAM_FOV_DEG")
+        st = self.body.state() if self.body else None
+        pose = {"position": list(st["position"][:2]), "yaw": st["rpy"][2]} if st and st.get("position") and st.get("rpy") else None
+        if not objects.WATCH.exists():
+            return
+        frame = json.loads(objects.WATCH.read_text())
+        with self._objects_lock:
+            objs = self.objects.to_list()
+        self.scout.feed(objs, frame, pose, self.grid, self.cal, float(fov) if fov else None, grid_lock=self._grid_lock)
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:

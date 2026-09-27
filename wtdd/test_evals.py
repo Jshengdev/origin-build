@@ -94,7 +94,7 @@ def run_main(argv: list[str]) -> tuple[int, str]:
 class Order(unittest.TestCase):
     def test_the_new_scenarios_follow_the_shipped_five(self):
         self.assertEqual(evals.ORDER[:5], OLD)
-        self.assertEqual(evals.ORDER[5:], NEW)
+        self.assertEqual(evals.ORDER[5:], NEW + ["scout"])   # 19 appends its dry scout scenario after these four
 
     def test_fixtures_dir_is_the_committed_one(self):
         self.assertEqual(Path(evals.FIXTURES).resolve(), FIX)
