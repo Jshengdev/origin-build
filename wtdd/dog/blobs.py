@@ -81,7 +81,7 @@ def find(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, tall: float
     p = floorplan._plan(grid, threshold, tall)
     cls, r, (ox, oy) = p["cls"], grid.resolution, grid.origin
 
-    def shape(a: np.ndarray) -> dict[str, Any]:   # a (m, 2) [ix, iy] -> its cells in metres, centre, top and extent
+    def shape(a: np.ndarray) -> dict[str, Any]:   # a (m, 2) [ix, iy] -> its cells in metres, their centre, its top layer and height
         m = np.column_stack([ox + a[:, 0] * r, oy + a[:, 1] * r])
         top = int(np.bitwise_or.reduce(grid.zmask[a[:, 1], a[:, 0]])).bit_length() - 1   # the highest layer any cell was seen at
         return {"cells": [[round(float(x), 3), round(float(y), 3)] for x, y in m], "xy": [round(float(v), 3) for v in m.mean(axis=0)],
