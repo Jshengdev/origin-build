@@ -73,6 +73,15 @@
   .obj.stale { opacity: .35; }
   .objmsg { font-size: 11px; opacity: .8; }
   /* 07 · objects · end */
+  /* 19 · scout-zones · start */
+  .scout-cell { fill: #dc2626; stroke: none; pointer-events: none; }   /* one 6 px square per proposed LiDAR cell, as served */
+  .scout-hull { fill: rgba(220,38,38,.08); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 3 3; pointer-events: none; }   /* the padded hull: a stated rule, dashed while proposed */
+  .scout-zone { fill: rgba(220,38,38,.22); stroke: #dc2626; stroke-width: 3; pointer-events: none; }   /* a person confirmed it: solid */
+  .scout image { pointer-events: none; }
+  .scout-failed { color: var(--bad); font-family: var(--mono); font-size: 11px; margin: var(--gap-in) 0; }
+  input.scout-by { font: inherit; font-size: 12px; width: 170px; padding: 5px 8px; border: 0; border-radius: 8px; background: #fff; box-shadow: inset 0 0 0 1px rgba(38,35,35,.15); }
+  input.scout-by:placeholder-shown { box-shadow: inset 0 0 0 1px var(--bad); }
+  /* 19 · scout-zones · end */
 </style>
 </head>
 <body>
@@ -275,6 +284,7 @@ function App() {
             <${GridLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
             <${ObjectsLayer}/>
+            <${ScoutLayer} map=${map}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
               const a = [x + L * Math.cos(h - half), y + L * Math.sin(h - half)], b = [x + L * Math.cos(h + half), y + L * Math.sin(h + half)], tip = [x + L * Math.cos(h), y + L * Math.sin(h)];
@@ -335,6 +345,7 @@ function App() {
                 </div></div>` : html`<div class="hint">no look yet · python -m wtdd dog_say</div>`}`;
           })()}
         </div>
+        <${ScoutPanel} map=${map} setMap=${setMap}/>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2><div class="ledger">
           ${[...ledger].reverse().slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args ? JSON.stringify(r.args).slice(0, 60) : ""}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
@@ -410,6 +421,59 @@ function ObjectsLayer() {
     <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
 }
 // 07 · objects · end
+// 19 · scout-zones · start
+// The scout's proposed no-go zones (GET /dog/scout, wtdd/dog/scout_zones.py). ScoutLayer draws each proposal as served:
+// its LiDAR cells as red squares, the padded hull dashed (a stated rule on those cells, never a shape a model drew), the
+// photo and "kind → label · p · proposed" (· stub when the DEMO_CACHE stub answered); a zone a person confirmed (a
+// map.zones entry with source "scout") is solid with who confirmed it. ScoutPanel is the tap: a required name, confirm or
+// dismiss per proposal (POST /dog/scout), a failed tap and a failed model call named in red, zero says why. Polled every
+// 2 s with or without a dog. The page computes nothing: cells_px and poly are drawn as the API serves them.
+function useScout() {
+  const [s, setS] = useState(null);
+  const poll = () => fetch(`${API}/dog/scout`).then(r => r.json()).then(setS).catch(e => setS({ n: 0, proposals: [], failed: [], error: `GET /dog/scout failed: ${e}` }));
+  useEffect(() => { poll(); const t = setInterval(poll, 2000); return () => clearInterval(t); }, []);
+  return [s, poll];
+}
+const scoutTag = z => `${z.kind} → ${z.label} · ${(+z.p).toFixed(2)} · proposed${z.app === "stub" ? " · stub" : ""}`;
+const scoutPts = poly => poly.map(p => p.join(",")).join(" ");
+function ScoutLayer({ map }) {
+  const [s] = useScout();
+  const props = s?.proposals || [], zones = (map?.zones || []).filter(z => z.source === "scout" && z.nogo === true);
+  return html`<g>
+    ${zones.map(z => html`<g key=${z.name} class="scout" data-zone=${z.name}>
+      <polygon class="scout-zone" points=${scoutPts(z.poly)}/>
+      <text class="lbl" x=${z.poly[0][0]} y=${Math.min(...z.poly.map(p => p[1])) - 10}>${z.name} · ${z.label} · confirmed by ${z.by}</text></g>`)}
+    ${props.map(z => { const x = Math.min(...z.poly.map(p => p[0])), y0 = Math.min(...z.poly.map(p => p[1])), y1 = Math.max(...z.poly.map(p => p[1])); return html`<g key=${z.id} class="scout" data-id=${z.id}>
+      <polygon class="scout-hull" points=${scoutPts(z.poly)}/>
+      <path class="scout-cell" data-cells=${z.cells_px.length} d=${z.cells_px.map(p => `M${p[0] - 3} ${p[1] - 3}h6v6h-6z`).join("")}/>
+      ${z.thumb && html`<image href=${z.thumb} x=${x - 56} y=${y0} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
+      <text class="lbl" x=${x} y=${y1 + 22}>${z.kind} → ${z.label} · ${(+z.p).toFixed(2)}<tspan x=${x} dy="18">proposed${z.app === "stub" ? " · stub" : ""}</tspan></text></g>`; })}
+    <text class="lbl" x="12" y="68">scout · ${s ? `${s.n} proposed` : "…"}${zones.length ? ` · ${zones.length} confirmed` : ""}${s?.failed?.length ? ` · ${s.failed.length} FAILED` : ""}${s?.source ? ` · ${s.source}` : ""}${s?.why ? ` · ${s.why}` : ""}${s?.error ? ` · FAILED ${s.error}` : ""}</text></g>`;
+}
+function ScoutPanel({ map, setMap }) {
+  const [s, poll] = useScout();
+  const [by, setBy] = useState(() => localStorage.getItem("wtdd.scout.by") || "");
+  const [err, setErr] = useState({});   // proposal id -> its last failed tap, shown on its line
+  const name = by.trim();
+  const tap = (id, action) => post("/dog/scout", { id, action, by: name, _version: map?._version }).then(r => r.json())
+    .then(o => { setErr(e => ({ ...e, [id]: o.ok ? null : `${action} FAILED: ${o.error}` })); if (o.ok) fetch("/map").then(r => r.json()).then(setMap); poll(); })
+    .catch(e => setErr(x => ({ ...x, [id]: `${action} FAILED: ${e}` })));
+  return html`<div class="panel"><h2 style=${{ marginBottom: "var(--gap-in)" }}>Scout · proposed no-go</h2>
+    <div class="row tight"><b>Scout · ${s ? s.n : "…"} proposed</b>
+      <label class="k">your name <input class="scout-by" placeholder="required" value=${by} onInput=${e => { setBy(e.target.value); localStorage.setItem("wtdd.scout.by", e.target.value); }}/></label></div>
+    ${(s?.proposals || []).map(z => html`<div class="row tight" key=${z.id}>
+      ${z.thumb && html`<img src=${z.thumb} style=${{ width: 40, height: 40, objectFit: "cover", borderRadius: 4 }}/>`}
+      <span>${z.id} · ${scoutTag(z)} · ${z.cells.length} cells · ${z.dist_m} m</span>
+      <button class="small key" disabled=${!name} title="makes it a no-go zone on the map (04's rule), in your name" onClick=${() => tap(z.id, "confirm")}>confirm</button>
+      <button class="small" disabled=${!name} onClick=${() => tap(z.id, "dismiss")}>dismiss</button>
+      ${err[z.id] && html`<span class="scout-failed">${err[z.id]}</span>`}</div>`)}
+    ${(s?.failed || []).map((f, i) => html`<div class="scout-failed" key=${"f" + i}>scout: ${f.stage ? `${f.stage} failed` : "model call failed"}: ${f.error} · ${f.kind} ${f.object_id} · ${(f.ts || "").slice(11)}</div>`)}
+    ${s?.error && html`<div class="scout-failed">FAILED ${s.error}</div>`}
+    ${s && s.n === 0 && s.why && html`<div class="hint">${s.why}</div>`}
+    <div class="mono">scout proposes what its eyes can name; openings are drawn by a person${s?.source ? ` · ${s.source}` : ""}</div>
+  </div>`;
+}
+// 19 · scout-zones · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
