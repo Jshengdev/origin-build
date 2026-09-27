@@ -699,6 +699,40 @@ class OnBlue(_Harness):
         self.assertIn("moving on to dot 6", c[0]["args"]["say"])
 
 
+class NoViewZones(_Harness):
+    """B11 (the head's probe on main): LiDAR off, a two-dot line across a no-go zone gave route.decided "unchecked", then
+    dog.follow ok, straight through the zone. S12 let follow() refuse only a dot inside a zone and left a crossing line to
+    S6b's legs, which only run with a live view; with none, _as_drawn drove the line as drawn. Without a live view the dog
+    still keeps out of every zone: the line is planned around them, or refused naming the zone."""
+
+    def test_with_no_live_view_a_line_across_a_zone_is_driven_around_it(self):
+        line = [[400, 1150], [560, 1150]]   # either side of nogo-1 (x 450..510, y 1040..1250), the line straight through it
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)   # no self.live(): the LiDAR is off
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertEqual(fs["reached"], [0, 1], fs)
+        self.assertEqual(self.targets[-1], tuple(line[1]), "it still gets to dot 2")
+        through = [q for q in samples([line[0], *self.targets]) if inside(q, POLY)]
+        self.assertEqual(through[:3], [], f"the dog drove through {ZONE['name']}: {self.targets}")
+        route = rows_since(self.n0, "plan.route")
+        self.assertEqual(len(route), 1, "one leg planned around the zone")
+        self.assertIn(ZONE["name"], route[0]["args"]["nogo"])
+        self.assertSays(route[0])
+
+    def test_with_no_live_view_no_way_around_a_zone_is_refused_by_name(self):
+        line = [[400, 1150], [515, 1150]]   # dot 2 sits beside nogo-1, inside its padding: no floor the body fits on there
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)
+        self.assertIn("refused", fs.get("error") or "", fs)
+        self.assertIn(ZONE["name"], fs.get("error") or "", fs)
+        self.assertEqual(self.targets, [tuple(line[0])], "nothing driven toward the zone")
+        ref = [r for r in self.decided() if r["args"]["action"] == "refused"]
+        self.assertEqual(len(ref), 1, self.decided())
+        self.assertIs(ref[0]["ok"], False)
+        self.assertIn(ZONE["name"], ref[0]["args"]["reason"])
+        self.assertSays(ref[0])
+
+
 class Stuck(_Harness):
     """S6b, live 03:41 and 03:42: "TimeoutError: waypoint 2 not reached in 30.0s (dist 131 px, err -0.8 deg)", twice: it
     aimed within 1 degree and the Go2's own avoidance held it at the gap. Johnny, 03:48: "if it decided to trust its lidar
@@ -835,6 +869,52 @@ class Stuck(_Harness):
         self.assertEqual(ref[0]["args"]["at"], 1)
         self.assertSays(ref[0])
         self.assertEqual(fs["passed"], [], "refused, not passed")
+
+
+class Reconnect(_Harness):
+    """B2 (CLEANUP-PLAN): the state stream goes quiet mid-follow (a power cycle, a hotspot drop) and the next call's stale
+    reconnect (_ensure) closed the dead peer and cancelled the drive loop but left the follower running: it walked on
+    into whatever session came next, and when it ended, _halt read `_avoid` on no body, so the dog.follow row said
+    AttributeError instead of why. The follow must end at the reconnect, and its row and follow.error must say so."""
+
+    def test_a_stale_reconnect_stops_the_follow_and_its_row_names_the_reconnect(self):
+        from wtdd.dog import session
+        s = self.s
+        del s._halt                                    # the real halt: it is what read `_avoid` on no body
+        s.grid = fx.grid()
+        s.follow(ROUTE, [1], reach_px=30.0)
+
+        def until(ok, sec: float) -> bool:
+            t = time.monotonic() + sec
+            while not ok():
+                if time.monotonic() > t:
+                    return False
+                time.sleep(0.02)
+            return True
+
+        self.assertTrue(until(lambda: s.follow_state.get("stopped_at") == 1, 10), s.follow_state)
+        s.body.state = lambda: {"age_ms": session.STALE_MS + 1, "n": 42}   # the peer went quiet while held at dot 2
+        s.body.close = mock.AsyncMock()
+        gone = types.SimpleNamespace(connect=mock.AsyncMock(side_effect=ConnectionError("no answer: the dog left the hotspot")))
+        with mock.patch.object(session, "Body", lambda: gone), redirect_stderr(err := io.StringIO()):
+            with self.assertRaises(ConnectionError):
+                s.run(session.DogSession._ensure(s))   # the real reconnect (the harness mocks _ensure): the dead peer is closed, no new one answers
+            ended = until(lambda: s.follow_state.get("error") is not None, 3)   # set after the dog.follow row is written
+            if not ended:   # before B2 the follow still waits at its stop on the dead session: resume it to see how it ends
+                s.resume()
+                s._follower.result(timeout=10)
+        fs = dict(s.follow_state)
+        f = rows_since(self.n0, "dog.follow")
+        self.assertEqual(len(f), 1, f)
+        self.assertNotIn("AttributeError", str(f[0]["response_or_error"]), f[0])
+        self.assertIn("reconnect", str(f[0]["response_or_error"]), f[0])
+        self.assertIs(f[0]["ok"], False)
+        self.assertIn("reconnect", fs.get("error") or "", fs)
+        self.assertTrue(ended, f"the follow was still running on a dead session after the reconnect: {fs}")
+        self.assertTrue(s._follower.done())
+        self.assertFalse(fs["active"], fs)
+        self.assertEqual(fs["reached"], [0, 1], "no dot after the reconnect")
+        self.assertRegex(err.getvalue(), r"WARN [^\n]*follow[^\n]*reconnect", "one WARN line names the follow and the reconnect")
 
 
 class Padding(unittest.TestCase):

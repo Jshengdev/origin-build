@@ -5,7 +5,7 @@ slow and collides. This module holds a single Body on a background asyncio loop;
 handlers) submit coroutines with run(). The API process owns the dog while it runs (WTDD_API_PROCESS=1); other
 processes reach the dog through the API (wtdd/commands.py) so two peers never fight for the slot. If the 20 Hz state
 stream goes quiet for STALE_MS (the dog was power-cycled or left its hotspot) the next call closes the dead peer and
-connects once more, logged; there is no reconnect loop.
+connects once more, logged; there is no reconnect loop. A follow running then is stopped, and its row names the reconnect.
 
 drive() is hold-to-move: the remote refreshes a velocity every 200 ms while a key is down; the loop republishes it at
 MOVE_HZ and sends StopMove 0.6 s after the last refresh or on stop(). Speeds are capped at DRIVE_MAX.
@@ -164,6 +164,7 @@ class DogSession:
             log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=self.cal.get("map"), at=self.cal.get("at"))
         self.follow_state: dict[str, Any] = {}       # the follower's live status (GET /dog/state .follow)
         self._follower: asyncio.Task | None = None
+        self._cut: str | None = None                 # B2: why a stale reconnect stopped the follow (its row's error); None otherwise
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
         self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
@@ -200,6 +201,10 @@ class DogSession:
                     log("dog", "WARN grid kept across the reconnect: if the dog was power-cycled its odometry frame reset; clear it (POST /dog/grid {clear: true})", grid_frames=g.frames)
                 with self._grid_lock:   # S7: the stream stopped with the peer: the pending summary is written
                     self._pc_flush()
+                if self._follower and not self._follower.done():   # B2: a follow never walks on into a dead or a new session
+                    self._cut = f"stopped by a stale-session reconnect: no dog state for {st['age_ms']} ms"
+                    log("dog", f"WARN follow {self._cut}", at=self.follow_state.get("i"))
+                    self._follower.cancel()
                 if self._driver:
                     self._driver.cancel()
                 try:
@@ -822,6 +827,7 @@ class DogSession:
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
                              "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid),
                              "replans": [], "skipped_stops": [], "passed": [], "unchecked": False, "planned": [], "trace": [pose["p"]]}
+        self._cut = None
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -970,13 +976,16 @@ class DogSession:
                     fs["done"] = True
                 finally:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
-                    await self._halt()
+                    if self._cut is None:   # B2: after a stale reconnect the old peer is dead, so no halt goes to it (a new session's drive loop halts a dog it finds moving)
+                        await self._halt()
                     fs["active"] = False
                     if (end := self.map_pose()) is not None:
                         self._traced(fs, end["p"])
                     r["state_after"] = {"reached": list(fs["reached"]), "passed": list(fs["passed"]), "of": len(path),
                                         "seconds": round(time.time() - fs["started"], 1), "map": end, "replans": len(fs["replans"]),
                                         "skipped_stops": list(fs["skipped_stops"])}
+                    if self._cut:   # B2: the row and follow.error name the reconnect, not a bare cancel
+                        raise ConnectionError(self._cut)
         except asyncio.CancelledError:
             fs["error"] = "stopped"
             log("dog", "follow cancelled (stop)")
@@ -1005,15 +1014,28 @@ class DogSession:
 
     async def _as_drawn(self, i: int, path: list, stops: list[int], reach_px: float, fs: dict[str, Any], pose: dict) -> bool:
         """No live view: dot i straight as drawn, with the dog's own avoidance; S6's "unchecked" row once per follow.
-        Stuck (S6b) with no view to re-plan on: given up (_gave_up). True when reached."""
+        B11: a straight line that crosses a no-go zone is planned around the zones instead (plan.leg over an empty live
+        view: the zones alone, padded); no way around is refused, naming the zone. Stuck (S6b) with no view to re-plan
+        on: given up (_gave_up). True when reached."""
+        from .. import nogo
         if not fs["unchecked"]:
             fs["unchecked"] = True
             self._decided(None, "unchecked", "no live view (the LiDAR is off, its newest window is older than "
                           f"{LIVE_MAX_AGE_MS} ms, or the dog is not calibrated): the waypoints are followed as drawn, avoidance on",
                           "I can't see live right now, so I'm following your dots as drawn with my own obstacle avoidance on.")
-        fs["planned"].append([pose["p"], [int(path[i][0]), int(path[i][1])]])
+        way = [pose["p"], [int(path[i][0]), int(path[i][1])]]
+        if (h := nogo.hit(way, nogo.zones(json.loads(plan.MAP.read_text())))) is not None:
+            try:
+                way = plan.leg(pose["p"], way[1], [], [fs["reached"][-1] + 1 if fs["reached"] else None, i + 1],
+                               f"I can't see live, and the line to dot {i + 1} crosses no-go zone {h['zone']}, so I'm going around the zones.")["path"]
+            except ValueError as e:
+                self._decided(i, "refused", f"no live view, the line to dot {i + 1} crosses no-go zone {h['zone']} and there is no way around it: {e}",
+                              f"I can't see live, and I can't find a way to dot {i + 1} that keeps out of no-go zone {h['zone']}, so I'm stopping here.",
+                              zone=h["zone"], to=way[1])
+        fs["planned"].append(way)
         try:
-            await self._goto(path[i], reach_px, fs, f"waypoint {i}")
+            for k in range(1, len(way)):
+                await self._goto(way[k], reach_px, fs, f"waypoint {i}" if k == len(way) - 1 else f"point {k} of the way around the zones to waypoint {i}")
         except Stuck as e:
             return self._gave_up(i, path, stops, fs, f"{e}, and no live view to re-plan on")
         return True
