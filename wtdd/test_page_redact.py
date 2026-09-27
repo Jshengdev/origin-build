@@ -57,3 +57,14 @@ class Redact(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RulesPanel(unittest.TestCase):
+    """17's Rules panel ("Decided · done") prints the member's reply text and red reasons on the filmed page, so they go
+    through the same redact() as the Receipts (a phone handle or an email typed into a reply reads "a member")."""
+
+    def test_the_reply_text_and_red_reasons_render_through_redact(self):
+        body = PAGE[PAGE.index("function DecideRules("):PAGE.index("// 17 · decision-to-action · end")]
+        self.assertIn('"${redact(a.text)}"', body)
+        self.assertNotIn('"${a.text}"', body)
+        self.assertEqual(body.count("${redact(r.response_or_error)}"), 2)

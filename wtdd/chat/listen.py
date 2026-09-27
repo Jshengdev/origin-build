@@ -1,8 +1,8 @@
 """The ears' state machine: a wake phrase arms the dog for listen_s; while armed, messages are matched against the
 command list and run; "stop" disarms. Every wake, command, and ask is a ledger row (chat.wake / chat.command /
 chat.ask); every post goes through __main__.post keyed on the guid of the message that caused it
-(wake:/fire:/doin:/say:/alarm:/done:/ack:/res:/stop:/ai:<guid>, and decide:<guid>:<stop> for a stop's "not sure"
-question), so a re-read message can never post twice.
+(wake:/fire:/doin:/say:/alarm:/done:/ack:/res:/stop:/ai:<guid>, decide:<guid>:<stop> for a stop's question, and
+ok:/reask:/unread:/danger:<reply guid> for what a reply was read as), so a re-read message can never post twice.
 
 Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once]
      python -m wtdd.chat simulate "what the dog doin" "lights off" "stop"   (dry-run posts, REAL commands)
@@ -14,9 +14,10 @@ own posts are refused by confirmed guid and by the opening words of its replies.
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" (a round's look with a person in frame, or
 intruder_alarm) is a flag to the on-call person and opens a question (pending.json, naming the chat that was asked):
-that chat's next answer within PENDING_WINDOW_S decides, "idk" and its kin = "STRANGER DANGER!!!" x3 + light_alarm,
-anything else = "ok, standing down"; no answer = stood down quietly. A housemate's reply that starts like a
-correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
+that chat's next answer within PENDING_WINDOW_S (a held flag: ACK_WINDOW_S) is read typed (verdict(), below); no
+answer = stood down, logged. A
+housemate's reply that starts like a correction ("that's socks", "not a bird", "actually ...") within 30 min of the
+dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
 it (the vision model is told what the housemates said it got wrong). WTDD_ROUND=dog makes the round the
 real dog's: the wake starts the API's path follower (the dog must be calibrated on the remote first) and the field
@@ -46,7 +47,35 @@ open those are not an answer (the 1:1 rule above, answers only, applies to a 1:1
 reply from a member (not a wake word, a command or a chat turn) decides, as in the 1:1. Every intruder.verdict row
 carries args.by (the HOUSEMATES first name, else "a member"), args.say (one first-person sentence, the reply quoted
 with any phone or email in it replaced by "a member", as the page's redact() does) and args.decided true; args.from
-keeps the raw handle (the ledger is private, the page is filmed). UNVERIFIED until the first live run in THE CASTLE."""
+keeps the raw handle (the ledger is private, the page is filmed). UNVERIFIED until the first live run in THE CASTLE.
+With 17, every row _row writes carries them; say quotes the reading's verdict and ends with what the listener did
+(DID_SAY: sounding the alarm, standing down, closing it, holding it open).
+
+The stop's action (item 17, wtdd/decide.py: the label and p through the table on the map). escalate: the photo and
+decide.heads_up_line go to the on-call 1:1 through escalate() under decide:<guid>:<stop>, a pending question of kind
+heads_up, and the hold ("couldn't escalate" in the group, no question, when that fails); ask: 02's "not sure" line to
+the group, kind decide; continue: nothing. A stop whose who-dis already asked asks nothing more (one question per stop).
+The verdict: the answer is read by decide.read_reply (one reply.decided row: a meaning and its p), then one
+intruder.verdict row {verdict, meaning, p, action: what the listener did}. stranger sounds the alarm ("STRANGER
+DANGER!!!" x3 + light_alarm) only on a who_dis question (a person in frame at an ask stop, or intruder_alarm); on a
+heads_up or decide question it stands down. standing_down: "ok, standing down" (verdict known); handled: "ok, closed";
+acknowledged: the question stays open for handled, nothing posted; below WTDD_REPLY_THRESHOLD or unclear: "do you know
+them? yes or no" once (no verdict row yet; the round keeps holding; the next reply is read against the re-ask), then
+stand down, logged as unclear; a re-ask nobody answers gets that unclear row from the first reply's reading and acked
+fields when the hold times out or the window expires (_drop), never a silent unlink. A failed live reading: "couldn't
+read the reply: <error>", verdict unread, stand down, never the regex. Never an alarm on an unclear reply. A pending of
+kind halt (item 00) is never read as a reply. One acked_ms per flag: the verdict row after a hold carries closed_ms
+instead, and after a re-ask the final row keeps the first reply's time. A verdict read by the DEMO_CACHE stub (no
+JEV_API_KEY) is a cached/stub row, like its reply.decided row; an unread one is not. pending.json holds one question.
+A held flag is exempt from PENDING_WINDOW_S: it lasts until handled closes it, until the next stop's question replaces
+it (one WARN naming it), or ACK_WINDOW_S (1800 s, the head's choice for beat 2.4b) after the acknowledgement, whichever
+is first; then one intruder.verdict row, expired / stand_down, names the acknowledgement and the window, with a WARN.
+Only the chat that was asked answers: the group's "not sure" names the group (dog_say's, which names no chat,
+is the group's), so the on-call person's "handled" about a held flag never answers the group's question. A reply whose
+chat.db time is before the open question's confirmed post was typed about an earlier flag: one WARN, not read, the
+question stays open (a dry or failed post cannot prove this, and reads as before). UNVERIFIED until the first live run:
+the re-ask's answer read by Jev, a hold across two stops, that ACK_WINDOW_S (1800 s) is long enough for a real "handled"
+on camera, and that a live reply's chat.db time is never before the post it answers."""
 from __future__ import annotations
 import json
 import re
@@ -66,15 +95,20 @@ STATE = config.ROOT / "state.json"
 PENDING = config.ROOT / "pending.json"   # the open question from intruder_alarm ("who dis?!"): the chat's next answer decides
 HEARTBEAT = config.ROOT / "listen.json"  # written every poll: the remote's "group chat" status reads it (GET /chat)
 PENDING_WINDOW_S = 120
+ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
 IDK = re.compile(r"\b(idk|dunno|no idea|dont know|don t know|no clue|not me|nope|who|never seen|stranger)\b")
 GATHER_S = 6.0                # after "yo dog ...", the same sender's next messages within this long join the request
 PRIVATE = re.compile(r"\+\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")   # a phone handle or an email: ui/index.html's redact() pattern
+DID_SAY = {"alarm": "I'm sounding the alarm.", "stand_down": "I'm standing down.", "close": "I'm closing it.",
+           "hold": "I'm holding it open until it's handled."}   # args.say's ending, by what the listener did (17's actions)
 
 Poster = Callable[[str, str, str, str | None, str | None], Any]   # (guid, trigger_key, kind, text, file)
 OWN_OPENERS = ("the dog is doin", "dog doin", "dog done", "on it:", "couldn't", "here's what i see", "yo, we don't know", "noted:",
                "who dis", "stranger danger", "ok, standing down", "ok, done listening",
-               "living room lights", "did:", "listening for", "not sure:")   # how the dog's own text posts begin
+               "living room lights", "did:", "listening for", "not sure:",
+               "heads up:", "do you know them", "ok, closed")   # how the dog's own text posts begin
+REASK = "do you know them? yes or no"   # the one re-ask when a reply is unclear or read below WTDD_REPLY_THRESHOLD
 
 
 def _flag(key: str) -> bool:
@@ -132,6 +166,15 @@ class Listener:
         self.post(to, key, "escalate", text, file)
         return to
 
+    def _open(self, pend: dict[str, Any]) -> None:
+        """This stop's question into pending.json, which holds one. A held flag ("on it") outlives its stop, so an open
+        question it replaces is one WARN naming that flag's trigger: dropped, never silently."""
+        if PENDING.exists():
+            old = json.loads(PENDING.read_text())
+            log("chat", "WARN an open flag is replaced by this stop's question", was=old.get("trigger"),
+                acknowledged=bool(old.get("acknowledged")), age_s=round(time.time() - old.get("t", 0)), now=pend["trigger"])
+        PENDING.write_text(json.dumps(pend))
+
     def _event(self, tool: str, m: dict[str, Any], **extra: Any) -> None:
         append({"step": tool, "agent": "central", "tool": tool, "app": "imessage", "ok": True,
                 "args": {"from": m["sender"], "text": (m["text"] or "")[:200], "guid": m["guid"], **extra},
@@ -142,8 +185,10 @@ class Listener:
         """A look point: nod, photograph, one sentence from the vision model, posted with the photo; a person in frame
         (WTDD_ALARM, or the stop's ask) is flagged to the on-call person with the photo and the round holds for their verdict.
         Keys carry the stop index, so every stop of one wake is its own never-twice claim. A failure is posted as its
-        error, never faked. The stop's decision (wtdd/decide.py) asks when it is not sure: the "not sure" line with the
-        photo, the same pending question and hold as "who dis?!", which wins when both would ask (one question per stop)."""
+        error, never faked. The stop's decision (wtdd/decide.py) carries its action: escalate sends the photo and the
+        heads-up line to the on-call person (a heads_up question, the hold); ask posts the "not sure" line with the photo
+        to the group (a decide question, the hold); continue asks nothing. "who dis?!" wins when both would ask (one
+        question per stop). Every pending names the question it asked."""
         from .. import tools
         from ..tools.dog_say import look_and_see
         k = m["guid"] + (f":{at}" if at is not None else "")
@@ -165,35 +210,105 @@ class Listener:
                 # its own key, since a send that failed after its claim has consumed alarm:<k> and the stop is never re-flagged)
                 self.say(f"escalate-fail:{k}", f"couldn't escalate: {type(e).__name__}: {str(e)[:100]}")
                 return
-            PENDING.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": seen.get("file"), "seconds": 5,
-                                           "trigger": f"alarm:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes")}))
+            self._open({"kind": "who_dis", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                        "trigger": f"alarm:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes"),
+                        "question": "who dis?!"})
             self.await_verdict(VERDICT_WAIT_S)
-        dec = seen["decision"]   # look_and_see always returns one: {label, p, needs_person, model} or {error}
+        dec = seen["decision"]   # look_and_see always returns one: {label, p, needs_person, model, action} or {error}
         if "error" in dec:
             self.say(f"decide:{k}", f"couldn't decide: {dec['error']}")
-        elif dec["needs_person"] and not (seen.get("person") and ask):
+        elif seen.get("person") and ask:
+            pass   # one question per stop: the who-dis above already asked the person on call
+        elif dec["action"] == "escalate":   # the table on the map sends this label to the person on call, at any p
+            from ..decide import heads_up_line
+            line = heads_up_line(dec, at)
+            try:
+                to = self.escalate(f"decide:{k}", line, seen.get("file"))
+            except Exception as e:  # noqa: BLE001  (nobody to flag, or the flag failed: posted to the group as its error, no hold)
+                self.say(f"escalate-fail:{k}", f"couldn't escalate: {type(e).__name__}: {str(e)[:100]}")
+                return
+            self._open({"kind": "heads_up", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                        "trigger": f"decide:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes"),
+                        "decision": dec, "question": line})
+            self.await_verdict(VERDICT_WAIT_S)
+        elif dec["action"] == "ask":
             from ..decide import ask_line
-            self.say(f"decide:{k}", ask_line(dec), seen.get("file"))
-            PENDING.write_text(json.dumps({"kind": "decide", "t": time.time(), "file": seen.get("file"), "seconds": 5,
-                                           "trigger": f"decide:{k}", "classes": (seen.get("detector") or {}).get("classes"),
-                                           "decision": dec}))
+            line = ask_line(dec)
+            self.say(f"decide:{k}", line, seen.get("file"))
+            self._open({"kind": "decide", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                        "trigger": f"decide:{k}", "chat": self.guid, "classes": (seen.get("detector") or {}).get("classes"),
+                        "decision": dec, "question": line})
             self.await_verdict(VERDICT_WAIT_S)
 
     def await_verdict(self, seconds: float) -> bool:
         """After "who dis?!" at a stop, the listener is inside the round, so it reads the chats here: the asked chat's
-        next message decides (verdict(): "idk" = STRANGER DANGER + the alarm, else stand down). No answer in `seconds` =
-        the question is withdrawn and the round goes on; that is logged, never faked."""
+        next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, within the
+        same `seconds`. No answer in `seconds` = the question is withdrawn and the round goes on; that is logged, never
+        faked, and a re-ask nobody answered is its unclear verdict row (_drop)."""
         t0 = time.monotonic()
         log("chat", "who dis: waiting for the verdict", seconds=seconds)
         while time.monotonic() - t0 < seconds:
             for m in self.read():
                 if m.get("text") and self.allowed(m) and self.verdict(m):
+                    pend = json.loads(PENDING.read_text()) if PENDING.exists() else {}
+                    if pend.get("reasked") and not pend.get("acknowledged"):
+                        continue   # asked once more: hold for that answer
                     return True
                 log("chat", "who dis: a message while holding, not the verdict: not handled", chat=m["chat"], chars=len(m.get("text") or ""))
             time.sleep(1.0)
-        PENDING.unlink(missing_ok=True)
-        log("chat", "who dis: no answer at the stop, moving on", waited_s=round(time.monotonic() - t0))
+        self._drop(json.loads(PENDING.read_text()) if PENDING.exists() else {}, "who dis: no answer at the stop, moving on",
+                   waited_s=round(time.monotonic() - t0))
         return False
+
+    def _row(self, pend: dict[str, Any], reply: dict[str, Any], fields: dict[str, Any], stub: bool,
+             verdict: str, meaning: str | None, p: float | None, did: str) -> None:
+        """One intruder.verdict row: the reply it rests on (from, text, guid, chat), the flag it answers, the reply-clock
+        fields; a reading by the DEMO_CACHE stub labels it cached/stub (unread: there was no reading at all). S10's by,
+        say and decided on every row: say quotes the reply (phones and emails read "a member"), the verdict, and what
+        the listener did (DID_SAY)."""
+        by = HOUSEMATES.get(reply["from"]) or "a member"   # S10: the name on camera (the page's Receipts): never the handle
+        ms = fields.get("acked_ms", fields.get("closed_ms"))   # after a hold the reply's time from the flag is closed_ms
+        say = (f"{by} answered first: '{PRIVATE.sub('a member', reply['text'])[:80]}' ({verdict})"
+               + (f" after {ms // 1000} s" if ms is not None else "") + ". " + DID_SAY[did])
+        append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
+                "args": {"from": reply["from"], "text": reply["text"], "guid": reply["guid"], "asked": pend.get("trigger"), **fields,
+                         "chat": reply["chat"], "by": by, "say": say[:1].upper() + say[1:], "decided": True},
+                "state_before": None, "state_after": {"verdict": verdict, "meaning": meaning, "p": p, "action": did},
+                "response_or_error": None, "latency_ms": 0,
+                **({"cached": True, "source": "stub"} if stub and verdict != "unread" else {})})
+        log("chat", "VERDICT", by=hname(reply["from"]), verdict=verdict, meaning=meaning or "", p=p, action=did,
+            text=reply["text"][:60], **{k: v for k, v in fields.items() if k.endswith("_ms")})
+
+    def _expired(self, pend: dict[str, Any]) -> bool:
+        """An open question past its window is dropped (_drop) and True. PENDING_WINDOW_S from its post; an acknowledged
+        flag is exempt from that and lasts ACK_WINDOW_S from the acknowledgement (a pending held before this names none:
+        from its post)."""
+        held = pend.get("acknowledged")
+        since = ((pend.get("held") or {}).get("t") or pend.get("t", 0)) if held else pend.get("t", 0)
+        if time.time() - since <= (ACK_WINDOW_S if held else PENDING_WINDOW_S):
+            return False
+        self._drop(pend, "who dis: no answer in time, standing down")
+        return True
+
+    def _drop(self, pend: dict[str, Any], unanswered: str, **kv: Any) -> None:
+        """An open question withdrawn with no final reading (the hold timed out, or its window expired), never silently.
+        A held flag never closed: one intruder.verdict row, expired / stand_down, naming the acknowledgement it held on and
+        ACK_WINDOW_S, with no acked_ms (the hold's row has the flag's one), and a WARN. A re-ask nobody answered: one row,
+        unclear / stand_down, from the first reply's reading and with its acked fields (the person answered then).
+        Nobody answered at all: the `unanswered` line, no row (no reply)."""
+        PENDING.unlink(missing_ok=True)
+        first, held = pend.get("first"), pend.get("held")
+        if pend.get("acknowledged"):
+            if held:
+                self._row(pend, held, {"shift_id": held["shift_id"], "window_s": ACK_WINDOW_S}, held["stub"],
+                          "expired", held["meaning"], held["p"], "stand_down")
+            log("chat", "WARN a held flag was never closed: standing down", trigger=pend.get("trigger"),
+                held_on=(held or {}).get("text", "")[:40], window_s=ACK_WINDOW_S, **kv)
+        elif pend.get("reasked") and first:
+            self._row(pend, first, pend.get("acked") or {}, first["stub"], "unclear", first["meaning"], first["p"], "stand_down")
+            log("chat", "re-ask unanswered: standing down, unclear", trigger=pend.get("trigger"), **kv)
+        else:
+            log("chat", unanswered, **kv)
 
     def wake_show(self, m: dict[str, Any]) -> None:
         """The wake demo, in Johnny's order: the picture, "dog doin" as the walk starts, the walk (wtdd/field.py, the same
@@ -261,38 +376,80 @@ class Listener:
         return True
 
     def verdict(self, m: dict[str, Any]) -> bool:
-        """The chat answering "who dis?!" (intruder_alarm): "idk" and its kin mean a stranger, so "STRANGER DANGER!!!"
-        three times and light_alarm; anything else stands the dog down with "ok". One intruder.verdict row either way.
-        An answer to a decide question (pending kind "decide", "not sure: ...") is the same row and always stands down:
-        only "who dis?!" can sound the alarm, so WTDD_ALARM and the map's ask flags still gate it."""
+        """The asked chat answering an open question, read typed by decide.read_reply (its reply.decided row), then one
+        intruder.verdict row {verdict, meaning, p, action} and what the meaning asks for. stranger: "STRANGER DANGER!!!"
+        three times and light_alarm, only when the question was "who dis?!" (kind who_dis); a heads_up (17) or decide
+        (02) question stands down, so WTDD_ALARM and the map's ask flags still gate the alarm. standing_down: "ok,
+        standing down"; handled: "ok, closed"; acknowledged: the question stays open for handled (ACK_WINDOW_S from
+        now, exempt from PENDING_WINDOW_S; _expired). Unclear or below WTDD_REPLY_THRESHOLD: one re-ask (the pending's
+        question becomes it, and keeps this reply's acked fields and reading), no verdict row yet, then stand down as
+        unclear (unanswered: _drop writes that row). After a hold, acked_ms is the hold row's; this row gets closed_ms.
+        Rows read by the stub say cached/stub. A failed reading is posted as its error and stands down (verdict unread),
+        never the regex. A halt (00) is never read here. Only the chat that was asked answers (a decide question with no
+        chat is dog_say's, posted to the group). A reply stamped before the question's confirmed post answers an earlier
+        flag: one WARN, not read, the question stays open. The question read is the one posted, never a guess."""
         if not PENDING.exists():
             return False
         pend = json.loads(PENDING.read_text())
-        if time.time() - pend.get("t", 0) > PENDING_WINDOW_S:
-            PENDING.unlink(missing_ok=True)
-            log("chat", "who dis: no answer in time, standing down")
+        if self._expired(pend):
             return False
         chat = m.get("chat") or self.guid
-        if pend.get("chat") and chat != pend["chat"]:   # only the chat that was asked answers (the on-call person, not the group)
+        kind = pend.get("kind")
+        asked_in = pend.get("chat") or (self.guid if kind == "decide" else None)   # dog_say's decide names none: it posted to the group
+        if asked_in and chat != asked_in:   # only the chat that was asked answers (the on-call person, not the group, and back)
+            return False
+        if kind == "halt":   # item 00's local stop: resumed by its own word or button, never by a model reading
             return False
         if self.group_oncall and (is_wake(m["text"]) or match_command(m["text"]) or is_chat(m["text"])):   # S10: not an answer, the group's own
             return False
         from .. import tools
-        stranger = pend.get("kind") != "decide" and bool(IDK.search(normalize(m["text"])))
-        PENDING.unlink(missing_ok=True)
-        acked = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
-        by = HOUSEMATES.get(m["sender"]) or "a member"   # the name on camera (the page's Receipts): never the handle
-        meaning = "answered" if pend.get("kind") == "decide" else "stranger" if stranger else "known"
-        after = f" after {acked['acked_ms'] // 1000} s" if acked["acked_ms"] is not None else ""
-        say = (f"{by} answered first: '{PRIVATE.sub('a member', m['text'])[:80]}' ({meaning}){after}. "
-               + ("I'm sounding the alarm." if stranger else "I'm standing down."))
-        append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
-                "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger"), **acked, "chat": chat,
-                         "by": by, "say": say[:1].upper() + say[1:], "decided": True},
-                "state_before": None, "state_after": {"verdict": "stranger" if stranger else "known"}, "response_or_error": None, "latency_ms": 0})
-        log("chat", "VERDICT", by=hname(m["sender"]), verdict="stranger" if stranger else "known", text=m["text"][:60], acked_ms=acked["acked_ms"])
-        if not stranger:
-            self.say(f"ok:{m['guid']}", "ok, standing down", guid=chat)
+        from ..decide import ask_line, read_reply
+        if kind == "who_dis" and "question" not in pend:
+            asked = "who dis?!"   # intruder_alarm's pending names none; this is what it posted (intruder_alarm.ASK)
+        elif kind == "decide" and "question" not in pend:
+            asked = ask_line(pend["decision"])   # dog_say.run's pending names none; this is the line it posted (dog_say.py:214)
+        else:
+            asked = pend["question"]   # listen names it on every kind it opens; none here is a KeyError, never a guessed question
+        now = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
+        if (now.get("acked_error") or "").startswith("ValueError: clock fault"):   # typed before this question's confirmed post:
+            log("chat", "WARN a reply older than the open question is not its answer", trigger=pend.get("trigger"),
+                reply=m["guid"], why=now["acked_error"][:120])   # it answers an earlier flag; this one stays open
+            return False
+        # one acked_ms per flag (numbers.py and 10's record count every one): after a hold, the hold's row has it and this
+        # reply's time from the flag is closed_ms; after a re-ask, the first reply's time stands (the person answered then)
+        acked = {k.replace("acked_", "closed_"): v for k, v in now.items()} if pend.get("acknowledged") else (pend.get("acked") or now)
+        stub = not config.maybe("JEV_API_KEY")   # read_reply's own test: its DEMO_CACHE reading labels this verdict row too
+        reply = {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "chat": chat}
+
+        def row(verdict: str, meaning: str | None, p: float | None, did: str) -> None:
+            self._row(pend, reply, acked, stub, verdict, meaning, p, did)
+
+        try:
+            r = read_reply(asked, m["text"], trigger=pend.get("trigger"), chat=chat, guid=m["guid"], **{"from": m["sender"]})
+        except Exception as e:  # noqa: BLE001  (its reply.decided row has it; posted, stood down, never the regex)
+            PENDING.unlink(missing_ok=True)
+            row("unread", None, None, "stand_down")
+            self.say(f"unread:{m['guid']}", f"couldn't read the reply: {type(e).__name__}: {str(e)[:100]}", guid=chat)
+            return True
+        if r["action"] == "reask" and not pend.get("reasked"):   # the next reply answers the re-ask; none, and _drop rows this one
+            PENDING.write_text(json.dumps({**pend, "reasked": True, "question": REASK, "acked": acked,
+                                           "first": {**reply, "meaning": r["meaning"], "p": r["p"], "stub": stub}}))
+            log("chat", "reply unclear: asked once more", meaning=r["meaning"], p=r["p"])
+            self.say(f"reask:{m['guid']}", REASK, guid=chat)
+            return True
+        verdict, did = {"reask": ("unclear", "stand_down"), "alarm": ("stranger", "alarm" if kind == "who_dis" else "stand_down"),
+                        "stand_down": ("known", "stand_down"), "close": ("handled", "close"),
+                        "hold": ("acknowledged", "hold")}[r["action"]]
+        if did == "hold":   # on their way: the question stays open for "handled", ACK_WINDOW_S from now (_expired)
+            PENDING.write_text(json.dumps({**pend, "acknowledged": True, "held": {**reply, "meaning": r["meaning"], "p": r["p"],
+                                           "stub": stub, "shift_id": acked.get("shift_id"), "t": time.time()}}))
+        else:
+            PENDING.unlink(missing_ok=True)
+        row(verdict, r["meaning"], r["p"], did)
+        if did == "hold":
+            return True
+        if did != "alarm":
+            self.say(f"ok:{m['guid']}", "ok, closed" if did == "close" else "ok, standing down", guid=chat)
             return True
         self.say(f"danger:{m['guid']}", "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!", guid=chat)
         try:
@@ -395,9 +552,8 @@ class Listener:
         if self.armed_by and not self.armed:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None
-        if PENDING.exists() and time.time() - json.loads(PENDING.read_text()).get("t", 0) > PENDING_WINDOW_S:
-            PENDING.unlink(missing_ok=True)
-            log("chat", "who dis: no answer in time, standing down")
+        if PENDING.exists():
+            self._expired(json.loads(PENDING.read_text()))
         msgs = self.read()
         for m in msgs:
             self.handle(m)

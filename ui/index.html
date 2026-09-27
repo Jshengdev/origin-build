@@ -92,6 +92,30 @@
   .fplbl .fp-zero { fill: var(--warn); } .fplbl .bad { fill: var(--bad); }
   .fplbl .fp-run { fill: var(--live, #0b0dc4); pointer-events: all; cursor: pointer; }
   /* 15 · floorplan · end */
+  /* 16 · blob-labels · start */
+  .bl .ring { fill: none; stroke: #262323; stroke-width: 2.5; pointer-events: stroke; cursor: help; }   /* an outline only (15-5): a lamp under it still shows; hover for both verdicts */
+  .bl.failed .ring { stroke: var(--bad); stroke-dasharray: 4 3; }
+  .bllbl { font-size: 15px; } .blgeo { font-size: 11px; opacity: .8; } .blwhy { font-size: 13px; }
+  .bl .bad, .blkey .bad { fill: var(--bad); } .blkey .bl-zero { fill: var(--warn); }
+  .bl-key { flood-color: #fbfaf7; flood-opacity: .9; }   /* each legend line on a box its own width, not a band (15-5) */
+  .blkey { filter: url(#bl-key); }
+  .blkey .bl-run { fill: var(--live, #0b0dc4); pointer-events: all; cursor: pointer; }
+  /* 16 · blob-labels · end */
+  /* 17 · decision-to-action · start */
+  .pin17 { font-weight: 600; fill: var(--live, #0b0dc4); } .pin17.bad { fill: var(--bad); }   /* just above the stop's own label */
+  .rules17 { font-family: var(--mono); font-size: 11px; line-height: 1.7; margin-bottom: var(--gap-group); } .rules17 .mono { opacity: .6; }
+  .decided17 { font-family: var(--mono); font-size: 10.5px; line-height: 1.55; }
+  .decided17 > div { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(38,35,35,.06); }
+  /* 17 · decision-to-action · end */
+  /* 19 · scout-zones · start */
+  .scout-cell { fill: #dc2626; stroke: none; pointer-events: none; }   /* one 6 px square per proposed LiDAR cell, as served */
+  .scout-hull { fill: rgba(220,38,38,.08); stroke: #dc2626; stroke-width: 2; stroke-dasharray: 3 3; pointer-events: none; }   /* the padded hull: a stated rule, dashed while proposed */
+  .scout-zone { fill: rgba(220,38,38,.22); stroke: #dc2626; stroke-width: 3; pointer-events: none; }   /* a person confirmed it: solid */
+  .scout image { pointer-events: none; }
+  .scout-failed { color: var(--bad); font-family: var(--mono); font-size: 11px; margin: var(--gap-in) 0; }
+  input.scout-by { font: inherit; font-size: 12px; width: 170px; padding: 5px 8px; border: 0; border-radius: 8px; background: #fff; box-shadow: inset 0 0 0 1px rgba(38,35,35,.15); }
+  input.scout-by:placeholder-shown { box-shadow: inset 0 0 0 1px var(--bad); }
+  /* 19 · scout-zones · end */
 </style>
 </head>
 <body>
@@ -329,6 +353,8 @@ function App() {
               <polyline class="actual" points=${(dog?.follow?.trace || []).map(p => p.join(",")).join(" ")}/>
               <g transform="translate(12 70)"><line class="planned" x1="0" y1="0" x2="40" y2="0"/><text class="lbl" x="48" y="6">planned</text><line class="actual" x1="150" y1="0" x2="190" y2="0"/><text class="lbl" x="198" y="6">actual</text></g></g>`}
             <${ObjectsLayer}/>
+            <${BlobsLayer}/>
+            <${ScoutLayer} map=${map}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
               const m = scale?.px_per_m, seg = m && (0.70 * m - 0.31 * m) / 2, head = m && [x + seg * Math.cos(h), y + seg * Math.sin(h)], tail = m && [x - seg * Math.cos(h), y - seg * Math.sin(h)];   // S9: the body, 0.70 m x 0.31 m, centred on the reported position (its middle); no scale yet = the dot alone
@@ -342,6 +368,7 @@ function App() {
                 <text class="lbl" x=${x + 18} y=${y + 32}>dog${dogDrag ? " · release to set" : ""} · ${Math.round(D.heading_deg)}°</text></g>`;
             })()}
             ${dot && html`<circle class="field" cx=${dot[0]} cy=${dot[1]} r=${ent.radius_px || 220}/><circle class="dot-halo" cx=${dot[0]} cy=${dot[1]} r="26"/><circle class="dot" cx=${dot[0]} cy=${dot[1]} r="11"/>`}
+            <${DecidePins} map=${map} ledger=${ledger}/>
           </svg>`}
         </div>
         <div class="panel">
@@ -392,6 +419,8 @@ function App() {
                 </div></div>` : html`<div class="hint">no look yet · python -m wtdd dog_say</div>`}`;
           })()}
         </div>
+        <${ScoutPanel} map=${map} setMap=${setMap}/>
+        <${DecideRules} ledger=${ledger}/>
         <div class="panel"><h2>Receipts · ledger.jsonl</h2>
           <div class="row tight"><span class=${"mono" + (shiftNow?.error ? " bad" : "")}>${shiftNow ? shiftNow.error || `run · ${shiftNow.shift_id} · ${shiftNow.source}` : "run · …"}</span>
             <button class="small" onClick=${() => startRun("morning")}>start morning run</button><button class="small" onClick=${() => startRun("night")}>start night run</button>
@@ -494,7 +523,7 @@ function ObjectsLayer() {
       ${x.thumb && html`<image href=${x.thumb} x=${cx + 14} y=${cy - 52} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
       <text class="lbl objlbl" x=${cx + 14} y=${cy + 8}>${x.label} · ${(+x.p).toFixed(2)}${x.stale ? " · stale" : ""}</text>
       ${line && html`<text class="lbl objmsg" x=${cx + 14} y=${cy + 24}>${line}</text>`}</g>`; })}
-    <text class="lbl objlbl" x="12" y="48">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
+    <text class="lbl objlbl" x="12" y="172">objects ${o ? all.length : "…"}${stale ? ` · ${stale} stale` : ""}${off ? ` · ${all.length - placed.length} unplaced: ${off.why}` : ""}${o?.windows != null ? ` · ${o.windows} windows` : ""}${o?.fov_deg != null ? ` · fov ${o.fov_deg}°` : ""}${o?.source ? ` · ${o.source}` : ""}${o?.why ? ` · ${o.why}` : ""}${o?.error ? ` · FAILED ${o.error}` : ""}</text></g>`;
 }
 // 07 · objects · end
 // 15 · floorplan · start
@@ -524,6 +553,136 @@ function FloorPlanLayer() {
     ${(f?.why || f?.error) && html`<text class="lbl fplbl" x="12" y="100">${f.why ? (f.ok === false ? html`<tspan class="bad">${f.why}</tspan>` : f.why) : ""}${f.error ? html`${f.why ? " · " : ""}<tspan class="bad">FAILED ${f.error}</tspan>` : ""}</text>`}</g>`;
 }
 // 15 · floorplan · end
+// 16 · blob-labels · start
+// Blob labels (GET /dog/blobs, wtdd/dog/blobs.py): one outline ring per label at its blob's centre, the model's word and
+// p beside it ("shelf · 0.91", plus "· stub" or "· fixture" when no model said it) and the geometry's own verdict under
+// it; both verdicts in the ring's title. A FAILED label is red with its error, never a word. The grey of a moved run is
+// GET /dog/floorplan's (15's layer draws it); this layer only names, and its "greyed" is the runs that same erase moved
+// (GET /dog/blobs `moved`). Its own 2 s poll, with or without a dog. The legend
+// always draws, below 15's, on a text-sized box; a zero is yellow, a FAILED press or read is red with the reason. "▶ name
+// blobs" is the press (POST /dog/blobs: one blob.labelled row per blob in the camera's view, or one failed row). The
+// page computes nothing.
+function BlobsLayer() {
+  const [b, setB] = useState(null);
+  const get = () => fetch(`${API}/dog/blobs`).then(r => r.json()).then(setB).catch(e => setB({ labels: [], error: `GET /dog/blobs failed: ${e}` }));
+  useEffect(() => { get(); const t = setInterval(get, 2000); return () => clearInterval(t); }, []);
+  const press = e => { e.stopPropagation(); fetch(`${API}/dog/blobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ threshold: 3 }) })
+    .then(r => r.json()).then(o => o.error ? setB(p => ({ ...(p || {}), error: `POST /dog/blobs failed: ${o.error}` })) : get())
+    .catch(err => setB(p => ({ ...(p || {}), error: `POST /dog/blobs failed: ${err}` }))); };
+  const all = b?.labels || [], failed = all.filter(x => x.label == null).length, greyed = (b?.moved || []).length;
+  const tag = x => x.source && x.source !== "live" ? ` · ${x.source}` : "";
+  const why = b?.why || b?.error ? html`<text class="lbl blkey blwhy" x="12" y="148">${b.why ? (b.why.includes("FAILED") ? html`<tspan class="bad">${b.why}</tspan>` : b.why) : ""}${b.error ? html`${b.why ? " · " : ""}<tspan class="bad">FAILED ${b.error}</tspan>` : ""}</text>` : null;
+  return html`<g>
+    <defs><filter id="bl-key" x="0" y="0" width="1" height="1"><feFlood class="bl-key"/><feComposite in="SourceGraphic"/></filter></defs>
+    ${all.filter(x => x.pos_px).map(x => { const [cx, cy] = x.pos_px, bad = x.label == null, end = cx > 700, tx = end ? cx - 16 : cx + 16;
+      return html`<g key=${x.blob_id} class=${"bl" + (bad ? " failed" : "")} data-id=${x.blob_id} data-label=${bad ? "FAILED" : x.label}>
+      <title>geometry: ${x.geometry_verdict} · model: ${bad ? `FAILED ${x.error}` : `${x.label} ${(+x.p).toFixed(2)}`}${tag(x)}</title>
+      <circle class="ring" cx=${cx} cy=${cy} r="11"/>
+      <text class="lbl bllbl" x=${tx} y=${cy - 3} text-anchor=${end ? "end" : "start"}>${bad ? html`<tspan class="bad">label FAILED: ${x.error}</tspan>` : `${x.label} · ${(+x.p).toFixed(2)}${tag(x)}`}</text>
+      <text class="lbl blgeo" x=${tx} y=${cy + 13} text-anchor=${end ? "end" : "start"}>geometry: ${x.geometry_verdict}</text></g>`; })}
+    <text class="lbl blkey" x="12" y="124">blobs · ${b ? html`${all.length ? `${all.length} labelled` : html`<tspan class="bl-zero">0 labelled</tspan>`} · ${greyed} greyed · ${failed ? html`<tspan class="bad">${failed} FAILED</tspan>` : "0 FAILED"}${b.source ? ` · ${b.source}` : ""}` : "…"} · <tspan class="bl-run" onClick=${press}>▶ name blobs</tspan></text>
+    ${why}</g>`;
+}
+// 16 · blob-labels · end
+// 17 · decision-to-action · start
+// A stop's decision and the on-call person's reply, as served: GET /rules (decide.rules(): the table's lines, its source,
+// both thresholds, the "unconfirmed" band) and the decided / reply.decided rows the page already polls (GET /ledger).
+// The page formats; it decides nothing. A failed row, or a failed /rules, is red with its reason, never an absence.
+function useRules17() {
+  const [rules, setRules] = useState(null);
+  useEffect(() => { fetch("/rules").then(r => r.json()).then(setRules).catch(e => setRules({ error: `${e}` })); }, []);
+  return rules;
+}
+const p17 = x => (typeof x === "number" ? x.toFixed(2) : "?");
+const stub17 = r => (r.source === "stub" ? " · stub" : "");   // a DEMO_CACHE reading's canned number never reads as Jev's
+function DecidePins({ map, ledger }) {   // each stop's newest decision on its pin: a label is never drawn without its number
+  const rules = useRules17(), band = rules?.unconfirmed;
+  return html`<g>${(map.stops || []).map(i => {
+    const r = [...ledger].reverse().find(x => x.tool === "decided" && (x.args || {}).stop === i), pt = map.path[i];
+    if (!r || !pt) return null;
+    const d = r.state_after || {}, unconfirmed = band && d.p >= band[0] && d.p < band[1];
+    return html`<text key=${"d17-" + i} class=${"lbl pin17" + (r.ok ? "" : " bad")} x=${pt[0] + 16} y=${pt[1] - 14}>${r.ok ? `${d.label} ${p17(d.p)}${unconfirmed ? " · unconfirmed" : ""} · ${d.action}${stub17(r)}` : "couldn't decide"}</text>`;
+  })}</g>`;
+}
+function DecideRules({ ledger }) {   // the Rules panel: what a stop does, then the decided and done columns, typed
+  const rules = useRules17();
+  const rows = [...ledger].filter(r => r.tool === "decided" || r.tool === "reply.decided").reverse().slice(0, 12);
+  const line = r => {
+    const d = r.state_after || {}, a = r.args || {};
+    if (r.tool === "decided") return r.ok ? `decided · ${d.label} ${p17(d.p)} · ${d.action} · ${a.rule}${stub17(r)}` : html`<span class="bad">decided FAILED · ${redact(r.response_or_error)}</span>`;
+    return r.ok ? `"${redact(a.text)}" → ${d.meaning} ${p17(d.p)}${d.named && d.named !== "not_said" ? ` · ${d.named} ${p17(d.p_named)}` : ""}${stub17(r)}`
+      : html`<span class="bad">couldn't read the reply · ${redact(r.response_or_error)}</span>`;
+  };
+  return html`<div class="panel"><h2>Rules · what a stop does</h2>
+    ${!rules ? html`<div class="mono">reading /rules…</div>` : rules.error ? html`<div class="bad">rules FAILED: ${rules.error}</div>`
+      : html`<div class="rules17">${rules.lines.map(l => html`<div key=${l}>${l}</div>`)}<div class="mono">table from ${rules.source} · replies read at ${rules.reply_threshold}</div></div>`}
+    <h2>Decided · done</h2>
+    <div class="decided17">${rows.length ? rows.map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span>${line(r)}</span></div>`) : html`<div class="mono">no decision yet</div>`}</div>
+  </div>`;
+}
+// 17 · decision-to-action · end
+// 19 · scout-zones · start
+// The scout's no-go zones (GET /dog/scout, wtdd/dog/scout_zones.py). An auto zone (a hazard at p >= the threshold, on
+// ui/map.json at once; served in s.zones, so it shows without a page reload) is solid, "auto · label · p" (· stub when
+// the DEMO_CACHE stub answered). ScoutLayer draws a proposal (the feed opens none now; kept) as served: its LiDAR cells
+// as red squares, the padded hull dashed (a stated rule on those cells, never a shape a model drew), the photo and
+// "kind → label · p · proposed"; a zone a person confirmed (a map.zones entry with source "scout") is solid with who
+// confirmed it. ScoutPanel is the tap: a required name, dismiss per auto zone (with s._version, the map it was served
+// from), confirm or dismiss per proposal (POST /dog/scout), a failed tap and a failed model call named in red, zero says
+// why. Polled every 2 s with or without a dog. The page computes nothing: cells_px and poly are drawn as the API serves them.
+function useScout() {
+  const [s, setS] = useState(null);
+  const poll = () => fetch(`${API}/dog/scout`).then(r => r.json()).then(setS).catch(e => setS({ n: 0, proposals: [], failed: [], error: `GET /dog/scout failed: ${e}` }));
+  useEffect(() => { poll(); const t = setInterval(poll, 2000); return () => clearInterval(t); }, []);
+  return [s, poll];
+}
+const scoutTag = z => `${z.kind} → ${z.label} · ${(+z.p).toFixed(2)} · proposed${z.app === "stub" ? " · stub" : ""}`;
+const scoutAuto = z => `auto · ${z.label} · ${(+z.p).toFixed(2)}${z.app === "stub" ? " · stub" : ""}`;
+const scoutPts = poly => poly.map(p => p.join(",")).join(" ");
+function ScoutLayer({ map }) {
+  const [s] = useScout();
+  const props = s?.proposals || [], auto = s?.zones || [], zones = (map?.zones || []).filter(z => z.source === "scout" && z.nogo === true && z.by !== "auto");
+  return html`<g>
+    ${[...zones, ...auto].map(z => html`<g key=${z.name} class="scout" data-zone=${z.name}>
+      <polygon class="scout-zone" points=${scoutPts(z.poly)}/>
+      <text class="lbl" x=${z.poly[0][0]} y=${Math.min(...z.poly.map(p => p[1])) - 10}>${z.by === "auto" ? scoutAuto(z) : `${z.name} · ${z.label} · confirmed by ${z.by}${z.app === "stub" ? " · stub" : ""}`}</text></g>`)}
+    ${props.map(z => { const x = Math.min(...z.poly.map(p => p[0])), y0 = Math.min(...z.poly.map(p => p[1])), y1 = Math.max(...z.poly.map(p => p[1])); return html`<g key=${z.id} class="scout" data-id=${z.id}>
+      <polygon class="scout-hull" points=${scoutPts(z.poly)}/>
+      <path class="scout-cell" data-cells=${z.cells_px.length} d=${z.cells_px.map(p => `M${p[0] - 3} ${p[1] - 3}h6v6h-6z`).join("")}/>
+      ${z.thumb && html`<image href=${z.thumb} x=${x - 56} y=${y0} width="48" height="48" preserveAspectRatio="xMidYMid slice"/>`}
+      <text class="lbl" x=${x} y=${y1 + 22}>${z.kind} → ${z.label} · ${(+z.p).toFixed(2)}<tspan x=${x} dy="18">proposed${z.app === "stub" ? " · stub" : ""}</tspan></text></g>`; })}
+    <text class="lbl" x="12" y="68">scout · ${s ? `${auto.length} auto · ${s.n} proposed` : "…"}${zones.length ? ` · ${zones.length} confirmed` : ""}${s?.failed?.length ? ` · ${s.failed.length} FAILED` : ""}${s?.source ? ` · ${s.source}` : ""}${s?.why ? ` · ${s.why}` : ""}${s?.error ? ` · FAILED ${s.error}` : ""}</text></g>`;
+}
+function ScoutPanel({ map, setMap }) {
+  const [s, poll] = useScout();
+  const [by, setBy] = useState(() => localStorage.getItem("wtdd.scout.by") || "");
+  const [err, setErr] = useState({});   // proposal id -> its last failed tap, shown on its line
+  const [panelErr, setPanelErr] = useState(null);   // a failed map reload after a confirm: the proposal's line is gone, so the panel says it
+  const name = by.trim();
+  const tap = (id, action, v = map?._version) => post("/dog/scout", { id, action, by: name, _version: v }).then(r => r.json())
+    .then(o => { setErr(e => ({ ...e, [id]: o.ok ? null : `${action} FAILED: ${o.error}` })); if (o.ok) fetch("/map").then(r => r.ok ? r.json() : Promise.reject(`GET /map ${r.status}`)).then(m => { setMap(m); setPanelErr(null); }).catch(e => setPanelErr(`map reload FAILED after ${action} ${id}: ${e} · reload the page before the next confirm`)); poll(); })
+    .catch(e => setErr(x => ({ ...x, [id]: `${action} FAILED: ${e}` })));
+  return html`<div class="panel"><h2 style=${{ marginBottom: "var(--gap-in)" }}>Scout · no-go</h2>
+    <div class="row tight"><b>Scout · ${s ? `${(s.zones || []).length} auto · ${s.n} proposed` : "…"}</b>
+      <label class="k">your name <input class="scout-by" placeholder="required" value=${by} onInput=${e => { setBy(e.target.value); localStorage.setItem("wtdd.scout.by", e.target.value); }}/></label></div>
+    ${(s?.zones || []).map(z => html`<div class="row tight" key=${z.name}>
+      <span>${z.name} · ${scoutAuto(z)} · ${z.cells.length} cells</span>
+      <button class="small" disabled=${!name} title="takes this auto zone off the map, in your name" onClick=${() => tap(z.name, "dismiss", s._version)}>dismiss</button>
+      ${err[z.name] && html`<span class="scout-failed">${err[z.name]}</span>`}</div>`)}
+    ${(s?.proposals || []).map(z => html`<div class="row tight" key=${z.id}>
+      ${z.thumb && html`<img src=${z.thumb} style=${{ width: 40, height: 40, objectFit: "cover", borderRadius: 4 }}/>`}
+      <span>${z.id} · ${scoutTag(z)} · ${z.cells.length} cells · ${z.dist_m} m</span>
+      <button class="small key" disabled=${!name} title="makes it a no-go zone on the map (04's rule), in your name" onClick=${() => tap(z.id, "confirm")}>confirm</button>
+      <button class="small" disabled=${!name} onClick=${() => tap(z.id, "dismiss")}>dismiss</button>
+      ${err[z.id] && html`<span class="scout-failed">${err[z.id]}</span>`}</div>`)}
+    ${(s?.failed || []).map((f, i) => html`<div class="scout-failed" key=${"f" + i}>scout: ${f.stage ? `${f.stage} failed` : "model call failed"}: ${f.error} · ${f.kind} ${f.object_id} · ${(f.ts || "").slice(11)}</div>`)}
+    ${s?.error && html`<div class="scout-failed">FAILED ${s.error}</div>`}
+    ${panelErr && html`<div class="scout-failed">${panelErr}</div>`}
+    ${s && s.n === 0 && s.why && html`<div class="hint">${s.why}</div>`}
+    <div class="mono">scout adds what its eyes name a hazard at p >= the threshold; openings are drawn by a person${s?.source ? ` · ${s.source}` : ""}</div>
+  </div>`;
+}
+// 19 · scout-zones · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
 </script>
 </body>
