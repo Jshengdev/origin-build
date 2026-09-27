@@ -1,6 +1,6 @@
 # The API contract
 
-Every route `wtdd/api.py` serves on main (read at 4665be9), what it takes and what it answers. It is read from the handler code and the
+Every route `wtdd/api.py` serves on main (read at 4665be9, checked against 681501b), what it takes and what it answers. It is read from the handler code and the
 functions each route calls (`wtdd/dog/session.py`, `scout_zones.py`, `objects.py`, `occupancy.py`, `floorplan.py`,
 `record.py`, `shift.py`, `decide.py`), then checked against a dry API (no dog) with curl. The shapes are today's, including
 their inconsistencies: a client builds against these, and a change to one is a change to this file.
@@ -35,7 +35,11 @@ their inconsistencies: a client builds against these, and a change to one is a c
   - `/dog/scout`: `{n: 0, proposals: [], failed: [], error}`
 - POST `/tools/<name>` adds the call: `{ok: false, tool, args, error}`.
 - POST `/dog/blobs` has no `ok` key at all: success is `{labelled, skipped, failed, labels}` and failure is 500 `{error}`.
-- POST `/dog/scout`'s 400, 404 and 409 errors are a plain sentence with no `<Type>: ` prefix.
+- Some errors are a plain sentence with no `<Type>: ` prefix:
+  - POST `/map`'s 400 and 409 (`not saved: ...`);
+  - POST `/dog/scout`'s 400, 404 and 409;
+  - GET `/record`'s 404 (`no shift <id>: no row is stamped with it; shifts: ...`);
+  - every 404 for an unknown path or picture.
 - An unknown path is 404: `{error: "no <path>"}` on GET (the static fallback), `{error: "not found"}` on POST.
 - **Anything a route does not catch** is 500 in its method's envelope, with one `[wtdd:api] <METHOD> <path> FAILED`
   stderr line (B9): a bad `?n=`, a missing or corrupt `ui/map.json`, a body that is not JSON. It is never a dropped connection.
@@ -83,7 +87,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/evals` | | `{written?, rows?}` | 500 `{error}` |
 | GET | `/watch` | | `{intruder, ts?, t?, ms?, n?, classes?, boxes?, source?, model?, file?, age_ms?}` | 500 `{error}` |
 | GET | `/shift` | | `{shift_id, source}` | 500 `{error}` |
-| GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift; 500 `{error}` |
+| GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift (a plain sentence); 500 `{error}` |
 | GET | `/record/shifts` | | `{shifts, current}` | 500 `{error}` |
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, follow, avoid, recheck, corr, rec}` | 500 `{error}` |
