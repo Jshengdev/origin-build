@@ -42,7 +42,10 @@ The contract under test:
   stderr                    one `[wtdd:dog] scout <turned> of <target> ...` line per second of spin, with frames and cells
   DogSession.calibrate(p, heading, source="tap")   the page's tie carries args.source "tap"; the scout's "dropoff"
   DogSession.stop()         cancels a running scout like the follower; its row says stopped, with state_after
-                            complete, when the stop lands inside the scout's own halt too
+                            complete, when the stop lands inside the scout's own halt too; a stop while the press is
+                            still connecting or tying the pose (no task yet, the page's button already reads "stop") is
+                            read by the press itself, and by its task before the LiDAR switch: one FAILED row naming
+                            it, nothing moved
   dog.scout row            args {z_rad_s, target_deg, timeout_s, shift_id, source}
                             state_before {map, heading0_deg, grid_frames, cells, lidar_n, range_obstacle, localize, utlidar}
                             state_after {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed,
@@ -624,6 +627,94 @@ class FailLoud(Harness):
         self.assertIn("stopped", r["state_after"]["why"])
         self.assertGreaterEqual(body.cmds.count("StopMove"), 1)
         self.assertEqual(tuple(s.vel), (0.0, 0.0, 0.0))
+
+    def test_a_stop_while_the_press_connects_ends_it_before_anything_moves(self):
+        """At drop-off the press is the first command, so it is the one that connects (about a second over WebRTC). The
+        press is claimed first (the page's button reads "stop" from then), so POST /dog/stop can land while there is no
+        task to cancel and no body to halt: the press must read that stop itself. One FAILED row naming it, no tie,
+        no velocity held, nothing commanded."""
+        body = FakeBody(yaw_rate=3.0, frames=self.frames)
+        s = session.DogSession()   # no body: this press connects
+        self.s = s
+
+        async def connect() -> FakeBody:
+            await asyncio.sleep(1.0)
+            s.body = body
+            return body
+
+        s._ensure, vels, out = connect, [], {}
+        s._set_vel = lambda x, y, z: vels.append((x, y, z))
+
+        def press() -> None:
+            try:
+                out["ok"] = s.scout(z=0.5, target_deg=360, timeout_s=10)
+            except Exception as e:  # noqa: BLE001  (the refusal is what this test reads)
+                out["err"] = e
+
+        t = threading.Thread(target=press)
+        t.start()
+        time.sleep(0.3)
+        self.assertTrue(s.state()["scout"]["active"], "claimed while it connects: the page's button reads stop")
+        s.stop()
+        t.join(10)
+        st = self.wait(s)
+        self.assertIn("err", out, f"the press started a spin after the stop: {out}")
+        self.assertIn("stopped", str(out["err"]))
+        self.assertIn("stopped", st["error"] or "", "the page names the stop")
+        self.assertEqual(vels, [], "no velocity was held after the stop")
+        self.assertEqual((body.ticks, body.cmds), ([], []), "nothing was commanded")
+        rows = self.rows("dog.scout")
+        self.assertEqual(len(rows), 1, rows)
+        self.assertFalse(rows[0]["ok"])
+        self.assertIn("stopped", str(rows[0]["response_or_error"]))
+        self.assertEqual(self.rows("dog.calibrate"), [], "stopped before the drop-off tie: nothing tied")
+
+    def test_a_stop_during_the_dropoff_tie_ends_the_press(self):
+        body = FakeBody(yaw_rate=3.0, frames=self.frames)
+        s = self.session(body)
+        tie, vels = s.calibrate, []
+        s._set_vel = lambda x, y, z: vels.append((x, y, z))
+
+        def calibrate(*a, **k):   # POST /dog/stop lands while the drop-off tie is written
+            out = tie(*a, **k)
+            s.stop()
+            return out
+
+        s.calibrate = calibrate
+        with self.assertRaises(RuntimeError) as cm:
+            s.scout(z=0.5, target_deg=360, timeout_s=10)
+        self.assertIn("stopped", str(cm.exception))
+        self.assertEqual(vels, [])
+        self.assertEqual(body.cmds, ["StopMove"], "stop()'s own halt only: the press commanded nothing")
+        self.assertEqual(len(self.rows("dog.calibrate")), 1, "the tie was written before the stop landed")
+        r = self.rows("dog.scout")
+        self.assertEqual((len(r), r[0]["ok"]), (1, False))
+        self.assertIn("stopped", str(r[0]["response_or_error"]))
+        self.assertFalse(s.state()["scout"]["active"])
+
+    def test_a_stop_between_the_press_and_its_task_is_read_by_the_task(self):
+        """The last gap: the press has passed its own checks and hands the spin to the loop; a stop now finds no running
+        task to cancel. The task reads it before the LiDAR switch and the first velocity."""
+        body = FakeBody(yaw_rate=3.0, frames=self.frames)
+        s = self.session(body)
+        vels, real = [], asyncio.run_coroutine_threadsafe
+        s._set_vel = lambda x, y, z: vels.append((x, y, z))
+
+        def late(coro, loop):
+            if getattr(coro, "__name__", "") == "_scout":
+                s.stop()
+            return real(coro, loop)
+
+        with mock.patch.object(session.asyncio, "run_coroutine_threadsafe", late):
+            s.scout(z=0.5, target_deg=360, timeout_s=10)
+        st = self.wait(s)
+        self.assertIn("stopped", st["error"] or "")
+        self.assertEqual(vels, [], "no velocity was held after the stop")
+        self.assertFalse(body._lidar_on, "stopped before the LiDAR switch")
+        r = self.rows("dog.scout")
+        self.assertEqual((len(r), r[0]["ok"]), (1, False))
+        self.assertIn("stopped", str(r[0]["response_or_error"]))
+        self.assertEqual(set(r[0]["state_after"] or {}), AFTER, "state_after is complete on this FAILED row too")
 
 
 class Api(Harness):
