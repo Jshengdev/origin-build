@@ -44,9 +44,10 @@ its go2 examples sportmode, sportmodestate, obstacles_avoid, camera_stream).
 The live view. jpeg_cached() encodes the newest frame once per frame number (PIL, on the dog loop) and every reader
 shares that one encode: GET /dog/frame.jpg, GET /dog/stream.mjpg, and watch.py through frame.jpg. video() is its health
 on GET /dog/state: fps from _fr_n deltas over the last second, the age of the newest frame, and the cached encode's
-bytes, size and sha. jpeg() and the receipted frame() (quality 85) are unchanged. UNVERIFIED on the dog: the fps
-delivered through one multipart connection (the take ledger measured 14.3 into _drain), the codec the dog's SDP answer
-names, and what the encode costs the dog loop against the 10 Hz drive tick.
+bytes, size and sha, and gaps (stalls past FRAME_STALE_S, counted in _drain when the frames resume, so the page reopens
+a stream that ended in a stall its 1 s poll never saw). jpeg() and the receipted frame() (quality 85) are unchanged.
+UNVERIFIED on the dog: the fps delivered through one multipart connection (the take ledger measured 14.3 into _drain),
+the codec the dog's SDP answer names, and what the encode costs the dog loop against the 10 Hz drive tick.
 
 Johnny must do. 1) Put the dog on the house Wi-Fi in STA mode via the Unitree Go app and set UNITREE_ROBOT_IP
 in .env. 2) Read the firmware version in the app; if 1.1.15 or newer, fetch the key (above) into
@@ -256,6 +257,7 @@ class Body:
         self._jpg: dict | None = None     # the one live-view encode {bytes, sha, n, w, h, at}, shared by every reader (jpeg_cached)
         self._fr_times: collections.deque = collections.deque(maxlen=64)   # (monotonic t, _fr_n) per arrival: video()'s fps
         self.video_source = "live"        # "stub" only on the DEMO_CACHE video stub (wtdd/dog/video_stub.py)
+        self._gaps = 0                    # stalls past FRAME_STALE_S, counted when the frames resume: the page reopens its stream on a new count
         self._lidar: dict | None = None   # newest decoded voxel frame (wtdd/dog/lidar.py decode), None until the first
         self._lidar_n = 0
         self._lidar_err = 0
@@ -585,6 +587,8 @@ class Body:
             now = time.monotonic()
             if self._fr_n == 0:
                 log("dog", f"first frame {f.width}x{f.height} after {round((now - self._vid_t0) * 1000)} ms")
+            if self._fr_n and now - self._fr_at > FRAME_STALE_S:   # the same rule that ends every stream (session.frames)
+                self._gaps += 1
             self._fr, self._fr_n, self._fr_at = f, self._fr_n + 1, now
             self._fr_times.append((now, self._fr_n))
             if self._fr_n % 300 == 0:
@@ -631,7 +635,8 @@ class Body:
 
     def video(self) -> dict | None:
         """The live view's health for GET /dog/state: fps from _fr_n deltas over the last second (the take ledger's
-        frames_seen arithmetic), the age of the newest frame, and the cached encode's size and sha. None before a frame.
+        frames_seen arithmetic), the age of the newest frame, the cached encode's size and sha, and gaps: how many stalls
+        past FRAME_STALE_S have ended (each one ended every open stream; the page keys its stream URL on it). None before a frame.
         age_ms is the time since the newest decoded frame, not glass-to-page latency (the driver has no wall-clock stamp)."""
         if self._fr is None:
             return None
@@ -642,7 +647,7 @@ class Body:
         return {"fps": fps, "age_ms": round(age * 1000), "bytes": len(c["bytes"]) if c else None,
                 "w": c["w"] if c else self._fr.width, "h": c["h"] if c else self._fr.height, "frames": self._fr_n,
                 "n": c["n"] if c else None, "sha": c["sha"] if c else None, "stale": age > FRAME_STALE_S,
-                "source": self.video_source}
+                "gaps": self._gaps, "source": self.video_source}
 
     async def frame(self, out: Path | str | None = None) -> bytes:
         """JPEG bytes of the newest video frame. Writes `out` if given. The row carries the sha256 of the exact bytes."""
