@@ -1,0 +1,13 @@
+# fixture: written by wtdd/livecheck/fixtures/make.py, not a real API log (line shapes from wtdd/ledger.py log() and feat/01-occupancy)
+[wtdd:api] serving http://127.0.0.1:7788/  tools=23 ui=/Users/johnnysheng/code/origin-build/ui
+[wtdd:dog] probe reachable=True checks=6 ms=812
+[wtdd:dog] dog.connect ok=True app=unitree ms=2140 err=
+[wtdd:dog] first lidar frame frame_id=odom voxels=3812 width=[128, 128, 38] res=0.05 origin=[-3.2, -3.2, -0.3] center=[0.0, 0.0, 0.65] odom_pos=[0.28, 0.12, 0.31] center_vs_odom_m=0.31 z_layers={-0.3: 1210, 0.1: 980, 0.5: 902, 1.0: 720}
+[wtdd:dog] grid started frame_id=odom resolution=0.05 origin=[-3.2, -3.2]
+[wtdd:dog] calibrated p=[442, 498] heading_deg=-90.0
+[wtdd:dog] dog.calibrate ok=True app=map ms=0 err=
+[wtdd:dog] dog.grid_save ok=True app=map ms=3 err=
+[wtdd:api] "POST /dog/grid HTTP/1.1" 200 -
+[wtdd:dog] grid frames=100 cells=1210 shape=(128, 128) touched=612 ms=2.1
+[wtdd:dog] dog.grid_save ok=True app=map ms=4 err=
+[wtdd:api] "POST /dog/grid HTTP/1.1" 200 -

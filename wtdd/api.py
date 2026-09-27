@@ -25,6 +25,8 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /livecheck                 <repo>/livecheck.json (python -m wtdd.livecheck --step <item>.<k>) plus age_s and stale (a waiting
+                                  state older than 3 s: the check was killed); no file = {verdict: null, why}
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -113,6 +115,16 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, "image/jpeg", DogSession.get().snapshot())
             except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+        # 22 · livecheck
+        if u.path == "/livecheck":   # the newest verdict or per-second waiting state: the remote's one mono line under the receipts
+            from . import livecheck
+            f = livecheck.OUT
+            if not f.exists():
+                return self._json(200, {"verdict": None, "why": "no livecheck.json yet: run python -m wtdd.livecheck --step <item>.<k>"})
+            d = json.loads(f.read_text())
+            d["age_s"] = round(time.time() - f.stat().st_mtime, 1)
+            d["stale"] = d.get("verdict") == "waiting" and d["age_s"] > livecheck.STALE_S
+            return self._json(200, d)
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name

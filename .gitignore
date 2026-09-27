@@ -44,3 +44,9 @@ field.stop
 
 # sources of truth (the origin folder), read locally, never committed
 context/
+
+# 22 · livecheck: the teed process logs it tails, its verdict file, the --from-prs draft; its .log fixtures are tracked
+logs/
+livecheck.json
+wtdd/livecheck/steps.draft.json
+!wtdd/livecheck/fixtures/*.log

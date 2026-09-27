@@ -99,9 +99,10 @@ WTDD_WAKE_SHOW=0 python -m unittest wtdd.chat.test_triggers wtdd.chat.test_chat 
 **With the hardware:** a Go2 on its Wi-Fi hotspot, a Hue bridge through the cloud Remote API, a Tuya strip with its local key, Messages.app signed in with Full Disk Access. Keys are documented in `.env.example`. Then three processes:
 
 ```bash
-python -m wtdd.api            # the remote and the map at http://127.0.0.1:7788/; owns the dog
-python -m wtdd.chat listen    # the group chat
-python -m wtdd.watch          # the detector over the live camera
+mkdir -p logs
+python -m wtdd.api 2>&1 | tee -a logs/api.log            # the remote and the map at http://127.0.0.1:7788/; owns the dog
+python -m wtdd.chat listen 2>&1 | tee -a logs/chat.log   # the group chat
+python -m wtdd.watch 2>&1 | tee -a logs/watch.log        # the detector over the live camera
 ```
 
 On the remote: drag the dog to where it stands, "record route" and drive it once, pressing a look at each spot it should report from, "stop & save route"; then text the group. The whole setup, done once on camera with the mistakes left in, is the [extended setup video](https://github.com/Jshengdev/what-the-dog-doin/releases/download/demo-day-2026-09-13/setup-walkthrough-uncut.mp4) (uncut, 2.5 min, optional).
