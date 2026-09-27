@@ -234,9 +234,6 @@ class DogSession:
     async def with_body(self, fn: Callable[[Body], Awaitable[Any]]) -> Any:
         return await fn(await self._ensure())
 
-    def connected(self) -> bool:
-        return self.body is not None
-
     def state(self) -> dict[str, Any]:
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
@@ -840,7 +837,7 @@ class DogSession:
         tie (what the page draws as blue dots); None when there is no live view: no body or stream, a window older than
         LIVE_MAX_AGE_MS, no pose, or not calibrated."""
         b = self.body
-        if b is None or not hasattr(b, "lidar_points") or self.cal is None:
+        if b is None or self.cal is None:
             return None
         lp, st = b.lidar_points(), b.state()
         if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
@@ -1112,7 +1109,6 @@ class DogSession:
         p, the scene sentence and a first-person say; the dot is passed (follow.passed, a stop on it skipped). A person
         pauses the follow here like a stop until resume(). A failed look or label is the same row FAILED, and the follow
         still moves on."""
-        from .. import decide
         nxt = f"I'm moving on to dot {i + 2}." if i + 1 < len(path) else "It was the last dot, so I'm done."
         kind = "a new obstacle" if b["kind"] == "new obstacle" else "something my memory already had (permanent)"
         args = {"at": i, "action": "classified", "blocker": b, "passed": [i],
