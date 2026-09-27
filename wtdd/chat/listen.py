@@ -53,7 +53,7 @@ GATHER_S = 6.0                # after "yo dog ...", the same sender's next messa
 Poster = Callable[[str, str, str, str | None, str | None], Any]   # (guid, trigger_key, kind, text, file)
 OWN_OPENERS = ("the dog is doin", "dog doin", "dog done", "on it:", "couldn't", "here's what i see", "yo, we don't know", "noted:",
                "who dis", "stranger danger", "ok, standing down", "ok, done listening",
-               "living room lights", "did:", "listening for", "not sure:")   # how the dog's own text posts begin
+               "living room lights", "did:", "listening for", "not sure:", "person at camera")   # how the dog's own text posts begin
 
 
 def _flag(key: str) -> bool:
@@ -228,6 +228,31 @@ class Listener:
             PENDING.unlink(missing_ok=True)
             log("chat", "who dis: no answer in time, standing down")
             return False
+        if pend.get("kind") == "dispatch":   # 18: "send the dog? yes / no" (wtdd/dispatch.py): a yes walks, anything else stands down, never the alarm
+            import threading
+            from .. import dispatch
+            PENDING.unlink(missing_ok=True)
+            yes = bool(dispatch.AFFIRM.match(normalize(m["text"])))
+            append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
+                    "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger")},
+                    "state_before": None, "state_after": {"verdict": "approved" if yes else "declined"}, "response_or_error": None, "latency_ms": 0})
+            log("chat", "VERDICT", by=hname(m["sender"]), verdict="approved" if yes else "declined", cam=pend.get("cam"), text=m["text"][:60])
+            if not yes:
+                self.say(f"ok:{m['guid']}", "ok, standing down")
+                return True
+            self.say(f"go:{m['guid']}", f"on it: sending the dog to camera {pend['cam']}")
+
+            def go() -> None:   # the API process owns the dog: the approved run goes there; its refusals are posted by dispatch itself
+                try:
+                    if cmds._via_api("dispatch", cam=pend["cam"], approved=True, trigger=pend["trigger"], by=m["sender"]) is None:
+                        self.say(f"{pend['trigger']}:refused", "couldn't dispatch: the API is not running (python -m wtdd.api owns the dog)")
+                except Exception as e:  # noqa: BLE001  (same key as dispatch's own refusal post, so the claim never lets both through)
+                    try:
+                        self.say(f"{pend['trigger']}:refused", f"couldn't dispatch: {str(e)[:160]}")
+                    except PermissionError as told:
+                        log("chat", "dispatch already told the thread", err=str(told)[:80])
+            threading.Thread(target=go, daemon=True, name=f"dispatch-go-{m['guid']}").start()
+            return True
         from .. import tools
         stranger = pend.get("kind") != "decide" and bool(IDK.search(normalize(m["text"])))
         PENDING.unlink(missing_ok=True)
