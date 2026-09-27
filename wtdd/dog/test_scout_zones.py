@@ -633,6 +633,39 @@ class Feed(Base):
         p.feed(self.store.to_list(), frame(), None, self.g, CAL, FOV, threshold=THR)
         self.assertIn("no pose", p.state()["why"], "not 'no placed object yet': 07 placed two")
 
+    def test_a_dog_that_moved_since_07_placed_it_waits_and_is_asked_when_07_places_it_again(self):
+        # fix round 2: 07 placed both boxes from POSE, the scout is fed 0.1 m further on (the objects thread's draft call or
+        # a GET tick in between). The cone from where the dog is now misses 07's old hit: a wait, never a failure, and the
+        # thing is asked once 07 places it again from where the dog stands.
+        moved = {"position": [0.10, 0.0], "yaw": 0.0}
+        with mock.patch.dict(os.environ, {"JEV_API_KEY": ""}):   # decide=None: decider() picks the stub, and says so when called
+            p = scout_zones.Proposals(append=self.rows.append, photo_dir=self.pics, map_path=self.map)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                for _ in range(2):   # two 4 Hz ticks before 07's next window
+                    p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
+            self.assertFalse([r for r in self.rows if r["tool"].startswith("zone.")], "a wait writes no row")
+            st = p.state()
+            self.assertEqual((st["n"], st["failed"]), (0, []), "not a failure: nothing was asked")
+            self.assertIn("waiting", st["why"])
+            self.assertIn("o1", st["why"], "the why names the waiting object")
+            self.assertEqual(err.getvalue().count("[wtdd:scout]"), 1, f"one WARN per change, no summary, no model picked: {err.getvalue()!r}")
+            self.assertIn("WARN", err.getvalue())
+            self.store.observe({**frame(), "t": 2.0}, moved, self.g, CAL, FOV, threshold=THR)   # 07 places them again from here
+            o1 = next(o for o in self.store.to_list() if o["id"] == "o1")
+            self.assertAlmostEqual(o1["dist_m"], 1.9, places=3)
+            p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
+        self.assertEqual(sorted(r["args"]["object_id"] for r in self.tool("zone.decided")), ["o1", "o2"])
+        (r,) = self.tool("zone.proposed")
+        self.assertEqual((r["ok"], r["args"]["id"], r["args"]["object_id"], r["args"]["label"]), (True, "z1", "o1", "table"))
+        x = fx.WALL_A["x"][0] * RES
+        hit = {"xy": o1["hit_m"], "dist_m": o1["dist_m"]}
+        want = {(round(x, 3), round(k * RES, 3)) for k in range(*fx.WALL_A["y"]) if in_bound((x, k * RES), CHAIR["xyxy"], hit, pose=moved)}
+        self.assertTrue(want)
+        self.assertEqual(as_set(r["args"]["cells"]), want, "the cells the bound gives from where the dog stands, with 07's new hit")
+        st = p.state()
+        self.assertEqual((st["n"], st["failed"]), (1, []))
+
 
 class Confirm(Base):
     def setUp(self):
