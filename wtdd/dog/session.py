@@ -356,32 +356,38 @@ class DogSession:
 
     def floorplan(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """POST /dog/floorplan, the button: always one run and one dog.floorplan row, on a copy of the session grid,
-        else on ui/grid.json; with no grid at all (or an unreadable file) one failed row and a RuntimeError. Returns the
-        run's JSON summary {ok, why?, threshold, frames, cells, classes, segments, ms, ts, grid_source}."""
+        else on ui/grid.json; with no grid at all (or an unreadable file) one failed row and a RuntimeError. Any raise
+        also becomes the newest result, as a FAILED tick does, so every later GET keeps it red with its reason until the
+        next run (the 500 alone lasts one 2 s poll). Returns the run's JSON summary {ok, why?, threshold, frames, cells,
+        classes, segments, ms, ts, grid_source}."""
         with self._grid_lock:
-            snap = copy.deepcopy(self.grid) if self.grid is not None else None
-            if snap is not None:
-                self._fp_t, self._fp_frames = time.monotonic(), snap.frames
-        if snap is not None:
-            res = self._fp_run(snap, threshold, "session", None)
-        else:
-            # DEMO_CACHE: ui/grid.json, the last saved grid (or a fixture planted with `python -m wtdd.dog.floorplan
-            # --replay wtdd/dog/fixtures/voxel_furniture.npz --png /tmp/fp.png --save ui/grid.json`), classified when this
-            # session has taken no LiDAR frame, so the page shows a floor plan with no dog; its row says cached=True,
-            # source="stub", and it is drawn through the calibration saved with it. Live path: POST /dog/lidar {on: true};
-            # the ticker then runs on the session grid and `source` flips to "session".
-            why = None
-            try:
-                fg = occupancy.Grid.load(GRID_FILE) if GRID_FILE.exists() else None
-            except Exception as e:  # noqa: BLE001  (an unreadable file is the failed row below, never skipped)
-                fg, why = None, f"ui/grid.json unreadable: {type(e).__name__}: {e}"
-            if fg is None:
-                with step("dog", "dog.floorplan", "map", {"threshold": threshold, "grid_source": "ui/grid.json" if why else None},
-                          {"cells": 0, "frames": 0}) as r:
-                    if why:   # the DEMO_CACHE file's own failure is a stub row too; no grid at all stays live
-                        r["cached"], r["source"] = True, "stub"
-                    raise RuntimeError(why or "no grid: no LiDAR frames this session and no ui/grid.json")
-            res = self._fp_run(fg, threshold, "ui/grid.json", fg.cal)
+            g = copy.deepcopy(self.grid) if self.grid is not None else None
+            if g is not None:
+                self._fp_t, self._fp_frames = time.monotonic(), g.frames
+        source = "session" if g is not None else "ui/grid.json" if GRID_FILE.exists() else None
+        try:
+            if g is None:
+                # DEMO_CACHE: ui/grid.json, the last saved grid (or a fixture planted with `python -m wtdd.dog.floorplan
+                # --replay wtdd/dog/fixtures/voxel_furniture.npz --png /tmp/fp.png --save ui/grid.json`), classified when
+                # this session has taken no LiDAR frame, so the page shows a floor plan with no dog; its row says
+                # cached=True, source="stub", and it is drawn through the calibration saved with it. Live path: POST
+                # /dog/lidar {on: true}; the ticker then runs on the session grid and `source` flips to "session".
+                why = None
+                try:
+                    g = occupancy.Grid.load(GRID_FILE) if source else None
+                except Exception as e:  # noqa: BLE001  (an unreadable file is the failed row below, never skipped)
+                    why = f"ui/grid.json unreadable: {type(e).__name__}: {e}"
+                if g is None:
+                    with step("dog", "dog.floorplan", "map", {"threshold": threshold, "grid_source": source}, {"cells": 0, "frames": 0}) as r:
+                        if why:   # the DEMO_CACHE file's own failure is a stub row too; no grid at all stays live
+                            r["cached"], r["source"] = True, "stub"
+                        raise RuntimeError(why or "no grid: no LiDAR frames this session and no ui/grid.json")
+            res = self._fp_run(g, threshold, source, g.cal if source == "ui/grid.json" else None)
+        except Exception as e:  # noqa: BLE001  (its failed row is written; kept as the newest result, then re-raised for the 500)
+            with self._fp_lock:
+                self._fp = ({"ok": False, "why": f"FAILED floor plan press: {type(e).__name__}: {str(e)[:120]}", "threshold": threshold,
+                             "frames": g.frames if g is not None else 0, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}, source, None)
+            raise
         return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution")}
 
     def floorplan_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
