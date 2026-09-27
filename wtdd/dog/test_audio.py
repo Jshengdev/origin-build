@@ -19,8 +19,9 @@ What it checks, each against the goal's words:
     a first say's render never stalls the body's loop; with the speaker unimportable, the stranger alarm still sounds
     and the ask is still posted and armed (neither waits on the speaker's import);
   - the uuid cache round-trips; a cached line plays without a list or an upload; a listed line is never re-uploaded;
-  - GET /dog/state .say carries age_s; WTDD_STATE_FIXTURE serves a planted state marked source "stub";
-  - `say` is a tool (python -m wtdd list) and dog_say is untouched.
+  - GET /dog/state .say carries age_s, and is speaking from the ack on, not only after the read-back; WTDD_STATE_FIXTURE
+    serves a planted state marked source "stub";
+  - `say` is a tool (python -m wtdd list) and dog_say is untouched; WTDD_SAY_STUB=0 is the dog, not the stub.
 """
 from __future__ import annotations
 import asyncio
@@ -225,6 +226,35 @@ class Play(Base):
         self.assertIn("play_mode", r["state_after"])
         self.assertIsNotNone(r["state_after"]["sport"])
         self.assertEqual(b.say_state["player_state"], "no read-back")
+
+    def test_speaking_is_served_from_the_ack_while_a_silent_topic_is_still_awaited(self):
+        """The badge is green while the line plays: .say is published at the ack (code 0), not after the read-back wait,
+        GET_PLAY_MODE and the fresh sport state, which on a silent topic outlast a 1 s line."""
+        a, b = self.a, stub_body(player=False)
+        self.plant()
+        copy_fixture(ASK, a.SAY_DIR / f"{a.LINES[ASK]}.wav")   # 1.00 s: the line's own length
+        ack, seen, req = {}, [], b._request
+
+        async def timed(topic, api_id, parameter=None, **k):
+            out = await req(topic, api_id, parameter, **k)
+            if (topic, api_id) == (a.TOPIC, a.PLAY):
+                ack["t"] = time.time()
+            return out
+        b._request = timed
+
+        async def go():
+            t = asyncio.create_task(b.say(ASK, cache=self.cache))
+            while not t.done():
+                if "t" in ack:
+                    s = a.served(b.say_state)
+                    seen.append(bool(s and s["speaking"]))
+                await asyncio.sleep(0.02)
+            await t
+        with mock.patch.object(a, "PLAYER_WAIT_S", 0.5):
+            asyncio.run(go())
+        self.assertTrue(seen and any(seen), f"never speaking while the read-back was awaited: {seen}")
+        self.assertLess(abs(b.say_state["at"] - ack["t"]), 0.1)
+        self.assertEqual(b.say_state["player_state"], "no read-back")   # the read-back still lands on .say after
 
     def test_code_7_is_a_failed_row_and_say_error(self):
         a, b = self.a, stub_body(play_code=7)
@@ -531,6 +561,18 @@ class StubFlag(Base):
             self.assertEqual((r["cached"], r["source"]), (True, "stub"), r["tool"])
         self.assertEqual((out["text"], out["code"], out["source"]), (ASK, 0, "stub"))
         self.assertFalse((self.tmp / "say.live.json").exists())   # the stub never writes the live uuid cache
+
+    def test_the_stub_flag_set_to_0_false_or_no_is_the_dog_not_the_stub(self):
+        """The repo's flags read 0/false/no as off (listen._flag, WTDD_ROUND_AVOID): WTDD_SAY_STUB=0 in a live .env
+        must reach the dog's own speaker, never the recording stub."""
+        from wtdd.dog import session
+        from wtdd.tools import say
+        for v in ("0", "false", "No"):
+            with mock.patch.dict(os.environ, {"WTDD_SAY_STUB": v}), mock.patch.object(self.a, "stub_say") as stub, \
+                    mock.patch.object(session.DogSession, "get") as get:
+                say.run(text=ASK)
+            stub.assert_not_called()
+            get.return_value.say.assert_called_once_with(ASK, None)
 
 
 if __name__ == "__main__":
