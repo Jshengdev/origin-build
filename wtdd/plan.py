@@ -57,6 +57,8 @@ from .ledger import log, step
 CELL = 10            # px per grid cell, about 9 cm
 HALF_WIDTH = 4       # cells the walkable area shrinks by (the dog is about 0.35 m wide)
 W, H = 1060, 1540    # the map's viewBox
+LIVE_SNAP_M = 0.5    # S6: a waypoint the live view covers moves at most this far to free floor, else a detour
+PERMANENT_SHARE = 0.5  # S6: a blocker whose live cells memory already held at least this share of is "permanent"
 
 
 def grid(rooms: list[dict[str, Any]], zones: list[dict[str, Any]] = ()):
@@ -113,6 +115,52 @@ def _at(m, p) -> bool:
     """The lattice cell under map point p (a bool array or a 0/1 matrix); off the viewBox is False."""
     r, c = int(p[1]) // CELL, int(p[0]) // CELL
     return 0 <= r < H // CELL and 0 <= c < W // CELL and bool(m[r][c])
+
+
+def _live_cells(px) -> np.ndarray:
+    """S6: bool [rows, cols], the lattice cells map pixels land in, quietly: the LiDAR window reaches past the drawing, so
+    points off the viewBox are dropped without the WARN _cells gives memory's walls."""
+    pts = np.asarray(px, dtype=int).reshape(-1, 2)
+    m = np.zeros((H // CELL, W // CELL), dtype=bool)
+    on = (pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)
+    m[pts[on, 1] // CELL, pts[on, 0] // CELL] = True
+    return m
+
+
+def blocker(p, live_px, g=None, cal: dict | None = None, threshold: int | None = None, lock=None) -> dict[str, Any] | None:
+    """S6: what blocks map point p in the live view, or None when nothing does. The live view is the newest LiDAR
+    window's band in map pixels; a live cell within HALF_WIDTH cells of p's cell blocks it (the padding the cost map
+    uses). Memory (the grid's walls through cal, grown by one cell for drift) only labels it: {cells, in_memory, kind},
+    kind "permanent" when memory already held at least PERMANENT_SHARE of those cells, else "new obstacle"."""
+    live = _live_cells(live_px)
+    r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, HALF_WIDTH
+    box = (slice(max(r0 - k, 0), max(r0 + k + 1, 0)), slice(max(c0 - k, 0), max(c0 + k + 1, 0)))
+    n = int(live[box].sum())
+    if n == 0:
+        return None
+    mem = 0
+    if g is not None and cal is not None:
+        mem = int((live[box] & _inflate(_live_cells(walls_px(g, cal, threshold, lock)), 1)[box]).sum())
+    return {"cells": n, "in_memory": mem, "kind": "permanent" if mem / n >= PERMANENT_SHARE else "new obstacle"}
+
+
+def snap(p, live_px, max_m: float = LIVE_SNAP_M) -> tuple[list[int], float] | None:
+    """S6: the centre of the nearest lattice cell outside the live view's padding and outside every no-go zone's, within
+    max_m of p: ([x, y], metres). None when there is none (the caller detours or refuses)."""
+    from .dog import nav   # the measured scale (S5), read at call time
+    blocked = _inflate(_live_cells(live_px) | _zone_cells(nogo.zones(json.loads(MAP.read_text()))))
+    reach = max_m * nav.PX_PER_M
+    r0, c0, k = int(p[1]) // CELL, int(p[0]) // CELL, math.ceil(reach / CELL) + 1
+    best = None
+    for r in range(max(r0 - k, 0), min(r0 + k + 1, H // CELL)):
+        for c in range(max(c0 - k, 0), min(c0 + k + 1, W // CELL)):
+            if blocked[r, c]:
+                continue
+            q = (c * CELL + CELL // 2, r * CELL + CELL // 2)
+            d = math.dist(q, p)
+            if d <= reach and (best is None or d < best[0]):
+                best = (d, q)
+    return None if best is None else ([int(best[1][0]), int(best[1][1])], round(best[0] / nav.PX_PER_M, 2))
 
 
 def cost_map(m: dict[str, Any], g=None, cal: dict | None = None, threshold: int | None = None, lock=None):
@@ -200,11 +248,13 @@ def plan(a, b, grid=None, cal: dict | None = None, threshold: int | None = None,
     return out
 
 
-def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None = None, lock=None) -> dict[str, Any]:
+def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None = None, lock=None,
+           live_px=None, rejoin: int | None = None, say: str | None = None) -> dict[str, Any]:
     """The dog at map point p, path[i] occupied: a detour to path[j], the first later waypoint not occupied. One
     plan.replanned row. When the dog's own cell is inside the inflation it starts from the nearest walkable cell within
     HALF_WIDTH + 1 cells (args.start_snapped); none, no grid, no calibration, every waypoint i..end occupied, or no
-    detour: ValueError, the row ok false."""
+    detour: ValueError, the row ok false. S6: given the live view (live_px), its padded cells are blocked too, the
+    follower names the waypoint to rejoin (rejoin), and the row carries the follower's sentence (args.say)."""
     m = json.loads(MAP.read_text())
     args = {"from": [int(p[0]), int(p[1])], "blocked": {"index": i, "waypoint": [int(path[i][0]), int(path[i][1])]}, "cell_px": CELL,
             "shift_id": config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")}
@@ -213,7 +263,12 @@ def replan(p, path: list, i: int, grid, cal: dict | None, threshold: int | None 
             raise ValueError(f"replan needs the grid and a calibration ({'no grid' if grid is None else 'not calibrated'})")
         matrix, info, occ = cost_map(m, grid, cal, threshold, lock)
         r["args"].update(info)
-        j = next((k for k in range(i + 1, len(path)) if not _at(occ, path[k])), None)
+        if say:
+            r["args"]["say"] = say
+        if live_px is not None:   # S6: what the LiDAR sees now blocks the detour too
+            matrix = (np.asarray(matrix, dtype=bool) & ~_inflate(_live_cells(live_px))).astype(np.uint8).tolist()
+            r["args"]["live"] = True
+        j = rejoin if rejoin is not None else next((k for k in range(i + 1, len(path)) if not _at(occ, path[k])), None)
         if j is None:
             raise ValueError(f"waypoints {i}..{len(path) - 1} are all occupied, the route's end {[int(v) for v in path[-1]]} included: nothing to rejoin")
         rejoin, skipped = {"index": j, "waypoint": [int(path[j][0]), int(path[j][1])]}, list(range(i, j))
