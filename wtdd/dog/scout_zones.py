@@ -519,6 +519,9 @@ def main(argv: list[str] | None = None) -> int:
         store.observe(frame, pose, g, CAL, a.fov, a.threshold)
         with tempfile.TemporaryDirectory(prefix="wtdd-scout-replay-") as tmp:   # the photo copies and an empty map: nothing real is read or written
             (Path(tmp) / "map.json").write_text('{"zones": []}\n')
+            # DEMO_CACHE: the replay always asks decide_stub (COCO name -> label, p = the detector's conf), even with
+            # JEV_API_KEY set. Why: a replay of fixtures is not a step and must not spend a model call or claim a live
+            # answer. Live: the session's feed (GET /dog/objects starts it) asks decider(), Jev when the key is set.
             props = Proposals(append=lambda r: log("scout", "replay row (not written)", tool=r["tool"], ok=r["ok"]),
                               decide=decide_stub, photo_dir=tmp, map_path=Path(tmp) / "map.json")
             props.feed(store.to_list(), frame, pose, g, CAL, a.fov, a.threshold)
