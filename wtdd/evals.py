@@ -51,8 +51,8 @@ duplicate posts are checked over the whole --ledger file, the shipped rule.
 They are not in "all": they grade a ledger and drive nothing. --write refuses dry trials (SystemExit; README.md and
 evals.json untouched): the README's table is device grades only. evals.json is gitignored, so on a fresh clone merge()
 seeds from docs/evidence/trials-2026-09-13.json (same shape) and --write on the dog keeps the measured rows.
-UNVERIFIED: no live ledger has been graded by the four; 02's decided and 04's route.refused shapes come from their
-branches (not on this base), and 03's from its code and fixtures, never from a run on the dog."""
+UNVERIFIED: no live ledger has been graded by the four; 02's decided, 03's and 04's route.refused shapes come from
+their code (merged: wtdd/decide.py, wtdd/chat/oncall.py, wtdd/nogo.py) and fixtures, never from a run on the dog."""
 from __future__ import annotations
 import argparse
 import json
@@ -605,8 +605,9 @@ def run_scout(fixture=None) -> list[dict[str, Any]]:
     # DEMO_CACHE: the scout's receipts. What: wtdd/fixtures/evals/scout.jsonl (built by make_scout.py in the row shapes
     # scout_zones.py writes, every row cached=true) graded against scout-map.json. Why: no dog, no detector, no person
     # and no key in a worktree; the grader must be seen to pass and to say unsafe (scout-unsafe.jsonl) before a live
-    # ledger is trusted to it. Live: 11's run_graded calls grade_scout(rows, map) and unsafe_scout on the real
-    # ledger.jsonl for a shift once 11 merges (--ledger/--shift); this branch grades dry only and --write refuses it.
+    # ledger is trusted to it. Live: not wired yet. 11 has merged, but its run_graded (--ledger/--shift) grades DRY's
+    # four only, so --scenario scout grades this fixture whatever --ledger says, and --write refuses it. The live path
+    # is run_graded calling grade_scout(rows, map) and unsafe_scout on the shift's rows of the real ledger.jsonl.
     f = Path(fixture) if fixture else FIXTURES / "scout.jsonl"
     t0 = time.monotonic()
     rows: list[dict[str, Any]] = []
