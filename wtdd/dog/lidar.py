@@ -17,7 +17,9 @@ examples/go2/data_channel/lidar/lidar_stream.py, not shipped in the wheel, fetch
             `pub_sub.publish_without_callback("rt/utlidar/switch", "on")`, then `pub_sub.subscribe(
             "rt/utlidar/voxel_map_compressed", cb)`. Nothing switches it off in the example; unsubscribe() here does.
   parsing:  binary data-channel messages whose first two uint16 are (2, 0) are LiDAR frames (webrtc_datachannel.py:
-            126-131): uint32 json length at byte 4, json at [8:8+len], LZ4 block after. The driver decodes the block
+            126-131 slices those 4 bytes off); in the wire buffer the uint32 json length is at byte 4, four bytes at
+            8-11 the driver skips (content UNVERIFIED), the json at [12:12+len], the LZ4 block after (:153-156 read the
+            length at 0 and the json at 8 of the sliced buffer). The driver decodes the block
             BEFORE the callback with the decoder set by set_decoder (default "libvoxel", :28) and puts the result in
             message["data"]["data"] (:153-163). The json's data keys (upstream plot_lidar_stream.py:174-179):
             stamp, frame_id, resolution, src_size, origin, width; width defaults to [128, 128, 38] there (:260), so at
@@ -35,7 +37,8 @@ examples/go2/data_channel/lidar/lidar_stream.py, not shipped in the wheel, fetch
             (both are dead-reckoned from power-on; the lidar odometry rt/utlidar/robot_pose is subscribed alongside
             and reported so the two can be compared on the first live run), (3) where z = 0 sits (Z_MIN/Z_MAX are a
             guess: the first frame logs the z range and the count per z layer; tune from that log).
-Ceiling (wtdd:): no accumulation across frames and no wall extraction; the map shows the newest window only.
+Accumulation (wtdd/dog/occupancy.py, item 01): every decoded window is handed to the session's grid from
+Body._on_lidar; the map draws the grid under the newest window's dots; no wall extraction beyond the count threshold.
 """
 from __future__ import annotations
 import asyncio

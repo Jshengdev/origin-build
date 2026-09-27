@@ -13,12 +13,24 @@ MOVE_HZ and sends StopMove 0.6 s after the last refresh or on stop(). Speeds are
 Where it thinks it is: calibrate(p, heading) ties the odometry pose now to a map point (wtdd/dog/nav.py); state() then
 carries "map": {p, heading_deg}. follow(path, stops) switches the dog's obstacle avoidance on (read back, refused
 otherwise) and is a task that feeds nav.steer velocities into the same drive loop, waypoint by waypoint, pausing at the
-map's stops until resume(); stop() cancels it. With avoidance on, the drive loop sends velocities through the
+map's stops until resume(); stop() cancels it. Every connect (and every reconnect) also switches avoidance on and
+reads it back (S3); a refusal is a FAILED dog.avoid row and a WARN, never a failed connect. With avoidance on, the drive loop sends velocities through the
 OBSTACLES_AVOID service (MOVE 1003, no ack) instead of SPORT Move; the state read-back is the receipt. record(True)
 records the believed pose while Johnny drives, mark(look, say) adds a stop at the current spot with the action to
 replay there, record(False) returns the thinned trace as {path, stops, actions} and the API writes it into
 ui/map.json: the route the dog drove, and what it did along it, is what it replays. One dog.calibrate and one dog.follow
 row; a failed or cancelled follow says so in state().follow.error.
+The map scale (S5b): scale(v) is the page's slider (GET/POST /dog/scale), nav.set_scale inside one dog.scale row, saved as
+px_per_m beside the tie in dog_cal.json; a new session takes that over WTDD_PX_PER_M (an out-of-range one is a WARN and
+ignored) and names the scale's source in one stderr line. Only the process that holds the session sees the saved value.
+A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
+calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
+Before each waypoint the follower asks the session's occupancy grid (wtdd/plan.py occupied) whether it now sits in an
+inflated wall; when so it replans a detour to the first free waypoint after it (plan.replan, one plan.replanned row),
+drives it and rejoins; a stop on a skipped waypoint is reported in state().follow.skipped_stops, never waited on; the
+route's end occupied fails the follow. The check is per waypoint, on advancing to it: a blob that lands on the waypoint
+already being driven to is the avoidance service's and WP_TIMEOUT_S's. UNVERIFIED on the dog: exercised with a
+teleporting body only (wtdd/test_plan_grid.py).
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -30,7 +42,23 @@ The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-
   sit:   Sit, 1.8 s, frame at 48 deg up, RiseSit.
 Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
-the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted.
+the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
+frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
+are rows, reads are not. Objects: every detector window (<repo>/watch.json) is placed on that grid behind GET
+/dog/objects by wtdd/dog/objects.py, on an 'objects' thread the first GET starts; its rows are object.seen.
+
+Re-correction (wtdd/dog/localize.py, 05b). Every window after the first is matched against the grid before it is drawn:
+its band cells through the correction held (self.corr, a rigid 2D transform in the odometry frame) against the cells
+seen MATCH_THRESHOLD+ times. Applied: one pose.corrected row, the window's delta composed into self.corr, the window
+drawn through it. Rejected past the cap: a pose.corrected row with ok false, not drawn, the correction kept (a streak of
+them is a WARN: after a power cycle, clear the grid). Unmatched below MIN_SCORE: no row, one line per window (a WARN
+the first five times, then every 100th), drawn through the correction held; skipped under MIN_CELLS: the same with the
+rate-limited WARN only. Counts and the last verdict are on GET /dog/lidar .localize.
+map_pose() is the odometry pose through self.corr, then nav.to_map; calibrate() ties that corrected pose and keeps the
+correction (the grid is drawn through it); grid_clear() resets it and, with a calibration, sets recheck (the dot moves
+by the dropped correction, so the remote asks for the drag). The match runs inline on the driver's dispatcher, as the
+grid's accumulate does, measured on every row (latency_ms, a WARN over BUDGET_MS); if the dog's windows blow the budget
+the fallback is a queue and one worker thread (not built: the first live run reads the ms).
 """
 from __future__ import annotations
 import asyncio
@@ -41,12 +69,14 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from ..ledger import log, step
-from . import lidar, nav
+from ..ledger import append, log, step
+from . import lidar, localize, nav, objects, occupancy
+from .. import config, plan
 from .body import MOVE_HZ, Body
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
 CAL_FILE = Path(__file__).resolve().parents[2] / "dog_cal.json"   # the last human calibration, so an API restart keeps it (runtime file)
+GRID_FILE = Path(__file__).resolve().parents[2] / "ui" / "grid.json"   # the last saved occupancy grid, POST /dog/grid {save} (runtime file, gitignored)
 DRIVE_MAX = {"x": 0.4, "y": 0.4, "z": 0.6}   # m/s, m/s, rad/s for the hand-driven remote
 DRIVE_HOLD_S = 0.6                            # a velocity older than this is a released key
 LOOKS = ("level", "tilt", "sit")
@@ -54,7 +84,9 @@ TILT_MIN_DEG = 8.0                            # a tilt frame counts only if the 
 STALE_MS = 5000                               # state stream (20 Hz) older than this: the peer is dead, reconnect once
 PROBE_BACKOFF_S = 15.0                        # after a failed connect, callers get the same error without a new probe row for this long
 WP_TIMEOUT_S = 30.0                           # a waypoint not reached in this long fails the follow (no retry)
+MAX_REPLANS = 5                               # detours per follow; past it the follow fails loud rather than circling
 REC_HZ, REC_MIN_PX, REC_STEP_PX = 5.0, 10, 45   # route recording: sample rate, min move per sample, waypoint spacing (about 0.4 m)
+LIVE_MAX_AGE_MS = 1000                        # S6: an older LiDAR window is no live view; the follower says so once
 START_PX = 90                                 # a dog this close to the path's first point replays from the start (a loop's end is also its start)
 STOP_TIMEOUT_S = 180.0                        # a stop without resume for this long fails the follow
 
@@ -81,14 +113,30 @@ class DogSession:
         self.moving = False
         self._driver: asyncio.Task | None = None
         self.cal: dict[str, Any] | None = None       # odometry <-> map tie (nav.calibration); None until "the dog is here"
-        if CAL_FILE.exists():   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
-            self.cal = json.loads(CAL_FILE.read_text())
+        self.recheck = False   # no calibration loaded; state() reads this before any connect
+        saved = json.loads(CAL_FILE.read_text()) if CAL_FILE.exists() else {}
+        if (v := saved.pop("px_per_m", None)) is not None:   # the page's scale, saved beside the tie, wins over WTDD_PX_PER_M
+            try:
+                nav.set_scale(v, CAL_FILE.name)
+            except ValueError as e:
+                log("dog", f"WARN saved scale ignored, keeping {nav.SCALE_SOURCE}", file=CAL_FILE.name, err=str(e))
+        log("dog", f"scale {nav.PX_PER_M} px/m from {nav.SCALE_SOURCE}")
+        if saved:   # a calibration survives an API restart, not a dog power cycle (the odometry frame resets then)
+            self.cal = saved
             self.recheck = True   # loaded, not confirmed: the remote asks for the dog's position until someone drags it
             log("dog", "calibration loaded, to be confirmed", file=CAL_FILE.name, map=self.cal.get("map"), at=self.cal.get("at"))
         self.follow_state: dict[str, Any] = {}       # the follower's live status (GET /dog/state .follow)
         self._follower: asyncio.Task | None = None
         self.rec: dict[str, Any] | None = None       # a route being recorded by driving: {points, marks, started}
         self._recorder: asyncio.Task | None = None
+        self.grid: occupancy.Grid | None = None      # every LiDAR window this session, accumulated (odometry metres); None until the first frame
+        self._grid_lock = threading.Lock()           # frames arrive on the driver's dispatcher, reads on HTTP threads
+        self._grid_file: tuple[float, occupancy.Grid] | None = None   # (mtime, grid) of ui/grid.json as last loaded
+        self.corr = localize.IDENTITY                # the scan-to-map correction (localize.py), odometry frame; identity until a window is applied
+        self.loc: dict[str, Any] = {"applied": 0, "rejected": 0, "unmatched": 0, "skipped": 0, "rejected_streak": 0, "last": None}
+        self.objects = objects.Store(draft=objects.drafter())   # what the detector boxed, placed on the grid (GET /dog/objects)
+        self._objects_lock = threading.Lock()        # one detector window at a time: the objects thread and GET /dog/objects both tick
+        self._objects_ticker: threading.Thread | None = None   # started by the first objects_state()
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -101,6 +149,8 @@ class DogSession:
             if st and st["age_ms"] > STALE_MS:   # the peer is gone (power cycle, hotspot drop): one logged reconnect, no loop
                 log("dog", "WARN session stale, reconnecting once", age_ms=st["age_ms"], state_n=st["n"])
                 self.recheck = True   # the page asks for the dog's position to be confirmed (a power cycle resets the odometry frame)
+                if (g := self.grid) is not None:   # not cleared here: the code cannot tell a hotspot drop (odometry kept) from a power cycle (reset)
+                    log("dog", "WARN grid kept across the reconnect: if the dog was power-cycled its odometry frame reset; clear it (POST /dog/grid {clear: true})", grid_frames=g.frames)
                 if self._driver:
                     self._driver.cancel()
                 try:
@@ -120,6 +170,11 @@ class DogSession:
             self._unreachable = None
             self.body = b
             self._driver = self.loop.create_task(self._drive_loop())
+            try:   # S3: the dog's own obstacle avoidance on at every connect, read back (its own dog.avoid row)
+                await b.avoid(True)
+            except Exception as e:  # noqa: BLE001  (loud, not fatal: the row is FAILED, the chip shows OFF, the dog stays usable)
+                log("dog", "WARN avoidance NOT on after connect: hold-to-drive goes through the sport service until it answers",
+                    err=f"{type(e).__name__}: {str(e)[:120]}")
         return self.body
 
     async def with_body(self, fn: Callable[[Body], Awaitable[Any]]) -> Any:
@@ -132,7 +187,7 @@ class DogSession:
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
-                "avoid": self.body._avoid if self.body else None, "recheck": self.recheck,
+                "avoid": self.body._avoid if self.body else None, "recheck": self.recheck, "corr": localize.describe(self.corr),
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}
 
@@ -209,44 +264,254 @@ class DogSession:
 
     def lidar(self, on: bool | None = None) -> dict[str, Any]:
         """GET/POST /dog/lidar. on=True switches the dog's LiDAR voxel stream on (connecting first), on=False off, None
-        reads. Returns {on, n (frames), errors, age_ms, frame, points_px, why?}: points_px is the newest frame's
-        floor-to-head band in map pixels through the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
+        reads. Returns {on, n (frames), errors, cb_errors (frames the grid failed to take), grid_frames, localize, age_ms,
+        frame, points_px, why?}; switching on hands every frame to the session grid (_on_frame). localize is the
+        re-correction's {applied, rejected, unmatched, skipped, corr, last}. points_px is the newest frame's floor-to-head
+        band in map pixels through the correction and the calibration (wtdd/dog/lidar.py), [] with `why` when there is no
         frame yet, the stream is off, or the dog is not calibrated. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
-            self.run(self.with_body(lambda b: b.lidar_on() if on else b.lidar_off()))
+            self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
+        loc = {**{k: self.loc[k] for k in ("applied", "rejected", "unmatched", "skipped", "last")}, "corr": localize.describe(self.corr)}
         if self.body is None:
-            return {"on": False, "n": 0, "errors": 0, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
+            return {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "grid_frames": g.frames if (g := self.grid) is not None else 0,
+                    "localize": loc, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
         lp = self.body.lidar_points()
-        out = {k: lp[k] for k in ("on", "n", "errors", "age_ms", "frame", "utlidar_pose")}
+        out = {k: lp[k] for k in ("on", "n", "errors", "cb_errors", "age_ms", "frame", "utlidar_pose")}
+        out["grid_frames"], out["localize"] = g.frames if (g := self.grid) is not None else 0, loc
         st = self.body.state()
         if lp["points"] is None:
             return {**out, "points_px": [], "why": "no frame yet" if lp["on"] else "lidar off"}
         if not self.cal or not st or not st.get("position") or not st.get("rpy"):
             return {**out, "points_px": [], "why": "not calibrated"}
-        xy = lidar.top_down(lp["points"])
-        return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, st["position"], st["rpy"][2])}
+        xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
+        x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
+        return {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
+
+    # ---- the occupancy grid (wtdd/dog/occupancy.py): every LiDAR window this session, accumulated in odometry metres
+    def _on_frame(self, d: dict) -> None:
+        """Body._on_lidar hands every decoded frame here, on the driver's dispatcher: one count per cell per drawn frame,
+        every window after the first re-corrected first (_relocalize). A raise is counted by Body (cb_errors, on GET
+        /dog/lidar and /dog/grid) and logged there; it never stops the stream."""
+        with self._grid_lock:
+            t0 = time.perf_counter()
+            if self.grid is None:
+                self.grid = occupancy.Grid.from_frame(d)
+                log("dog", "grid started", frame_id=d["frame"], resolution=d["resolution"], origin=[round(v, 2) for v in d["origin"][:2]])
+                self.loc["skipped"] += 1   # nothing to match the first window against
+                touched = self.grid.update_frame(d)
+            else:
+                touched = self._relocalize(d)
+            if touched is not None and self.grid.frames % 100 == 0:
+                log("dog", "grid", frames=self.grid.frames, cells=int((self.grid.counts > 0).sum()), shape=self.grid.shape,
+                    touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1))
+
+    def _relocalize(self, d: dict) -> int | None:
+        """One window against the grid (wtdd/dog/localize.py), under _grid_lock: applied, rejected, unmatched or skipped
+        (the docstring's Re-correction paragraph). Returns the cells drawn, None for a rejected window (not drawn). An
+        applied window is drawn before anything moves: a grid that refuses it raises (Body counts it in cb_errors) and
+        leaves the correction, the counts and the ledger as they were."""
+        localize.same_lattice(self.grid, d)   # 01's two refusals, before anything is matched or drawn
+        xy, loc = localize.apply_points(self.corr, localize.band(d["points"])), self.loc
+        if len(xy) < localize.MIN_CELLS:
+            loc["skipped"] += 1
+            if loc["skipped"] <= 5 or loc["skipped"] % 100 == 0:
+                log("dog", "WARN localize skipped: too few band cells to match, drawn through the correction held",
+                    n=len(xy), min_cells=localize.MIN_CELLS, skipped=loc["skipped"])
+            return self.grid.update(xy)
+        st = self.body.state() if self.body else None
+        if st and st.get("position"):   # the dog's corrected position; without a state stream, the window's centre
+            pivot, kind = localize.apply_pose(self.corr, st["position"][0], st["position"][1], 0.0)[:2], "odom"
+        else:
+            pivot, kind = (float(d["center"][0]), float(d["center"][1])), "window"
+        m = localize.match(self.grid, xy, pivot)
+        why = localize.over_cap(m)
+        verdict = "unmatched" if m["score"] < localize.MIN_SCORE else "rejected" if why else "applied"
+        kv = {"dx": round(m["dx"], 3), "dy": round(m["dy"], 3), "dtheta_deg": m["dtheta_deg"], "score": round(m["score"], 3),
+              "score0": round(m["score0"], 3), "n": m["n"], "ms": m["ms"], "pivot": kind}
+        last = {"verdict": verdict, **kv, "why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        if m["ms"] > localize.BUDGET_MS:
+            log("dog", "WARN localize over budget on the driver's dispatcher", ms=m["ms"], budget_ms=localize.BUDGET_MS, n=m["n"])
+        if verdict != "applied":   # an applied window is counted below, once the grid has taken it
+            loc[verdict] += 1
+            loc["last"] = last
+        if verdict == "unmatched":
+            if loc["unmatched"] <= 5 or loc["unmatched"] % 100 == 0:
+                log("dog", "WARN localize unmatched: new territory or a bad grid, drawn through the correction held",
+                    unmatched=loc["unmatched"], min_score=localize.MIN_SCORE, **kv)
+            else:   # one line per window, as applied and rejected: only the WARN is rate-limited
+                log("dog", "localize unmatched", unmatched=loc["unmatched"], **kv)
+            return self.grid.update(xy)
+        snap = lambda: {"corr": localize.describe(self.corr), "map": self.map_pose(st), "grid_frames": self.grid.frames}  # noqa: E731
+        before = snap()
+        if verdict == "rejected":
+            loc["rejected_streak"] += 1
+            append(localize.row(m, kind, before, before, why))
+            log("dog", "localize rejected", why=why, streak=loc["rejected_streak"], **kv)
+            if loc["rejected_streak"] == 5 or (loc["rejected_streak"] > 5 and loc["rejected_streak"] % 50 == 0):
+                log("dog", "WARN windows past the cap in a row: was the dog power-cycled? POST /dog/grid {clear: true}",
+                    streak=loc["rejected_streak"])
+            return None
+        delta = localize.delta_about(pivot, m["dx"], m["dy"], m["dtheta"])
+        touched = self.grid.update(localize.apply_points(delta, xy))   # first: a grid that refuses the window (01's MAX_SIDE) raises here and nothing moves
+        self.corr = localize.compose(self.corr, delta)
+        loc["applied"] += 1
+        loc["rejected_streak"], loc["last"] = 0, last
+        append(localize.row(m, kind, before, snap()))
+        c = localize.describe(self.corr)
+        log("dog", "localize applied", corr_tx=c["tx"], corr_ty=c["ty"], corr_deg=c["theta_deg"], **kv)
+        return touched
+
+    def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
+        """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
+        `source` naming the grid drawn, plus cb_errors while a dog is connected. No ledger row: a read, like /dog/state."""
+        errs = {"cb_errors": self.body.lidar_points()["cb_errors"]} if self.body else {}
+        with self._grid_lock:
+            if self.grid is not None:
+                return {**occupancy.response(self.grid, self.cal, threshold, "session"), **errs}
+            # DEMO_CACHE: ui/grid.json, the last grid saved by POST /dog/grid {save: true} (or a fixture planted with
+            # `python -m wtdd.dog.occupancy --replay wtdd/dog/fixtures/voxel_frames.npz --png /tmp/g.png --save ui/grid.json`),
+            # drawn while this session has taken no LiDAR frame so the page shows the site with no dog present, through the
+            # calibration saved with it (its cells are in the odometry frame of the power-on that made them; a planted
+            # fixture has none and takes the session's). Live path: POST /dog/lidar {on: true}; the first frame starts the
+            # session grid and `source` flips to "session".
+            if GRID_FILE.exists():
+                mt = GRID_FILE.stat().st_mtime
+                if self._grid_file is None or self._grid_file[0] != mt:
+                    g = occupancy.Grid.load(GRID_FILE)
+                    self._grid_file = (mt, g)
+                    log("dog", "grid loaded from file", file="ui/grid.json", frames=g.frames, cells=int((g.counts > 0).sum()), frame_id=g.frame_id,
+                        cal_at=g.cal.get("at") if g.cal else "none saved: drawn through the session's calibration")
+                fg = self._grid_file[1]
+                return {**occupancy.response(fg, fg.cal or self.cal, threshold, "ui/grid.json"), **errs}
+        return {**occupancy.response(None, self.cal, threshold, None), **errs}
+
+    def grid_save(self) -> dict[str, Any]:
+        """POST /dog/grid {save: true}: the session grid to ui/grid.json, with the calibration it is drawn through (so a
+        power cycle and a new tie do not move the saved site). One dog.grid_save row; with no session grid the row fails
+        (RuntimeError) and no file is written, never an empty one."""
+        with self._grid_lock:
+            g = self.grid
+            args = {"file": "ui/grid.json", "frames": g.frames if g else 0, "frame_id": g.frame_id if g else None,
+                    "resolution": g.resolution if g else None, "cal_at": self.cal.get("at") if self.cal else None}
+            with step("dog", "dog.grid_save", "map", args, {"file_bytes": GRID_FILE.stat().st_size if GRID_FILE.exists() else None}) as r:
+                if g is None:
+                    raise RuntimeError("no grid this session: switch the LiDAR on and walk first (POST /dog/lidar {on: true})")
+                g.cal = dict(self.cal) if self.cal else None
+                if g.cal is None:
+                    log("dog", "WARN grid saved without a calibration: it will be drawn through whatever calibration exists when it is read",
+                        frames=g.frames)
+                p = g.save(GRID_FILE)
+                self._grid_file = None   # the next fallback re-reads the file, whatever the mtime resolution
+                r["state_after"] = {"file": "ui/grid.json", "bytes": p.stat().st_size, "cells": int((g.counts > 0).sum()),
+                                    "frames": g.frames, "extent_m": g.extent_m()}
+        return r["state_after"]
+
+    def grid_clear(self, why: str) -> dict[str, Any]:
+        """POST /dog/grid {clear: true, why}: drops the session grid (after a power cycle the odometry frame reset, so the
+        old counts belong to another frame), and the scan-to-map correction with it (it was measured against that grid).
+        With a calibration, dropping a correction moves the dot by it, so recheck is set and the remote asks for the
+        drag. One dog.grid_clear row, also with no grid. ui/grid.json is left as it is."""
+        with self._grid_lock:
+            g = self.grid
+            before = {"frames_before": g.frames if g else 0, "cells_before": int((g.counts > 0).sum()) if g else 0,
+                      "corr_before": localize.describe(self.corr)}
+            with step("dog", "dog.grid_clear", "map", {"why": why, **before}) as r:
+                if self.cal is not None and tuple(self.corr) != localize.IDENTITY:   # the dot is drawn through it: dropping it moves the dot
+                    self.recheck = True
+                    log("dog", "WARN grid cleared under a correction: the dot moved by it, drag the dog to where it is", corr=before["corr_before"])
+                self.grid = None
+                self.corr = localize.IDENTITY
+                self.loc.update(applied=0, rejected=0, unmatched=0, skipped=0, rejected_streak=0, last=None)
+                r["state_after"] = {"cleared": True, "corr_reset": True, "recheck": self.recheck}
+        return {"cleared": True, "frames_before": before["frames_before"]}
+
+    # ---- the object layer (wtdd/dog/objects.py): detector boxes placed on the grid along their bearing
+    def objects_state(self, draft: bool = False) -> dict[str, Any]:
+        """GET /dog/objects: takes the detector's newest window from watch.json if it is new, places its boxes on the
+        session grid from the dog's odometry pose, and returns {n, objects, windows, fov_deg, source, why?}. The first
+        call starts the 'objects' thread, which does the same every objects.TICK_S with draft=True: the one-line drafts
+        (a model call) run there, outside every lock, never on the session loop and never inside a GET. WTDD_CAM_FOV_DEG
+        is read here, at the point of use. No ledger row for the read; the store's events are object.seen rows."""
+        fov = config.maybe("WTDD_CAM_FOV_DEG")
+        fov_deg = float(fov) if fov else None
+        st = self.body.state() if self.body else None
+        pose = {"position": list(st["position"][:2]), "yaw": st["rpy"][2]} if st and st.get("position") and st.get("rpy") else None
+        with self._objects_lock:
+            why = objects.tick(self.objects, objects.WATCH, pose, self.grid, self.cal, fov_deg, self._grid_lock)
+            body = {**self.objects.state(), "fov_deg": fov_deg, "source": "session"}
+            if self._objects_ticker is None:
+                self._objects_ticker = threading.Thread(target=self._objects_loop, name="objects", daemon=True)
+                self._objects_ticker.start()
+        if why:
+            body["why"] = why
+        if draft:
+            objects.draft_due(self.objects)
+        return body
+
+    def _objects_loop(self) -> None:
+        """The 'objects' thread: windows are taken and objects decay and get drafted while the page is closed. Ends when
+        the session loop is closed (a test's teardown); a raise is logged each time it changes, never silent, never fatal
+        (GET /dog/objects answers the same raise as a 500)."""
+        last = None
+        while True:
+            time.sleep(objects.TICK_S)
+            if self.loop.is_closed():
+                return
+            try:
+                self.objects_state(draft=True)
+                last = None
+            except Exception as e:  # noqa: BLE001  (logged; the next tick tries again, the GET shows it)
+                err = f"{type(e).__name__}: {e}"
+                if err != last:
+                    log("objects", "WARN tick FAILED", err=err[:160])
+                last = err
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
         st = st if st is not None else (self.body.state() if self.body else None)
         if not self.cal or not st or not st.get("position") or not st.get("rpy"):
             return None
-        px, py, h = nav.to_map(self.cal, st["position"], st["rpy"][2])
+        x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])   # the believed pose: odometry through the correction
+        px, py, h = nav.to_map(self.cal, (x, y), yaw)
         return {"p": [round(px), round(py)], "heading_deg": round(math.degrees(h), 1)}
 
     def calibrate(self, p, heading: float) -> dict[str, Any]:
-        """Ties the odometry pose right now to map point p facing `heading` (radians). One dog.calibrate row."""
+        """Ties the corrected odometry pose right now to map point p facing `heading` (radians); the scan-to-map correction
+        is kept (the grid is drawn through it) and named on the row. One dog.calibrate row."""
         st = self.run(self.with_body(lambda b: b.fresh_state(required=True)))
-        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1)}, self.map_pose(st)) as r:
-            self.cal = {**nav.calibration(st["position"], st["rpy"][2], p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        c = self.corr
+        x, y, yaw = localize.apply_pose(c, st["position"][0], st["position"][1], st["rpy"][2])
+        with step("dog", "dog.calibrate", "map", {"p": list(p), "heading_deg": round(math.degrees(heading), 1), "corr": localize.describe(c)}, self.map_pose(st)) as r:
+            self.cal = {**nav.calibration((x, y), yaw, p, heading), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
             self.recheck = False
-            CAL_FILE.write_text(json.dumps(self.cal))
+            self._save_cal()
             r["state_after"] = {"cal": self.cal, "map": self.map_pose(st)}
         log("dog", "calibrated", p=list(p), heading_deg=round(math.degrees(heading), 1))
         return self.map_pose(st)
 
+    def _save_cal(self) -> None:
+        """dog_cal.json: the tie and, once the page has set it, the scale beside it; each write keeps the other."""
+        keep = {"px_per_m": nav.PX_PER_M} if nav.SCALE_SOURCE in ("page", CAL_FILE.name) else {}
+        CAL_FILE.write_text(json.dumps({**(self.cal or {}), **keep}))
+
+    def scale(self, px_per_m: Any = None) -> dict[str, Any]:
+        """GET/POST /dog/scale, the page's slider. None reads {px_per_m, source}, no row. A value goes through
+        nav.set_scale inside one dog.scale row (px_per_m before and after) and is saved beside the tie; a value that is
+        not a number or outside 20..400 fails the row (ValueError naming it) and changes nothing."""
+        now = {"px_per_m": nav.PX_PER_M, "source": nav.SCALE_SOURCE}
+        if px_per_m is None:
+            return now
+        with step("dog", "dog.scale", "map", {"px_per_m": px_per_m, "source": "page"}, now) as r:
+            nav.set_scale(px_per_m, "page")
+            self._save_cal()
+            r["state_after"] = {"px_per_m": nav.PX_PER_M, "source": nav.SCALE_SOURCE, "file": CAL_FILE.name}
+        log("dog", "scale set", px_per_m=nav.PX_PER_M, was=now["px_per_m"])
+        return r["state_after"]
+
     # ---- following the drawn path
-    def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = True, avoid: bool = True) -> dict[str, Any]:
+    def follow(self, path: list, stops: list[int], reach_px: float = 30.0, from_nearest: bool = False, avoid: bool = True) -> dict[str, Any]:
+        from ..nogo import refuse                  # 04: a route through a drawn no-go zone is refused before anything else is looked at
+        refuse(path, "dog")                        # reads the map's zones; one route.refused row, then ValueError; no probe, no connect, no dog.follow row
         if self.cal is None:
             raise RuntimeError("not calibrated: tell the dog where it is first (POST /dog/calibrate)")
         if self._follower and not self._follower.done():
@@ -263,7 +528,8 @@ class DogSession:
         start = 0 if (near_start or not from_nearest) else nav.nearest_index(path, pose["p"])   # at the start of a loop: replay it, not the end
         log("dog", "follow from waypoint", start=start, n=len(path), near_start=near_start, dist_to_start_px=round(math.dist(path[0], pose["p"])))
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
-                             "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid)}
+                             "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid),
+                             "replans": [], "skipped_stops": []}
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -271,32 +537,121 @@ class DogSession:
         self.follow_state["resume"] = True
         return dict(self.follow_state)
 
+    def _live_px(self) -> list | None:
+        """S6: the newest LiDAR window's floor-to-head band in map pixels, every point, through the correction and the
+        tie (what the page draws as blue dots); None when there is no live view: no body or stream, a window older than
+        LIVE_MAX_AGE_MS, no pose, or not calibrated."""
+        b = self.body
+        if b is None or not hasattr(b, "lidar_points") or self.cal is None:
+            return None
+        lp, st = b.lidar_points(), b.state()
+        if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
+            return None
+        if not st or not st.get("position") or not st.get("rpy"):
+            return None
+        xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
+        x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
+        return lidar.to_map_points(xy, self.cal, (x, y), yaw, max_points=max(1, len(xy)))
+
+    def _decided(self, i: int | None, action: str, reason: str, say: str, **extra: Any) -> None:
+        """S6: one route.decided row per decision the follower makes: the action (unchecked, snapped, detoured, refused),
+        the reason, and one first-person sentence (args.say, the receipts' main line). A refusal is a FAILED row and
+        raises, so the follow fails loud with it."""
+        args = {"at": i, "action": action, "reason": reason, "say": say, **extra}
+        log("dog", f"decided {action}: {say}")
+        with step("dog", "route.decided", "map", args, self.map_pose()) as r:
+            if action == "refused":
+                raise RuntimeError(f"refused: {reason}")
+            r["state_after"] = {"action": action}
+
     def _set_vel(self, x: float, y: float, z: float) -> None:
         self.vel, self.vel_t = (x, y, z), time.monotonic()   # the drive loop publishes it and stops 0.6 s after the last refresh
 
+    async def _goto(self, target, reach_px: float, fs: dict[str, Any], what: str) -> dict[str, Any]:
+        """nav.steer at 10 Hz feeding the drive loop until `target` is within reach_px; returns the pose there. Not
+        reached in WP_TIMEOUT_S: TimeoutError naming `what`."""
+        t_wp = time.monotonic()
+        while True:
+            pose = self.map_pose()
+            if pose is None:
+                raise RuntimeError("no pose (state stream stopped)")
+            ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), target, reach_px)
+            fs.update({"dist_px": ctl["dist_px"], "err_deg": ctl["err_deg"], "p": pose["p"], "heading_deg": pose["heading_deg"]})
+            if ctl["reached"]:
+                return pose
+            if time.monotonic() - t_wp > WP_TIMEOUT_S:
+                raise TimeoutError(f"{what} not reached in {WP_TIMEOUT_S}s (dist {ctl['dist_px']} px, err {ctl['err_deg']} deg)")
+            self._set_vel(ctl["x"], 0.0, ctl["z"])
+            await asyncio.sleep(0.1)
+
     async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
         """Waypoint by waypoint from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume().
-        One dog.follow row at the end with the waypoints reached and the error, if any. Never retries a waypoint."""
+        S6: before each waypoint the LIVE view decides (the newest LiDAR window's band, plan.blocker), and the grid is memory
+        that only labels a blocker permanent or new. A covered waypoint moves to free floor within plan.LIVE_SNAP_M
+        (snapped), else plan.replan's detour runs to the next waypoint free in the live view (detoured; no stop on it),
+        else the follow is refused; each decision is one route.decided row with a first-person sentence (args.say). No
+        live view: one "unchecked" row and the dots are followed as drawn. At most MAX_REPLANS detours per follow. One dog.follow row at the end
+        with the waypoints reached, the replans, the stops skipped and the error, if any. Never retries a waypoint."""
         fs = self.follow_state
         args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
         try:
             with step("dog", "dog.follow", "map", args, self.map_pose()) as r:
                 try:
-                    for i in range(start, len(path)):
+                    if self.grid is None:
+                        log("dog", "WARN following without an occupancy grid: a blob on the route cannot make a replan (POST /dog/lidar {on: true})")
+                    i, replans, warned = start, 0, False
+                    while i < len(path):
                         fs["i"] = i
-                        t_wp = time.monotonic()
-                        while True:
-                            pose = self.map_pose()
-                            if pose is None:
-                                raise RuntimeError("no pose (state stream stopped)")
-                            ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), path[i], reach_px)
-                            fs.update({"dist_px": ctl["dist_px"], "err_deg": ctl["err_deg"], "p": pose["p"], "heading_deg": pose["heading_deg"]})
-                            if ctl["reached"]:
-                                break
-                            if time.monotonic() - t_wp > WP_TIMEOUT_S:
-                                raise TimeoutError(f"waypoint {i} not reached in {WP_TIMEOUT_S}s (dist {ctl['dist_px']} px, err {ctl['err_deg']} deg)")
-                            self._set_vel(ctl["x"], 0.0, ctl["z"])
-                            await asyncio.sleep(0.1)
+                        target, live = path[i], self._live_px()
+                        if live is None:
+                            if not warned:   # S6: said once, in words; the drawn dots are followed with the dog's own avoidance
+                                warned = True
+                                self._decided(None, "unchecked", "no live view (the LiDAR is off, its newest window is older than "
+                                              f"{LIVE_MAX_AGE_MS} ms, or the dog is not calibrated): the waypoints are followed as drawn, avoidance on",
+                                              "I can't see live right now, so I'm following your dots as drawn with my own obstacle avoidance on.")
+                        elif (b := plan.blocker(path[i], live, self.grid, self.cal, lock=self._grid_lock)) is not None:
+                            what = f"{b['kind']}, {b['cells']} cells, {b['in_memory']} in memory"
+                            seen = (f"something new ({b['cells']} cells, not in my memory: a new obstacle)" if b["kind"] == "new obstacle"
+                                    else f"something I've seen here before ({b['cells']} cells, {b['in_memory']} in my memory: permanent)")
+                            sn = plan.snap(path[i], live)
+                            if sn is not None:
+                                q, m = sn
+                                self._decided(i, "snapped", f"dot {i + 1} blocked by {what}: moved {m} m to free floor",
+                                              f"Dot {i + 1} is covered by {seen}. I'm going to the free spot {m} m away and carrying on in order.",
+                                              blocker=b, m=m, **{"from": [int(path[i][0]), int(path[i][1])], "to": q})
+                                target = q
+                            else:
+                                j = next((k for k in range(i + 1, len(path)) if plan.blocker(path[k], live) is None), None)
+                                if j is None:
+                                    self._decided(i, "refused", f"dot {i + 1} blocked by {what}: no free floor within {plan.LIVE_SNAP_M} m "
+                                                  "and no later waypoint free in the live view",
+                                                  f"Dot {i + 1} is covered by {seen}, there's no free floor within {plan.LIVE_SNAP_M} m of it and "
+                                                  "no dot after it I can reach, so I'm stopping here.", blocker=b)
+                                if replans >= MAX_REPLANS:
+                                    raise RuntimeError(f"waypoint {i} blocked after {replans} detours this follow (MAX_REPLANS): not circling")
+                                pose = self.map_pose()
+                                if pose is None:
+                                    raise RuntimeError("no pose (state stream stopped)")
+                                skipped = [k for k in stops if i <= k < j]
+                                passed = ", ".join(f"dot {k + 1}" for k in range(i, j))
+                                say = (f"Dot {i + 1} is covered by {seen} and there's no free floor within {plan.LIVE_SNAP_M} m of it. "
+                                       f"I'm going around to dot {j + 1}, passing {passed}" + (f", so stop {', '.join(str(k + 1) for k in skipped)} is missed" if skipped else "") + ".")
+                                reason = f"dot {i + 1} blocked by {what}: no free floor within {plan.LIVE_SNAP_M} m; detour to dot {j + 1}"
+                                try:
+                                    det = plan.replan(pose["p"], path, i, self.grid, self.cal, lock=self._grid_lock, live_px=live, rejoin=j, say=say)
+                                except ValueError as e:
+                                    self._decided(i, "refused", f"{reason}: no detour ({e})",
+                                                  f"Dot {i + 1} is covered by {seen} and I can't find a way around it to dot {j + 1} ({e}), so I'm stopping here.",
+                                                  blocker=b, rejoin=j)
+                                self._decided(i, "detoured", reason, say, blocker=b, rejoin=j, passed=list(range(i, j)), skipped_stops=skipped)
+                                fs["replans"].append({"at": i, "rejoin": j, "waypoints": len(det["path"]), "skipped_stops": skipped})
+                                fs["skipped_stops"] += skipped
+                                replans += 1
+                                for k, q in enumerate(det["path"]):   # every point, the first is where it stands; no stop on a detour
+                                    pose = await self._goto(q, reach_px, fs, f"detour point {k} around waypoint {i}")
+                                i = j
+                                continue
+                        pose = await self._goto(target, reach_px, fs, f"waypoint {i}")
                         fs["reached"].append(i)
                         log("dog", f"waypoint {i}/{len(path) - 1} reached", p=pose["p"])
                         if i in stops:
@@ -309,12 +664,14 @@ class DogSession:
                                     raise TimeoutError(f"stopped at {i} for {STOP_TIMEOUT_S}s without resume")
                                 await asyncio.sleep(0.2)
                             fs["stopped_at"] = None
+                        i += 1
                     fs["done"] = True
                 finally:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
                     await self._halt()
                     fs["active"] = False
-                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose()}
+                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose(),
+                                        "replans": len(fs["replans"]), "skipped_stops": list(fs["skipped_stops"])}
         except asyncio.CancelledError:
             fs["error"] = "stopped"
             log("dog", "follow cancelled (stop)")
