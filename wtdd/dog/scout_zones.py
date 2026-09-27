@@ -27,15 +27,18 @@ its own zone.decided row, ok or not (never `decided`: 11's grade_decide owns tha
 not_a_hazard at p >= WTDD_DECIDE_THRESHOLD (default 0.7) is one zone.proposed row and an open proposal "z<n>" whose photo
 is the detector frame copied once to ~/Pictures/wtdd with its sha256. A thing is asked once (07's object id); a thing
 whose cells overlap an open proposal, a dismissed one or a scout zone already on the map is the same thing (logged, no
-call, no row). A failed call, an unreadable frame or an empty blob is a failed row and a line in state()["failed"],
-never a canned label, never retried. confirm(id, by) follows POST /map's rules (a stale _version is 409, the previous
-map kept as map.prev.json) and nogo.zones() must accept the entry first; every refusal is a failed zone.confirmed row
-before anything is written.
+call, no row). A failed call, an unreadable frame or a blob that raises is a failed row and a line in state()["failed"],
+never a canned label, never retried. An empty blob is a wait, not a failure: the cone from where the dog is now misses
+07's hit because the dog moved since 07 placed the thing, so no row, one WARN per change, named in state()'s why, and
+the thing is taken again by the next feed with the hit 07 refreshes each window. confirm(id, by) follows POST /map's rules (a stale _version is 409, the
+previous map kept as map.prev.json) and nogo.zones() must accept the entry first; every refusal is a failed
+zone.confirmed row before anything is written.
 
 UNVERIFIED on the real dog (the first live run must confirm): everything 07 lists (the camera's field of view, the
 bearing's sign, one odometry for the voxel frame and the pose); the cone uses the pose when the scout is fed, not when
-the detector's frame was shot; the photo is the newest watch frame, which the detector may already have replaced since
-the window 07 placed; a table touching a wall brings the wall's cells inside the cone along (the person sees the cells
+the detector's frame was shot (a dog that moves waits, above, and a dog that moved a little may get part of the thing's
+cells); the photo is the newest watch frame, which the detector may already have replaced since the window 07 placed;
+a table touching a wall brings the wall's cells inside the cone along (the person sees the cells
 and the photo, and decides); positive obstacles only: COCO has no hole or trench and the grid's z band has no floor, so
 an opening is always drawn by a person (04). The live Jev call has not been run with a key (02's own UNVERIFIED)."""
 from __future__ import annotations
@@ -93,8 +96,8 @@ def _key(cells) -> set:
 def blob(grid: occupancy.Grid, pose: dict, box, hit: dict, frame_w: float, fov_deg: float,
          threshold: int = occupancy.THRESHOLD) -> list[list[float]]:
     """The thing's own counted cells as sorted lattice points [[x_m, y_m], ...] (see the module docstring for the
-    bound); [] when 07's hit cell itself falls outside it (the dog moved since the pin). Pure: the caller holds the
-    grid's lock."""
+    bound); [] when 07's hit cell itself falls outside it (the dog moved since the pin: the caller waits for 07's next
+    one). Pure: the caller holds the grid's lock."""
     if threshold < 1:
         raise ValueError(f"threshold must be at least 1 frame, got {threshold}")
     lo = objects.bearing([box[0], 0, box[0], 0], frame_w, fov_deg)
@@ -249,18 +252,25 @@ class Proposals:
         self.n_ids = 0
         self.counts = {"asked": 0, "proposed": 0, "confirmed": 0, "dismissed": 0, "deduped": 0}
         self.thr: float | None = None        # the threshold of the last feed, for state()'s why
-        self._warned: str | None = None
+        self._warned: str | None = None     # what placed objects wait for (no pose, or a dog that moved), logged once per change
         self.error: str | None = None        # the last feed's raise, on the GET until a feed gets past the map read
         self._lock = threading.Lock()        # this store's own state; never held during the model call
 
     def _map(self) -> Path:
         return self.map_path or field.MAP
 
+    def _warn(self, why: str | None) -> None:
+        """One WARN line per change of what placed objects wait for, kept for state()'s why; None: nothing waits."""
+        if why and why != self._warned:
+            log("scout", why)
+        self._warned = why
+
     def feed(self, objs: list[dict], frame: dict, pose: dict | None, grid: occupancy.Grid | None, cal: dict | None,
              fov_deg: float | None, threshold: int = occupancy.THRESHOLD, grid_lock=None) -> dict[str, int]:
-        """Every placed object not handled before is handled once (see the module docstring); returns the counts. A raise
-        (a bad WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a failed ledger write) is kept as state()["error"] and
-        re-raised for the objects thread's log; the objects it had not taken yet are taken by the next feed."""
+        """Every placed object not handled before is handled once, or waits (see the module docstring);
+        returns the counts. A raise (a bad WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a failed ledger write) is
+        kept as state()["error"] and re-raised for the objects thread's log; the objects it had not taken yet are taken
+        by the next feed."""
         try:
             return self._feed(objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock)
         except Exception as e:
@@ -274,22 +284,18 @@ class Proposals:
             cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and o["id"] not in self.handled]
         n = {"handled": 0, "decided": 0, "proposed": 0, "failed": 0, "deduped": 0}
         if not cands:
+            self._warn(None)
             return n
         missing = [k for k, v in (("pose", pose), ("grid", grid), ("calibration", cal), ("field of view", fov_deg)) if v is None]
         if missing:   # taken again when they are back: 07 placed these, the scout cannot see them now
-            why = f"WARN {len(cands)} placed object(s) waiting: no {', no '.join(missing)}"
-            if why != self._warned:
-                log("scout", why)
-            self._warned = why
+            self._warn(f"WARN {len(cands)} placed object(s) waiting: no {', no '.join(missing)}")
             return n
-        self._warned = None
         thr = self.thr = decide_threshold()
         on_map = [(z.get("name"), _key(z["cells"])) for z in json.loads(self._map().read_text()).get("zones", [])
                   if z.get("source") == "scout" and z.get("cells")]   # a person already made these rules
         with self._lock:
             self.error = None   # past the threshold and the map: this feed can ask
             self.handled.update(o["id"] for o in cands)
-        n["handled"] = len(cands)
         try:
             data = Path(frame["file"]).read_bytes()
             from PIL import Image
@@ -299,9 +305,10 @@ class Proposals:
             for o in cands:
                 self._fail(o, "frame read", err)
                 self._row("zone.proposed", "map", {"object_id": o["id"], "kind": o["label"]}, None, None, False, err, 0)
-            n["failed"] = len(cands)
+            n["handled"] = n["failed"] = len(cands)
+            self._warn(None)
             return self._summary(n, t_all)
-        fn = self.decide or decider()
+        fn, waiting = self.decide, []   # decider() is read when a call is about to be made, never on a tick that asks nothing
         for o in cands:
             t0 = time.perf_counter()
             try:
@@ -312,8 +319,13 @@ class Proposals:
             except Exception as e:  # noqa: BLE001  (a failed row and a failed line, never a zone of no cells)
                 cells, poly, err = [], None, f"blob FAILED: {type(e).__name__}: {e}"
             else:
-                err = None if cells else (f"no cell seen {threshold}+ times inside the box's cone within {DEPTH_M} m of the hit "
-                                          f"from the pose now (the dog moved since 07 placed it?)")
+                if not cells:   # the cone from here misses 07's hit: the dog moved since 07 placed it. A wait, not a failure:
+                    waiting.append(o)   # taken again by the next feed, with the hit 07 refreshes from where the dog is then
+                    with self._lock:
+                        self.handled.discard(o["id"])
+                    continue
+                err = None
+            n["handled"] += 1
             if err:
                 self._fail(o, "cells", err)
                 self._row("zone.proposed", "map", {"object_id": o["id"], "kind": o["label"]}, None, None, False, err,
@@ -334,6 +346,7 @@ class Proposals:
             blob_ms = round((time.perf_counter() - t0) * 1000)
             area = round(len(cells) * res * res, 4)
             q = {"kind": o["label"], "conf": o["p"], "state": None, "labels": list(SCOUT_LABELS)}
+            fn = fn or decider()
             t1 = time.perf_counter()
             try:   # outside every lock: a model call can take seconds
                 q["state"] = words(o["label"], o["p"], o["dist_m"], o.get("bearing_deg"), area)
@@ -389,7 +402,10 @@ class Proposals:
                       f"proposed {zid}: {len(cells)} cells, {z['label']} at p {z['p']:.2f}, {z['dist_m']} m",
                       blob_ms + round((time.perf_counter() - t2) * 1000), stub)   # the cells and the photo; the call is its own row's
             n["proposed"] += 1
-        return self._summary(n, t_all)
+        names = ", ".join(f"{o['id']} {o['label']}" for o in waiting)
+        self._warn(f"WARN {len(waiting)} placed object(s) waiting ({names}): no counted cell in the box's cone from where the dog "
+                   f"is now (it moved since 07 placed them); asked when 07 places them again" if waiting else None)
+        return self._summary(n, t_all) if n["handled"] else n
 
     def _summary(self, n: dict, t_all: float) -> dict[str, int]:
         log("scout", f"{'WARN ' if n['handled'] and not n['proposed'] else ''}feed", **n, open=len(self.open),
