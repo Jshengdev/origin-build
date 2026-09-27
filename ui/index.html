@@ -378,8 +378,9 @@ function App() {
 // 00 · halt-on-person · start
 // The person halt (wtdd/dog/halt.py, wtdd/dog/session.py person_tick): its own 1 s poll of GET /dog/state, not gated on
 // a connected dog (a halt read back from the ledger stands with no dog). Halted: the red line, the frame the halt was
-// decided on, latency_ms, and a resume that needs a name (POST /dog/resume {by}); a refusal is shown in red. A detector
-// that is down or stale: the yellow chip. Everything drawn is what the API served; the page computes nothing.
+// decided on, latency_ms and still_ms (the read-back that said still, the eval's clock), and a resume that needs a name
+// (POST /dog/resume {by}); a refusal is shown in red. A detector that is down or stale: the yellow chip. Everything
+// drawn is what the API served; the page computes nothing.
 function HaltPanel() {
   const [st, setSt] = useState(null);
   const [by, setBy] = useState("");
@@ -394,7 +395,7 @@ function HaltPanel() {
       <div>
         <div class="halt-stop">STOPPED · person in frame · <input class="halt-name" placeholder="your name" value=${by} onInput=${e => setBy(e.target.value)}/> to resume
           <button class="small key" disabled=${!by.trim()} onClick=${resume}>resume</button></div>
-        <div class="mono">latency_ms ${h.pending ? "(halting now)" : h.latency_ms} · was ${h.was}${h.band ? ` · box ${h.band.h_frac} of the frame (band ≥ ${h.band.near_frac})` : ""}${h.at ? ` · ${h.at}` : ""}</div>
+        <div class="mono">latency_ms ${h.pending ? "(halting now)" : h.latency_ms}${h.still_ms != null ? ` · still_ms ${h.still_ms}` : ""} · was ${h.was}${h.band ? ` · box ${h.band.h_frac} of the frame (band ≥ ${h.band.near_frac})` : ""}${h.at ? ` · ${h.at}` : ""}</div>
         ${h.ok === false && html`<div class="mono bad">halt FAILED: ${h.error}</div>`}
         ${h.file_error && html`<div class="mono bad">thumbnail FAILED: ${h.file_error}</div>`}
         ${said && html`<div class="mono bad">resume refused: ${said}</div>`}
