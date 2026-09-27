@@ -35,6 +35,8 @@ The contract under test:
                             is held, the no-turn check does not apply, it stands until timeout_s and ends ok with
                             closed false and a `why` naming the control; the frames/cells/cb_errors checks still apply
   POST /dog/scout {z?, target_deg?, timeout_s?}   {ok, scout: the live state}; a refusal is a 500 with the error;
+                            a value that is not a number (null, "abc") is coerced inside DogSession.scout, so it is
+                            the same refusal: a 500 and that press's one FAILED row, the raw value kept as a string;
                             POST /dog/stop cancels it
   DogSession.scout_state / state()["scout"]   {active, turned_deg, frames, cells_added, seconds, ranges, error}; present
                             (active false) before any scout, so the page can always read it, on a fresh session with
@@ -875,6 +877,26 @@ class Api(Harness):
         self.assertTrue(all(not r["ok"] for r in rows))
         self.assertIn("stopped", str(rows[-1]["response_or_error"]))
         self.assertEqual(tuple(s.vel), (0.0, 0.0, 0.0))
+
+    def test_a_number_that_is_not_one_is_a_failed_row_not_a_bare_500(self):
+        body = FakeBody(yaw_rate=6.0, frames=self.frames)
+        s = self.session(body)
+        self.stack.enter_context(mock.patch.object(session.DogSession, "_inst", s))
+        base = self.serve()
+        for k, v in (("z", None), ("timeout_s", "abc")):
+            with self.subTest(k=k, v=v):
+                n = len(self.rows("dog.scout"))
+                code, o = self.post(base, "/dog/scout", {k: v})
+                self.assertEqual(code, 500, o)
+                self.assertFalse(o["ok"])
+                rows = self.rows("dog.scout")
+                self.assertEqual(len(rows), n + 1, "the malformed press is its own one FAILED row")
+                self.assertFalse(rows[-1]["ok"])
+                self.assertEqual(rows[-1]["args"][{"z": "z_rad_s"}.get(k, k)], str(v), "the raw value, JSON-safe")
+                json.dumps(rows[-1], allow_nan=False)
+                self.assertFalse(s.state()["scout"]["active"])
+        self.assertEqual((body.ticks, body.cmds), ([], []), "refused before anything moves")
+        self.assertEqual(self.rows("dog.calibrate"), [])
 
 
 class Fresh(Harness):
