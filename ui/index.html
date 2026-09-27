@@ -70,8 +70,11 @@
   .tl-tick.tl-on { fill: var(--live, #0b0dc4); opacity: 1; stroke: var(--live, #0b0dc4); stroke-width: 8; }   /* the stroke widens a 0 ms tick so the pinned one reads */
   .tl-tick.tl-bad { fill: var(--bad, #b2382e); opacity: .9; }   /* after .tl-on: a pinned FAILED tick stays red */
   .tl-tick.tl-bad.tl-on { opacity: 1; stroke: var(--bad, #b2382e); }
+  .tl-tick.tl-warn { stroke: var(--warn, #d9a400); stroke-width: 4; stroke-dasharray: 8 5; opacity: .45; }   /* its ts did not parse: dashed at the left edge, never drawn as the window's first row */
+  .tl-tick.tl-warn.tl-on { opacity: 1; }
   .tl-hit { fill: transparent; cursor: pointer; }
   .tl-mk { fill: var(--live, #0b0dc4); pointer-events: none; } .tl-mk.tl-bad { fill: var(--bad, #b2382e); }
+  .tl-mk.tl-warn { stroke: var(--warn, #d9a400); stroke-width: 2; stroke-dasharray: 3 2; opacity: .35; }   /* no age: a fixed low opacity, never the newest row's 1 */
   .tl-ring { fill: none; stroke: var(--live, #0b0dc4); stroke-width: 5; pointer-events: none; animation: tl-pulse 1.1s ease-in-out infinite alternate; }
   .tl-ring.tl-bad { stroke: var(--bad, #b2382e); }
   .tl-arrow { stroke: var(--live, #0b0dc4); stroke-width: 4; stroke-linecap: round; pointer-events: none; } .tl-arrow.tl-bad { stroke: var(--bad, #b2382e); }
@@ -399,24 +402,28 @@ function useMarks() {
   return tl;
 }
 const tlAge = r => r.age_s != null ? `${r.age_s} s` : "age unknown: its ts did not parse";
+const tlNoTs = r => r.t_s == null || r.age_s == null;   // the server could not parse this row's ts (it WARNs): drawn dashed in --warn
 function Timeline({ tl, pin, setPin }) {
   if (!tl) return html`<div class="panel"><h2>Timeline · every row a tick</h2><div class="mono">reading /marks…</div></div>`;
   if (tl.error) return html`<div class="panel"><h2>Timeline · every row a tick</h2><div class="mono bad">FAILED GET /marks · ${tl.error}</div></div>`;
   if (!tl.rows.length) return html`<div class="panel"><h2>Timeline · every row a tick</h2><div class="mono" style=${{ color: "var(--warn)" }}>no rows in the ledger</div></div>`;
-  const LANE = 48, X0 = 140, W = 840, s = tl.span_s || 1;   // a draw scale in viewBox units, not numbers; a row whose ts did not parse (t_s null) sits at the left edge
-  const p = tl.rows.find(r => r.i === pin), k = p?.mark;
+  // A draw scale in viewBox units, not numbers. span_s is 0 for a one-second window (a unit span keeps x finite) and null when
+  // no ts parsed; a row whose ts did not parse is drawn dashed at the left edge and counted in the warn line under the svg.
+  const LANE = 48, X0 = 140, W = 840, s = tl.span_s || 1;
+  const p = tl.rows.find(r => r.i === pin), k = p?.mark, noTs = tl.rows.filter(tlNoTs).length;
   // Drawn in two passes (gotcha 26-3): every row's tap pad first, then every visible tick on top, so a finger on a tick pins
   // that tick and a pad only catches a tap that misses every tick. Same-second rows still stack: the last one drawn wins.
   const tap = i => () => setPin(q => q === i ? null : i);
-  const at = tl.rows.map(r => ({ r, x: X0 + (r.t_s ?? 0) / s * W, w: Math.max(3, (r.latency_ms || 0) / 1000 / s * W), y: tl.lanes.indexOf(r.agent) * LANE + 8 }));
+  const at = tl.rows.map(r => ({ r, x: r.t_s == null ? X0 : X0 + r.t_s / s * W, w: Math.max(3, (r.latency_ms || 0) / 1000 / s * W), y: tl.lanes.indexOf(r.agent) * LANE + 8 }));
   return html`<div class="panel"><h2>Timeline · every row a tick</h2>
     <svg class="tl-svg" viewBox=${`0 0 1000 ${tl.lanes.length * LANE + 8}`}>
       ${tl.lanes.map((a, j) => html`<text key=${"lane" + j} class="tl-lane" x="0" y=${j * LANE + 34}>${a}</text>`)}
       ${at.map(({ r, x, w, y }) => html`<rect key=${"pad" + r.i} class="tl-hit" data-pad=${r.i} x=${x - 8} y=${y - 4} width=${Math.max(24, w + 16)} height=${LANE} onPointerDown=${tap(r.i)}/>`)}
       ${at.map(({ r, x, w, y }) => html`<g key=${r.i} data-i=${r.i} onPointerDown=${tap(r.i)}>
           <title>${r.tool} · ${r.ts} · ${r.latency_ms} ms · ${r.mark ? (r.mark.why || "on the map") : "no place on this row"}</title>
-          <rect class=${"tl-tick" + (r.i === pin ? " tl-on" : "") + (r.ok ? "" : " tl-bad")} x=${x} y=${y} width=${w} height="32"/></g>`)}
+          <rect class=${"tl-tick" + (r.i === pin ? " tl-on" : "") + (r.ok ? "" : " tl-bad") + (tlNoTs(r) ? " tl-warn" : "")} x=${x} y=${y} width=${w} height="32"/></g>`)}
     </svg>
+    ${noTs > 0 && html`<div class="mono" style=${{ color: "var(--warn)" }}>${noTs} ${noTs === 1 ? "row has" : "rows have"} a ts that did not parse (dashed, at the left edge)</div>`}
     <div class=${"mono" + (p && !p.ok ? " bad" : "")}>${p
       ? `pinned · ${p.tool}${p.ok ? "" : " FAILED"} · ${tlAge(p)}${k?.m != null ? ` · ${k.m} m` : ""}${k?.why ? ` · ${k.why}` : ""}${k ? "" : " · no place on this row"}`
       : `${tl.n} of ${tl.total} rows · tap a tick to see its place`}</div>
@@ -425,10 +432,10 @@ function Timeline({ tl, pin, setPin }) {
 function MarksLayer({ tl, pin }) {
   if (!tl?.rows) return null;
   const p = tl.rows.find(r => r.i === pin), k = p?.mark, bad = p && !p.ok ? " tl-bad" : "";
-  const fade = r => Math.max(.15, 1 - (r.age_s ?? 0) / 3600);   // a draw scale (faint after an hour), not a number: the age is served, and a null one is in the mono line
+  const fade = r => r.age_s == null ? null : Math.max(.15, 1 - r.age_s / 3600);   // a draw scale (faint after an hour), not a number; no age: .tl-warn's fixed low opacity
   return html`<g>
     <defs>${["", "-bad"].map(b => html`<marker key=${b} id=${"tl-head" + b} viewBox="0 0 10 10" refX="7" refY="5" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0L10 5L0 10z" class=${"tl-mk" + (b ? " tl-bad" : "")}/></marker>`)}</defs>
-    ${tl.rows.filter(r => r.mark?.px).map(r => html`<circle key=${r.i} class=${"tl-mk" + (r.ok ? "" : " tl-bad")} cx=${r.mark.px[0]} cy=${r.mark.px[1]} r="5" opacity=${fade(r)}/>`)}
+    ${tl.rows.filter(r => r.mark?.px).map(r => html`<circle key=${r.i} class=${"tl-mk" + (r.ok ? "" : " tl-bad") + (tlNoTs(r) ? " tl-warn" : "")} cx=${r.mark.px[0]} cy=${r.mark.px[1]} r="5" opacity=${fade(r)}/>`)}
     ${k?.px && html`<g>
       ${k.pts && html`<polyline class="tl-path" points=${k.pts.map(q => q.join(",")).join(" ")}/>`}
       ${k.px2 && html`<line class=${"tl-arrow" + bad} x1=${k.px2[0]} y1=${k.px2[1]} x2=${k.px[0]} y2=${k.px[1]} markerEnd=${`url(#tl-head${bad ? "-bad" : ""})`}/>`}
