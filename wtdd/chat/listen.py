@@ -49,9 +49,14 @@ intruder.verdict row {verdict, meaning, p, action: what the listener did}. stran
 DANGER!!!" x3 + light_alarm) only on a who_dis question (a person in frame at an ask stop, or intruder_alarm); on a
 heads_up or decide question it stands down. standing_down: "ok, standing down" (verdict known); handled: "ok, closed";
 acknowledged: the question stays open for handled, nothing posted; below WTDD_REPLY_THRESHOLD or unclear: "do you know
-them? yes or no" once (no verdict row yet; the round keeps holding), then stand down, logged as unclear. A failed live
-reading: "couldn't read the reply: <error>", verdict unread, stand down, never the regex. Never an alarm on an unclear
-reply. A pending of kind halt (item 00) is never read as a reply."""
+them? yes or no" once (no verdict row yet; the round keeps holding; the next reply is read against the re-ask), then
+stand down, logged as unclear. A failed live reading: "couldn't read the reply: <error>", verdict unread, stand down,
+never the regex. Never an alarm on an unclear reply. A pending of kind halt (item 00) is never read as a reply. One
+acked_ms per flag: the verdict row after a hold carries closed_ms instead, and after a re-ask the final row keeps the
+first reply's time. A verdict read by the DEMO_CACHE stub (no JEV_API_KEY) is a cached/stub row, like its reply.decided
+row; an unread one is not. pending.json holds one question, so a held flag lasts until the next stop's question
+replaces it (one WARN naming it) or PENDING_WINDOW_S after its post (then logged as "no answer in time", though it was
+answered). UNVERIFIED until the first live run: the re-ask's answer read by Jev, and a hold across two stops."""
 from __future__ import annotations
 import json
 import re
@@ -137,6 +142,15 @@ class Listener:
         self.post(to, key, "escalate", text, file)
         return to
 
+    def _open(self, pend: dict[str, Any]) -> None:
+        """This stop's question into pending.json, which holds one. A held flag ("on it") outlives its stop, so an open
+        question it replaces is one WARN naming that flag's trigger: dropped, never silently."""
+        if PENDING.exists():
+            old = json.loads(PENDING.read_text())
+            log("chat", "WARN an open flag is replaced by this stop's question", was=old.get("trigger"),
+                acknowledged=bool(old.get("acknowledged")), age_s=round(time.time() - old.get("t", 0)), now=pend["trigger"])
+        PENDING.write_text(json.dumps(pend))
+
     def _event(self, tool: str, m: dict[str, Any], **extra: Any) -> None:
         append({"step": tool, "agent": "central", "tool": tool, "app": "imessage", "ok": True,
                 "args": {"from": m["sender"], "text": (m["text"] or "")[:200], "guid": m["guid"], **extra},
@@ -172,9 +186,9 @@ class Listener:
                 # its own key, since a send that failed after its claim has consumed alarm:<k> and the stop is never re-flagged)
                 self.say(f"escalate-fail:{k}", f"couldn't escalate: {type(e).__name__}: {str(e)[:100]}")
                 return
-            PENDING.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": seen.get("file"), "seconds": 5,
-                                           "trigger": f"alarm:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes"),
-                                           "question": "who dis?!"}))
+            self._open({"kind": "who_dis", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                        "trigger": f"alarm:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes"),
+                        "question": "who dis?!"})
             self.await_verdict(VERDICT_WAIT_S)
         dec = seen["decision"]   # look_and_see always returns one: {label, p, needs_person, model, action} or {error}
         if "error" in dec:
@@ -189,17 +203,17 @@ class Listener:
             except Exception as e:  # noqa: BLE001  (nobody to flag, or the flag failed: posted to the group as its error, no hold)
                 self.say(f"escalate-fail:{k}", f"couldn't escalate: {type(e).__name__}: {str(e)[:100]}")
                 return
-            PENDING.write_text(json.dumps({"kind": "heads_up", "t": time.time(), "file": seen.get("file"), "seconds": 5,
-                                           "trigger": f"decide:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes"),
-                                           "decision": dec, "question": line}))
+            self._open({"kind": "heads_up", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                        "trigger": f"decide:{k}", "chat": to, "classes": (seen.get("detector") or {}).get("classes"),
+                        "decision": dec, "question": line})
             self.await_verdict(VERDICT_WAIT_S)
         elif dec["action"] == "ask":
             from ..decide import ask_line
             line = ask_line(dec)
             self.say(f"decide:{k}", line, seen.get("file"))
-            PENDING.write_text(json.dumps({"kind": "decide", "t": time.time(), "file": seen.get("file"), "seconds": 5,
-                                           "trigger": f"decide:{k}", "classes": (seen.get("detector") or {}).get("classes"),
-                                           "decision": dec, "question": line}))
+            self._open({"kind": "decide", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                        "trigger": f"decide:{k}", "classes": (seen.get("detector") or {}).get("classes"),
+                        "decision": dec, "question": line})
             self.await_verdict(VERDICT_WAIT_S)
 
     def await_verdict(self, seconds: float) -> bool:
@@ -293,8 +307,10 @@ class Listener:
         three times and light_alarm, only when the question was "who dis?!" (kind who_dis); a heads_up (17) or decide
         (02) question stands down, so WTDD_ALARM and the map's ask flags still gate the alarm. standing_down: "ok,
         standing down"; handled: "ok, closed"; acknowledged: the question stays open for handled. Unclear or below
-        WTDD_REPLY_THRESHOLD: one re-ask, no verdict row yet, then stand down as unclear. A failed reading is posted as
-        its error and stands down (verdict unread), never the regex. A halt (00) is never read here."""
+        WTDD_REPLY_THRESHOLD: one re-ask (the pending's question becomes it, and keeps this reply's acked fields), no
+        verdict row yet, then stand down as unclear. After a hold, acked_ms is the hold row's; this row gets closed_ms.
+        Rows read by the stub say cached/stub. A failed reading is posted as its error and stands down (verdict unread),
+        never the regex. A halt (00) is never read here."""
         if not PENDING.exists():
             return False
         pend = json.loads(PENDING.read_text())
@@ -310,16 +326,21 @@ class Listener:
         from .. import tools
         from ..decide import read_reply
         kind = pend.get("kind")
-        acked = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
+        now = oncall.reply_fields(oncall.post_for(pend.get("trigger"), ledger_rows()), m.get("ts_utc"))
+        # one acked_ms per flag (numbers.py and 10's record count every one): after a hold, the hold's row has it and this
+        # reply's time from the flag is closed_ms; after a re-ask, the first reply's time stands (the person answered then)
+        acked = {k.replace("acked_", "closed_"): v for k, v in now.items()} if pend.get("acknowledged") else (pend.get("acked") or now)
         asked = pend.get("question") or ("who dis?!" if kind == "who_dis" else "what is it?")   # intruder_alarm's pending names none
+        stub = not config.maybe("JEV_API_KEY")   # read_reply's own test: its DEMO_CACHE reading labels this verdict row too
 
         def row(verdict: str, meaning: str | None, p: float | None, did: str) -> None:
             append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
                     "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger"), **acked, "chat": chat},
                     "state_before": None, "state_after": {"verdict": verdict, "meaning": meaning, "p": p, "action": did},
-                    "response_or_error": None, "latency_ms": 0})
+                    "response_or_error": None, "latency_ms": 0,
+                    **({"cached": True, "source": "stub"} if stub and verdict != "unread" else {})})   # unread: no reading at all
             log("chat", "VERDICT", by=hname(m["sender"]), verdict=verdict, meaning=meaning or "", p=p, action=did,
-                text=m["text"][:60], acked_ms=acked["acked_ms"])
+                text=m["text"][:60], **{k: v for k, v in acked.items() if k.endswith("_ms")})
 
         try:
             r = read_reply(asked, m["text"], trigger=pend.get("trigger"), chat=chat, guid=m["guid"], **{"from": m["sender"]})
@@ -329,7 +350,7 @@ class Listener:
             self.say(f"unread:{m['guid']}", f"couldn't read the reply: {type(e).__name__}: {str(e)[:100]}", guid=chat)
             return True
         if r["action"] == "reask" and not pend.get("reasked"):
-            PENDING.write_text(json.dumps({**pend, "reasked": True}))
+            PENDING.write_text(json.dumps({**pend, "reasked": True, "question": REASK, "acked": acked}))   # the next reply answers the re-ask
             log("chat", "reply unclear: asked once more", meaning=r["meaning"], p=r["p"])
             self.say(f"reask:{m['guid']}", REASK, guid=chat)
             return True
