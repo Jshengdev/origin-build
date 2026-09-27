@@ -68,7 +68,7 @@
   img.lv { width: 100%; display: block; aspect-ratio: auto 16 / 9; border-radius: var(--r-card); background: var(--ink, #262323); }
   svg.lv { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   svg.lv rect { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
-  svg.lv text { font-family: var(--mono); font-weight: 600; paint-order: stroke; stroke: var(--ink, #262323); stroke-width: 5; }
+  svg.lv text { font-family: var(--mono); font-weight: 600; paint-order: stroke; stroke: var(--page, #f6f3ec); stroke-width: 8; }
   svg.lv.dim { opacity: .35; }
   .lv-note { position: absolute; left: 8px; top: 8px; font-family: var(--mono); font-size: 10.5px; padding: 2px 6px; border-radius: var(--r-card); background: var(--ink, #262323); color: var(--page, #f6f3ec); }
   .lv-stat { margin: var(--gap-in) 0 var(--gap-group); opacity: 1; }
@@ -392,7 +392,7 @@ function LiveView({ dog, watch }) {
   if (!dog?.connected) return null;
   const retry = () => { setFailed(null); setEpoch(e => e + 1); };
   const onError = () => fetch(`${API}/dog/frame.jpg`).then(async r => setFailed(r.ok ? "stream closed by the server" : (await r.json()).error)).catch(e => setFailed(`${e}`));
-  const tile = text => html`<div class="lv-tile"><span>${text}</span><button class="small" onClick=${retry}>retry</button></div>`;
+  const tile = text => html`<div class="lv-tile"><span>${text}${v?.source === "stub" && html` <span class="lv-stub">stub</span>`}</span><button class="small" onClick=${retry}>retry</button></div>`;
   if (v?.stale) return tile(`stream stalled · ${(v.age_ms / 1000).toFixed(1)} s`);
   if (failed) return tile(`video FAILED · ${failed}`);
   const fresh = v && watch && watch.age_ms != null && watch.age_ms < 3000;   // the eye panel's rule for the detector
