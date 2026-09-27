@@ -425,9 +425,9 @@ function ObjectsLayer() {
 // The scout's proposed no-go zones (GET /dog/scout, wtdd/dog/scout_zones.py). ScoutLayer draws each proposal as served:
 // its LiDAR cells as red squares, the padded hull dashed (a stated rule on those cells, never a shape a model drew), the
 // photo and "kind → label · p · proposed" (· stub when the DEMO_CACHE stub answered); a zone a person confirmed (a
-// map.zones entry with source "scout") is solid with who confirmed it. ScoutPanel is the tap: a required name, confirm or
-// dismiss per proposal (POST /dog/scout), a failed tap and a failed model call named in red, zero says why. Polled every
-// 2 s with or without a dog. The page computes nothing: cells_px and poly are drawn as the API serves them.
+// map.zones entry with source "scout") is solid with who confirmed it, and · stub when its proposal was the stub's.
+// ScoutPanel is the tap: a required name, confirm or dismiss per proposal (POST /dog/scout), a failed tap and a failed
+// model call named in red, zero says why. Polled every 2 s with or without a dog. The page computes nothing: cells_px and poly are drawn as the API serves them.
 function useScout() {
   const [s, setS] = useState(null);
   const poll = () => fetch(`${API}/dog/scout`).then(r => r.json()).then(setS).catch(e => setS({ n: 0, proposals: [], failed: [], error: `GET /dog/scout failed: ${e}` }));
@@ -442,7 +442,7 @@ function ScoutLayer({ map }) {
   return html`<g>
     ${zones.map(z => html`<g key=${z.name} class="scout" data-zone=${z.name}>
       <polygon class="scout-zone" points=${scoutPts(z.poly)}/>
-      <text class="lbl" x=${z.poly[0][0]} y=${Math.min(...z.poly.map(p => p[1])) - 10}>${z.name} · ${z.label} · confirmed by ${z.by}</text></g>`)}
+      <text class="lbl" x=${z.poly[0][0]} y=${Math.min(...z.poly.map(p => p[1])) - 10}>${z.name} · ${z.label} · confirmed by ${z.by}${z.app === "stub" ? " · stub" : ""}</text></g>`)}
     ${props.map(z => { const x = Math.min(...z.poly.map(p => p[0])), y0 = Math.min(...z.poly.map(p => p[1])), y1 = Math.max(...z.poly.map(p => p[1])); return html`<g key=${z.id} class="scout" data-id=${z.id}>
       <polygon class="scout-hull" points=${scoutPts(z.poly)}/>
       <path class="scout-cell" data-cells=${z.cells_px.length} d=${z.cells_px.map(p => `M${p[0] - 3} ${p[1] - 3}h6v6h-6z`).join("")}/>
