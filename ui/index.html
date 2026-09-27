@@ -454,9 +454,10 @@ function ScoutPanel({ map, setMap }) {
   const [s, poll] = useScout();
   const [by, setBy] = useState(() => localStorage.getItem("wtdd.scout.by") || "");
   const [err, setErr] = useState({});   // proposal id -> its last failed tap, shown on its line
+  const [panelErr, setPanelErr] = useState(null);   // a failed map reload after a confirm: the proposal's line is gone, so the panel says it
   const name = by.trim();
   const tap = (id, action) => post("/dog/scout", { id, action, by: name, _version: map?._version }).then(r => r.json())
-    .then(o => { setErr(e => ({ ...e, [id]: o.ok ? null : `${action} FAILED: ${o.error}` })); if (o.ok) fetch("/map").then(r => r.json()).then(setMap); poll(); })
+    .then(o => { setErr(e => ({ ...e, [id]: o.ok ? null : `${action} FAILED: ${o.error}` })); if (o.ok) fetch("/map").then(r => r.ok ? r.json() : Promise.reject(`GET /map ${r.status}`)).then(m => { setMap(m); setPanelErr(null); }).catch(e => setPanelErr(`map reload FAILED after ${action} ${id}: ${e} · reload the page before the next confirm`)); poll(); })
     .catch(e => setErr(x => ({ ...x, [id]: `${action} FAILED: ${e}` })));
   return html`<div class="panel"><h2 style=${{ marginBottom: "var(--gap-in)" }}>Scout · proposed no-go</h2>
     <div class="row tight"><b>Scout · ${s ? s.n : "…"} proposed</b>
@@ -469,6 +470,7 @@ function ScoutPanel({ map, setMap }) {
       ${err[z.id] && html`<span class="scout-failed">${err[z.id]}</span>`}</div>`)}
     ${(s?.failed || []).map((f, i) => html`<div class="scout-failed" key=${"f" + i}>scout: ${f.stage ? `${f.stage} failed` : "model call failed"}: ${f.error} · ${f.kind} ${f.object_id} · ${(f.ts || "").slice(11)}</div>`)}
     ${s?.error && html`<div class="scout-failed">FAILED ${s.error}</div>`}
+    ${panelErr && html`<div class="scout-failed">${panelErr}</div>`}
     ${s && s.n === 0 && s.why && html`<div class="hint">${s.why}</div>`}
     <div class="mono">scout proposes what its eyes can name; openings are drawn by a person${s?.source ? ` · ${s.source}` : ""}</div>
   </div>`;
