@@ -2,7 +2,8 @@
 
 Frames. Odometry (LF_SPORT_MOD_STATE position x,y in meters and IMU yaw in radians) is fixed at power-on and drifts
 (leg odometry slips on rugs and turns; yaw is gyro-integrated). The map is ui/house.svg pixel space, y down, about
-PX_PER_M pixels per meter (WTDD_PX_PER_M, measured; 108.5 when unset, from the bottom living room guessed at 445 px and 4.1 m). One calibration ties them: the odometry
+PX_PER_M pixels per meter (WTDD_PX_PER_M, measured; 108.5 when unset, from the bottom living room guessed at 445 px and 4.1 m;
+set_scale moves it while the API runs, the page's slider through DogSession.scale). One calibration ties them: the odometry
 pose at the moment Johnny says "the dog is at map point (mx, my) facing heading h". Map heading is radians, 0 = +x on
 screen, increasing clockwise (because y is down); a positive ROS yaw turns the dog left, which is counter-clockwise on
 screen, so heading = h - (yaw - yaw0). "I'm here" later re-ties the position (keeps the heading): that is the
@@ -17,24 +18,35 @@ import math
 from .. import config
 
 
-def _px_per_m() -> float:
-    """S5: the map scale is measured, not guessed. WTDD_PX_PER_M in .env (pixels per metre on house.svg); unset keeps
-    108.5, the first guess ("445 px wide and 4.1 m"). Measure it: the living room's width on the scan in pixels (scan_px,
-    drawn at the old scale) against the drawing's 445 px gives WTDD_PX_PER_M = 108.5 * 445 / scan_px. Read once at
-    import, so the API restarts to take a new value. A value that is not a number, or outside 20..400, stops loud."""
-    raw = config.maybe("WTDD_PX_PER_M")
-    if raw is None:
-        return 108.5
+def _checked(raw, name: str) -> float:
     try:
         v = float(raw)
-    except ValueError:
-        raise ValueError(f"WTDD_PX_PER_M must be pixels per metre as a number (like 103.4), got {raw!r}") from None
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be pixels per metre as a number (like 103.4), got {raw!r}") from None
     if not 20.0 <= v <= 400.0:
-        raise ValueError(f"WTDD_PX_PER_M={v} is outside 20..400 pixels per metre; house.svg's first guess was 108.5")
+        raise ValueError(f"{name}={v} is outside 20..400 pixels per metre; house.svg's first guess was 108.5")
     return v
 
 
-PX_PER_M = _px_per_m()
+def _px_per_m() -> tuple[float, str]:
+    """S5: the map scale is measured, not guessed. WTDD_PX_PER_M in .env (pixels per metre on house.svg); unset keeps
+    108.5, the first guess ("445 px wide and 4.1 m"). Measure it: the living room's width on the scan in pixels (scan_px,
+    drawn at the old scale) against the drawing's 445 px gives WTDD_PX_PER_M = 108.5 * 445 / scan_px. Read at import; a
+    value that is not a number, or outside 20..400, stops loud. Returns (value, source)."""
+    raw = config.maybe("WTDD_PX_PER_M")
+    return (108.5, "default") if raw is None else (_checked(raw, "WTDD_PX_PER_M"), "WTDD_PX_PER_M")
+
+
+def set_scale(v, source: str) -> float:
+    """S5b: the scale while the API runs (the page's slider, a saved dog_cal.json; wtdd/dog/session.py scale). Every
+    reader (to_map, occupancy.to_map_px, lidar.to_map_points) reads PX_PER_M at call time, so all follow at once. Outside
+    20..400 or not a number: ValueError naming the value, and the scale is left as it was."""
+    global PX_PER_M, SCALE_SOURCE
+    PX_PER_M, SCALE_SOURCE = _checked(v, "px_per_m"), source
+    return PX_PER_M
+
+
+PX_PER_M, SCALE_SOURCE = _px_per_m()   # SCALE_SOURCE: default | WTDD_PX_PER_M | dog_cal.json | page
 VMAX, WMAX, AHEAD, K = 0.3, 0.5, 0.6, 1.6
 
 
