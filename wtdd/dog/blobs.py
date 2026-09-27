@@ -25,9 +25,11 @@ How.
                       label None with the error, never a canned word.
   erase               a FURNITURE word at p >= WTDD_DECIDE_THRESHOLD on a run whose cells it covers more than half of:
                       that run's class-1 cells become class 3 (slab), except the ones a kept run also holds (the wall the
-                      shelf stands against keeps its thickness), and its segment is dropped. Nothing else ever changes: a
-                      label's cells outside the run are never read, a wall word moves nothing, a word on a blob only
-                      names it, and the plan given is never touched.
+                      shelf stands against keeps its thickness), and its segment is dropped. Never a run whose top
+                      reaches TALL in the plan given (15's `full`): a label kept from an earlier plan, where that run was
+                      still low, is refused there, WARNed once. Nothing else ever changes: a label's cells outside the
+                      run are never read, a wall word moves nothing, a word on a blob only names it, and the plan given
+                      is never touched.
 Env, read at the point of use: WTDD_BLOBS_LABEL (live, the default; stub, the DEMO_CACHE below; anything else fails
 every label, WARN once), WTDD_DECIDE_THRESHOLD, WTDD_SHIFT; through llm and decide OPENROUTER_API_KEY,
 OPENROUTER_VISION_MODEL, JEV_API_KEY, JEV_MODEL.
@@ -71,11 +73,12 @@ SYSTEM = ("You are a robot dog's eyes. You get a narrow vertical strip of its ca
           f"shape, and one line about that shape in words. Name the thing in the middle of the strip with one word from this list: "
           f"{', '.join(LABELS)}. Say unknown if the photo does not show it. Never say where walls are or what shape anything has.")
 _warned: set[str] = set()   # WTDD_BLOBS_LABEL values already WARNed about (once each)
+_refused: set[str] = set()   # erase's refusals already WARNed about: the reads re-erase every 2 s, one line each is enough
 
 
 def find(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, tall: float = floorplan.TALL) -> dict[str, Any]:
-    """{cls, segments, runs, blobs, origin, resolution, threshold, why?}: cls and segments are floorplan._plan's own; runs
-    are every segment's cells [[ix, iy]] (full-height walls included; erase reads them); blobs are what a model may name,
+    """{cls, segments, runs, full, blobs, origin, resolution, threshold, why?}: cls, segments and full are floorplan._plan's
+    own; runs are every segment's cells [[ix, iy]] (full-height walls included; erase reads them); blobs are what a model may name,
     each {id, kind run | blob, seg?, cells [[x, y]] metres, xy, top_m, length_m, grounded, geometry_verdict}. JSON as it
     stands, but cls. A read: no row, no model."""
     p = floorplan._plan(grid, threshold, tall)
@@ -89,9 +92,10 @@ def find(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, tall: float
 
     blobs = []
     for k, (seg, run) in enumerate(zip(p["segments"], p["runs"])):
+        if p["full"][k]:
+            continue   # a full-height wall: never offered to a model, and never greyed (erase)
         s = shape(run)
-        if s.pop("top") >= floorplan._layer(tall, grid):
-            continue   # a full-height wall: never offered to a model
+        s.pop("top")
         length = round(math.dist(seg[:2], seg[2:4]) + r, 2)   # its cells end to end
         blobs.append({"id": f"r{k}", "kind": "run", "seg": k, **s, "length_m": length, "grounded": True,
                       "geometry_verdict": f"wall (grounded, straight {length:.1f} m, {s['top_m']:.1f} m high)"})
@@ -118,7 +122,7 @@ def find(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, tall: float
         length = round(float(max(np.ptp(a[:, 0]), np.ptp(a[:, 1])) + 1) * r, 2)
         blobs.append({"id": f"b{sum(x['kind'] == 'blob' for x in blobs)}", "kind": "blob", **s, "length_m": length, "grounded": grounded,
                       "geometry_verdict": f"{KINDS[major]} ({'grounded' if grounded else 'floating'}, {length:.1f} m, {s['top_m']:.1f} m high)"})
-    out = {"cls": cls, "segments": p["segments"], "runs": [run.tolist() for run in p["runs"]], "blobs": blobs,
+    out = {"cls": cls, "segments": p["segments"], "runs": [run.tolist() for run in p["runs"]], "full": p["full"], "blobs": blobs,
            "origin": [float(ox), float(oy)], "resolution": r, "threshold": threshold}
     return {**out, "why": p["why"]} if p.get("why") else out
 
@@ -260,22 +264,35 @@ def label_stop(grid: occupancy.Grid, img, pose: dict, fov_deg: float, threshold:
 
 
 def erase(plan: dict, labels: list[dict], threshold: float | None = None) -> dict[str, Any]:
-    """A new plan {**plan, cls, segments, runs, moved}: every run a FURNITURE label at p >= threshold (default
-    WTDD_DECIDE_THRESHOLD) covers more than half of goes from class 1 to class 3, but for the cells a kept run also
-    holds, and its segment is dropped; moved lists "r<k>". A label off the list is a ValueError. Nothing else changes."""
+    """A new plan {**plan, cls, segments, runs, full, moved, refused}: every run a FURNITURE label at p >= threshold
+    (default WTDD_DECIDE_THRESHOLD) covers more than half of goes from class 1 to class 3, but for the cells a kept run
+    also holds, and its segment is dropped; moved lists "r<k>". A run whose plan["full"] is True (its top reaches TALL:
+    a full-height wall) is never moved, whatever a label kept from an earlier plan says: it is listed in refused and
+    WARNed once. A label off the list is a ValueError. Nothing else changes."""
     bad = [x.get("label") for x in labels if x.get("label") is not None and x.get("label") not in LABELS]
     if bad:
         raise ValueError(f"labels off the closed list ({', '.join(LABELS)}): {bad}")
     thr = decide.threshold() if threshold is None else threshold
     r, (ox, oy) = plan["resolution"], plan["origin"]
     runs = [{(int(a), int(b)) for a, b in np.asarray(x, dtype=np.int64).reshape(-1, 2)} for x in plan["runs"]]
-    named = [{(round((x - ox) / r), round((y - oy) / r)) for x, y in lab["cells"]} for lab in labels
-             if lab.get("kind") == "run" and lab.get("label") in FURNITURE and lab.get("p") is not None and lab["p"] >= thr]
-    gone = [k for k, run in enumerate(runs) if any(len(run & s) * 2 > len(run) for s in named)]
+    covers = []   # per label, the runs it names: a furniture word over the threshold on more than half of a run's cells
+    for lab in labels:
+        s = ({(round((x - ox) / r), round((y - oy) / r)) for x, y in lab["cells"]}
+             if lab.get("kind") == "run" and lab.get("label") in FURNITURE and lab.get("p") is not None and lab["p"] >= thr else set())
+        covers.append([k for k, run in enumerate(runs) if len(run & s) * 2 > len(run)])
+    gone = sorted({k for c in covers for k in c if not plan["full"][k]})
+    refused = sorted({k for c in covers for k in c if plan["full"][k]})
+    for lab, c in zip(labels, covers):
+        for k in c:
+            if plan["full"][k] and (key := f"{lab.get('blob_id')} {lab['label']} {lab['p']} r{k} {len(runs[k])}") not in _refused:
+                _refused.add(key)
+                log("blobs", "WARN erase refused: a furniture word on a full-height wall run, which stays a wall",
+                    blob=lab.get("blob_id"), label=lab["label"], p=lab["p"], run=f"r{k}", cells=len(runs[k]))
     kept = set().union(*(run for k, run in enumerate(runs) if k not in gone))
     cls = plan["cls"].copy()
     for a, b in set().union(*(runs[k] for k in gone)) - kept:
         if cls[b, a] == 1:
             cls[b, a] = 3
     return {**plan, "cls": cls, "segments": [s for k, s in enumerate(plan["segments"]) if k not in gone],
-            "runs": [x for k, x in enumerate(plan["runs"]) if k not in gone], "moved": [f"r{k}" for k in gone]}
+            "runs": [x for k, x in enumerate(plan["runs"]) if k not in gone], "full": [f for k, f in enumerate(plan["full"]) if k not in gone],
+            "moved": [f"r{k}" for k in gone], "refused": [f"r{k}" for k in refused]}
