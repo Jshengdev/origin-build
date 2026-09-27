@@ -47,3 +47,5 @@ cams/
 
 # sources of truth (the origin folder), read locally, never committed
 context/
+# 18 · dispatch: the running or last dispatch, the page's feed (GET /dispatch)
+dispatch.json
