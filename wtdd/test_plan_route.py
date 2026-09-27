@@ -188,6 +188,25 @@ class Route(Fresh):
         self.assertIn("bad", rows[0]["response_or_error"])
         self.assert_nothing_written()
 
+    def test_a_malformed_zone_on_the_map_fails_the_row_by_name_never_as_a_leg(self):
+        """zones not given (the tool's call): the map's own zones are checked before any leg, so a hand-edited zone is
+        never drawn on the page as a red 'no route' leg between two taps the planner never tried."""
+        m = json.loads(self.before)
+        m["zones"].append({"name": "bad", "nogo": "yes", "poly": []})
+        TMP_MAP.write_text(json.dumps(m, indent=2) + "\n")
+        self.before = TMP_MAP.read_text()
+        with self.assertRaises(ValueError) as cm:
+            plan.route(THROUGH_WALL, grid=self.g, cal=CAL)
+        self.assertIn("bad", str(cm.exception))
+        self.assertNotIn("leg ", str(cm.exception), "a malformed zone is not a leg with no route")
+        self.assertFalse(hasattr(cm.exception, "failed_leg"), "nothing for the page to draw as a failed leg")
+        self.assertEqual(rows_since(self.n0, "plan.route"), [], "no leg was planned")
+        rows = rows_since(self.n0, "plan.multistop")
+        self.assertEqual([r["ok"] for r in rows], [False], "one plan.multistop row, failed")
+        self.assertIn("bad", rows[0]["response_or_error"])
+        self.assertNotIn("failed_leg", rows[0]["args"])
+        self.assert_nothing_written()
+
     def test_a_tap_inside_a_wall_is_a_failed_leg_and_no_partial_route(self):
         taps = [(300, 900), (650, 900), ON_WALL]
         with self.assertRaises(ValueError) as cm:
