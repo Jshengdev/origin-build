@@ -48,7 +48,9 @@ the fixture's lattice cell (gx, gy) is metres / resolution):
              WTDD_DECIDE_THRESHOLD) was given for moves from class 1 to class 3, its segment is dropped, `moved` lists
              its id. Nothing else ever changes: no cell is added or removed, a wall label moves nothing, a label on a
              non-wall blob moves nothing, a FAILED label moves nothing, a label off the list is a ValueError. The input
-             plan is untouched. Deleting every model call (no labels, or the stub's) moves nothing on the map.
+             plan is untouched. Deleting every model call (no labels, or the stub's) moves nothing on the map. A run
+             whose top reaches TALL in the plan given (a full-height wall: never offered) never moves, whatever a label
+             kept from an earlier plan says of it: its id is in `refused`, and a WARN says so.
   blob.labelled row: agent "blobs", app openrouter | stub, args {blob_id, kind, cells (count), geometry_verdict,
              crop_sha, line, shift_id}, state_after {label, p, model, erase}, response_or_error the raw replies of both
              models (or the error), latency_ms.
@@ -381,6 +383,25 @@ class Erase(Base):
         (gone,) = set(segs(plan["segments"])) - set(segs(out["segments"]))
         for x, y in (gone[:2], gone[2:4]):
             self.assertTrue(1.7 - RES <= x <= 2.0 + RES and -1.0 - RES <= y <= 1.0 + RES, f"the dropped segment {gone} is not the shelf's")
+
+    def test_a_furniture_word_never_greys_the_full_height_wall(self):
+        """A label kept from an earlier plan, where this run was low and offered (the far wall seen only to 0.9 m at the
+        first stop), named shelf at p 0.95 and covering every cell of the run that is full height in this plan (the dog
+        walked closer and the wall filled in): the run stays a wall, its line stays drawn, and the refusal is a WARN."""
+        plan = self.plan()
+        ox, oy = plan["origin"]
+        metres = [[[ox + a * RES, oy + b * RES] for a, b in run] for run in plan["runs"]]
+        k = max(range(len(metres)), key=lambda k: len(lattice(metres[k]) & cells_of("wall_a")))
+        self.assertLessEqual(cells_of("wall_a"), lattice(metres[k]), "the run picked is not wall_a's")
+        self.assertNotIn(f"r{k}", [b["id"] for b in plan["blobs"]], "the full-height wall was offered to a model")
+        stale = {"blob_id": "r9", "kind": "run", "cells": metres[k], "xy": np.mean(metres[k], axis=0).tolist(),
+                 "geometry_verdict": "wall (grounded, straight 5.3 m, 0.9 m high)", "label": "shelf", "p": 0.95, "model": "jev"}
+        out = blobs.erase(plan, [stale])
+        self.assert_nothing_moved(plan, out, "a furniture word greyed the full-height wall")
+        self.assertTrue(all(at(out, out["cls"], c) == 1 for c in cells_of("wall_a")), "wall_a left the wall layer")
+        self.assertEqual(out["refused"], [f"r{k}"])
+        self.assertTrue([l for l in self.err.getvalue().splitlines() if l.startswith("[wtdd:blobs] WARN") and "refused" in l],
+                        self.err.getvalue()[-600:])
 
     def test_below_the_threshold_nothing_moves(self):
         plan = self.plan()
