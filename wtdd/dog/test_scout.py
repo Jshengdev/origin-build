@@ -49,15 +49,19 @@ The contract under test:
   dog.scout row            args {z_rad_s, target_deg, timeout_s, shift_id, source}
                             state_before {map, heading0_deg, grid_frames, cells, lidar_n, range_obstacle, localize, utlidar}
                             state_after {seconds, frames, cells_added, cells_total, turned_deg, heading_end_deg, closed,
-                            avoid, cb_errors_during, range_obstacle, velocity, yaw_speed, localize, utlidar_turned_deg}
+                            avoid, cb_errors_during, range_obstacle, velocity, yaw_speed, localize, utlidar_turned_deg,
+                            band_hits (band cells the frames put into the grid during the spin, one per cell per frame)}
                             plus NIGHT-2 contract D's names for 10/11/22's fixtures: {heading0, closed_deg, velocity_path, why}
-                            (why: None on a clean close, the WARN on a turn that did not close, the error on a FAILED row);
+                            (why: None on a clean close; the WARNs, "; "-joined, on a turn that did not close or on a
+                            grid that already held every cell the band hit; the error on a FAILED row);
                             args.source is "dropoff" when the scout tied the pose itself, else the tie's own source ("tap")
                             state_after is complete on a FAILED row too (the finding is the numbers it reached)
   FAILED (ok false, the error named, the scout's own one halt): LiDAR switch refused; no turn after NO_TURN_S (names "avoid on" or
-                            "avoid off"); timeout (turned_deg on the row); 0 frames; 0 band cells (names
-                            lidar.Z_MIN/Z_MAX); cb_errors rising. Not closed is ok true, closed false, a stderr WARN
-                            and `why` both saying "not closed".
+                            "avoid off"); timeout (turned_deg on the row); 0 frames; 0 band cells, i.e. no voxel of any
+                            frame in the band, band_hits 0 (names lidar.Z_MIN/Z_MAX); cb_errors rising. Not closed is ok
+                            true, closed false, a stderr WARN and `why` both saying "not closed". A band that was hit on
+                            a grid that already held every cell (a second press at the same spot, the z 0 control after
+                            a spin) is ok with a WARN and `why` saying "no new cells" and how to clear: never the band.
   ui/index.html             one component between `// 14 · scout-spin · start` and `// 14 · scout-spin · end`: the
                             'scout: spin and draw' button (POST /dog/scout) with the honest title ("the LiDAR sees 360
                             already ..."), the `scout · ...` / `scouted · ...` / `scout FAILED: ...` status fragment;
@@ -105,7 +109,7 @@ ARGS = {"z_rad_s", "target_deg", "timeout_s", "shift_id", "source"}
 BEFORE = {"map", "heading0_deg", "grid_frames", "cells", "lidar_n", "range_obstacle", "localize", "utlidar"}
 AFTER = {"seconds", "frames", "cells_added", "cells_total", "turned_deg", "heading_end_deg", "closed", "avoid",
          "cb_errors_during", "range_obstacle", "velocity", "yaw_speed", "localize", "utlidar_turned_deg",
-         "heading0", "closed_deg", "velocity_path", "why"}
+         "heading0", "closed_deg", "velocity_path", "why", "band_hits"}
 PAGE = {"active", "turned_deg", "frames", "cells_added", "seconds", "ranges", "error"}
 
 
@@ -289,7 +293,8 @@ class Row(unittest.TestCase):
                   "range_obstacle": RANGES, "localize": "absent", "utlidar": "absent"}
         after = {"seconds": 12.8, "frames": 96, "cells_added": 1203, "cells_total": 1203, "turned_deg": 358.2, "heading_end_deg": 10.5,
                  "closed": True, "avoid": False, "cb_errors_during": 0, "range_obstacle": RANGES, "velocity": [0, 0, 0], "yaw_speed": 0.0,
-                 "localize": "absent", "utlidar_turned_deg": "absent", "heading0": 12.3, "closed_deg": 358.2, "velocity_path": "sport", "why": None}
+                 "localize": "absent", "utlidar_turned_deg": "absent", "heading0": 12.3, "closed_deg": 358.2, "velocity_path": "sport", "why": None,
+                 "band_hits": 1203}
         return args, before, after
 
     def test_the_row_shape_is_the_contract(self):
@@ -364,6 +369,7 @@ class Spin(Harness):
         self.assertEqual(c["frames"], len(self.frames))
         self.assertEqual(c["cells_added"], len(fx.world_cells()), "every wall cell the eight wedges showed")
         self.assertEqual(c["cells_total"], len(fx.world_cells()))
+        self.assertEqual(c["band_hits"], sum(len(fx.frame_cells(k)) for k in range(fx.WEDGES)), "one count per band cell per frame")
         self.assertGreaterEqual(c["turned_deg"], 360)
         self.assertTrue(c["closed"], c["turned_deg"])
         self.assertLess(abs(math.degrees(nav.wrap(math.radians(c["heading_end_deg"] - c["heading0"])))), 15,
@@ -499,6 +505,46 @@ class Spin(Harness):
         self.assertNotIn("did not turn", self.err.getvalue())
         self.assertEqual(body.cmds.count("StopMove"), 1, body.cmds)
 
+    def test_a_second_press_and_the_control_on_one_grid_do_not_blame_the_band(self):
+        """Needs the dog 14.2 presses again at the same spot and 14.4's z 0 control can follow a spin on the same grid:
+        every frame hits the z band, but the grid already holds every cell, so cells_added is 0. That is not a band to
+        retune: ok, one WARN each, `why` naming the full grid and how to clear it, band_hits on the row."""
+        body = FakeBody(yaw_rate=3.0, frames=self.frames)
+        s = self.session(body)
+
+        def again(turn: bool) -> None:   # the next press at the same spot: the stream replays the same eight windows
+            body._lidar_on = False
+            if turn:                     # and the body turns again from the heading it stopped at
+                body.t0 += time.monotonic() - body.halted_at
+                body.halted_at = None
+
+        s.scout(z=0.5, target_deg=360, timeout_s=10)
+        self.assertIsNone(self.wait(s)["error"])
+        again(turn=True)
+        s.scout(z=0.5, target_deg=360, timeout_s=10)
+        self.wait(s)
+        again(turn=False)
+        with mock.patch.object(scout, "NO_TURN_S", 0.2):
+            s.scout(z=0.0, target_deg=360, timeout_s=1.0)
+            self.wait(s)
+        first, second, control = self.rows("dog.scout")
+        for name, r in (("second press", second), ("control", control)):
+            self.assertTrue(r["ok"], f"{name}: {r['response_or_error']}")
+            self.assertNotIn("Z_MIN", str(r["state_after"]["why"]), f"{name}: the band was hit, it is not the band")
+            self.assertIn("no new cells", str(r["state_after"]["why"]))
+            self.assertIn("POST /dog/grid {clear: true}", str(r["state_after"]["why"]), "the why says how to measure afresh")
+        n, hits = len(fx.world_cells()), sum(len(fx.frame_cells(k)) for k in range(fx.WEDGES))
+        for name, r in (("second press", second), ("control", control)):
+            a = r["state_after"]
+            self.assertEqual((a["frames"], a["cells_added"], a["cells_total"], a["band_hits"]), (len(self.frames), 0, n, hits), name)
+        self.assertEqual((first["state_after"]["cells_added"], first["state_after"]["band_hits"]), (n, hits))
+        self.assertIsNone(first["state_after"]["why"])
+        self.assertTrue(second["state_after"]["closed"], second["state_after"]["turned_deg"])
+        self.assertIn("control", control["state_after"]["why"])
+        warns = [l for l in self.err.getvalue().splitlines() if "WARN" in l and "no new cells" in l]
+        self.assertEqual(len(warns), 2, warns)
+        self.assertFalse(s.state()["scout"]["error"])
+
 
 class FailLoud(Harness):
     def failed(self, s: session.DogSession, body: FakeBody) -> tuple[dict, dict]:
@@ -560,7 +606,8 @@ class FailLoud(Harness):
         st, r = self.failed(s, body)
         self.assertIn("Z_MIN", st["error"])
         self.assertIn(str(lidar.Z_MIN), st["error"])
-        self.assertEqual((r["state_after"]["frames"], r["state_after"]["cells_added"]), (3, 0))
+        self.assertEqual((r["state_after"]["frames"], r["state_after"]["cells_added"], r["state_after"]["band_hits"]), (3, 0, 0),
+                         "no voxel reached the grid: that, not an unchanged cell count, is what names the band")
 
     def test_cb_errors_rising_is_failed_with_the_count(self):
         other = dict(self.frames[1])
