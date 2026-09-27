@@ -609,9 +609,9 @@ function DecideRules({ ledger }) {   // the Rules panel: what a stop does, then 
   const rows = [...ledger].filter(r => r.tool === "decided" || r.tool === "reply.decided").reverse().slice(0, 12);
   const line = r => {
     const d = r.state_after || {}, a = r.args || {};
-    if (r.tool === "decided") return r.ok ? `decided · ${d.label} ${p17(d.p)} · ${d.action} · ${a.rule}${stub17(r)}` : html`<span class="bad">decided FAILED · ${r.response_or_error}</span>`;
-    return r.ok ? `"${a.text}" → ${d.meaning} ${p17(d.p)}${d.named && d.named !== "not_said" ? ` · ${d.named} ${p17(d.p_named)}` : ""}${stub17(r)}`
-      : html`<span class="bad">couldn't read the reply · ${r.response_or_error}</span>`;
+    if (r.tool === "decided") return r.ok ? `decided · ${d.label} ${p17(d.p)} · ${d.action} · ${a.rule}${stub17(r)}` : html`<span class="bad">decided FAILED · ${redact(r.response_or_error)}</span>`;
+    return r.ok ? `"${redact(a.text)}" → ${d.meaning} ${p17(d.p)}${d.named && d.named !== "not_said" ? ` · ${d.named} ${p17(d.p_named)}` : ""}${stub17(r)}`
+      : html`<span class="bad">couldn't read the reply · ${redact(r.response_or_error)}</span>`;
   };
   return html`<div class="panel"><h2>Rules · what a stop does</h2>
     ${!rules ? html`<div class="mono">reading /rules…</div>` : rules.error ? html`<div class="bad">rules FAILED: ${rules.error}</div>`
