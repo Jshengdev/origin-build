@@ -837,6 +837,52 @@ class Stuck(_Harness):
         self.assertEqual(fs["passed"], [], "refused, not passed")
 
 
+class Reconnect(_Harness):
+    """B2 (CLEANUP-PLAN): the state stream goes quiet mid-follow (a power cycle, a hotspot drop) and the next call's stale
+    reconnect (_ensure) closed the dead peer and cancelled the drive loop but left the follower running: it walked on
+    into whatever session came next, and when it ended, _halt read `_avoid` on no body, so the dog.follow row said
+    AttributeError instead of why. The follow must end at the reconnect, and its row and follow.error must say so."""
+
+    def test_a_stale_reconnect_stops_the_follow_and_its_row_names_the_reconnect(self):
+        from wtdd.dog import session
+        s = self.s
+        del s._halt                                    # the real halt: it is what read `_avoid` on no body
+        s.grid = fx.grid()
+        s.follow(ROUTE, [1], reach_px=30.0)
+
+        def until(ok, sec: float) -> bool:
+            t = time.monotonic() + sec
+            while not ok():
+                if time.monotonic() > t:
+                    return False
+                time.sleep(0.02)
+            return True
+
+        self.assertTrue(until(lambda: s.follow_state.get("stopped_at") == 1, 10), s.follow_state)
+        s.body.state = lambda: {"age_ms": session.STALE_MS + 1, "n": 42}   # the peer went quiet while held at dot 2
+        s.body.close = mock.AsyncMock()
+        gone = types.SimpleNamespace(connect=mock.AsyncMock(side_effect=ConnectionError("no answer: the dog left the hotspot")))
+        with mock.patch.object(session, "Body", lambda: gone), redirect_stderr(err := io.StringIO()):
+            with self.assertRaises(ConnectionError):
+                s.run(session.DogSession._ensure(s))   # the real reconnect (the harness mocks _ensure): the dead peer is closed, no new one answers
+            ended = until(lambda: s.follow_state.get("error") is not None, 3)   # set after the dog.follow row is written
+            if not ended:   # before B2 the follow still waits at its stop on the dead session: resume it to see how it ends
+                s.resume()
+                s._follower.result(timeout=10)
+        fs = dict(s.follow_state)
+        f = rows_since(self.n0, "dog.follow")
+        self.assertEqual(len(f), 1, f)
+        self.assertNotIn("AttributeError", str(f[0]["response_or_error"]), f[0])
+        self.assertIn("reconnect", str(f[0]["response_or_error"]), f[0])
+        self.assertIs(f[0]["ok"], False)
+        self.assertIn("reconnect", fs.get("error") or "", fs)
+        self.assertTrue(ended, f"the follow was still running on a dead session after the reconnect: {fs}")
+        self.assertTrue(s._follower.done())
+        self.assertFalse(fs["active"], fs)
+        self.assertEqual(fs["reached"], [0, 1], "no dot after the reconnect")
+        self.assertRegex(err.getvalue(), r"WARN [^\n]*follow[^\n]*reconnect", "one WARN line names the follow and the reconnect")
+
+
 class Padding(unittest.TestCase):
     """S8 (live on main 93605f1, 03:29): the padding was 4 lattice cells of 10 px, so at the measured 87 px/m every side
     grew 0.46 m and any gap under ~0.9 m read as closed; the Go2 is ~0.31 m wide. Johnny, at the gap: "can it seriously not
