@@ -16,8 +16,9 @@ Every post, from any entry point (this CLI, the chat_post tool, the HTTP API, th
 listener), goes through post(): gate (chat.gate row), claim (chat.claim row), then the send inside one chat.post row
 whose state_after is the confirmed from-me row {guid, rowid, ts}, then memory.confirm (a photo's caption is a second
 bubble, confirmed under <trigger>#caption so posted_guids() knows it too). Every chat.post row carries args.shift_id
-(oncall.shift_id()); kind "escalate" is a flag (photo + "who dis?!") to the on-call person's 1:1 (item 03, oncall.py),
-the only target besides the group; chat.gate's state_after names who the gate verified. A refused gate or claim is a
+(oncall.shift_id()); kind "escalate" is a flag (photo + "who dis?!") to oncall.person()'s chat: the on-call person's
+1:1 (item 03), the only target besides the group, or the group itself when WTDD_ON_CALL_GUID names it (S10, the demo);
+chat.gate's state_after names who the gate verified. A refused gate or claim is a
 ledger row with ok=False and a PermissionError (exit 2 here). --guid defaults to WTDD_CHAT_GUID; --trigger is the
 idempotence key (default cli:<epoch>). Only this CLI prints the confirmed row to stdout: library callers keep stdout
 clean because the MCP server speaks its protocol there and `python -m wtdd chat_post` prints the result itself.
