@@ -179,7 +179,7 @@ class H(BaseHTTPRequestHandler):
                 except ValueError as e:
                     log("api", "map NOT saved", camera=str(e))
                     return self._json(400, {"ok": False, "error": f"not saved: {e}"})
-                before = json.loads(MAP.read_text()).get("cameras", []) if MAP.exists() else []
+                before = (json.loads(MAP.read_text()).get("cameras") or []) if MAP.exists() else []
             # 23 · camera-placement · end
             if MAP.exists():
                 MAP.with_name("map.prev.json").write_text(MAP.read_text())   # the previous route survives one overwrite
@@ -187,7 +187,7 @@ class H(BaseHTTPRequestHandler):
             log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])))
             if "cameras" in data:   # 23 · camera-placement: the receipt for each camera the save moved
                 try:
-                    cam.placed(before, MAP)
+                    cam.placed(before, data["cameras"], MAP)
                 except Exception as e:  # noqa: BLE001  (the map is saved; the missing receipt is reported, never hidden)
                     log("api", "map saved, placement row FAILED", err=f"{type(e).__name__}: {str(e)[:100]}")
                     return self._json(500, {"ok": False, "error": f"saved, but the placement row failed: {type(e).__name__}: {e}"})
