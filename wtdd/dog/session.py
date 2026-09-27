@@ -1196,8 +1196,10 @@ class DogSession:
         code = await b.cmd("StopMove")
         self.moving = False
         st = await b.fresh_state(required=True)
-        v = st.get("velocity") or [0, 0, 0]
-        log("dog", "halt", stop_code=code, avoid=bool(b._avoid), velocity=[round(x, 2) for x in v])
+        if not (v := st.get("velocity")):   # B3: no reading is unknown, never a measured stop
+            v = None
+            log("dog", "WARN no velocity in the state read back after the halt: velocity unknown")
+        log("dog", "halt", stop_code=code, avoid=bool(b._avoid), velocity=[round(x, 2) for x in v] if v else "unknown")
         return {"stop_code": code, "velocity": v}
 
     async def _drive_loop(self) -> None:
@@ -1229,7 +1231,8 @@ class DogSession:
         sometimes ignores the pair after a long idle), so the routine settles the controller (StopMove, BalanceStand)
         and on a miss warms it with StandUp and tries once more. Pose refused with code 401001 (after the physical
         controller drove it, or after being carried; StandUp and BalanceStand do not clear it) is cured by Sit then
-        RiseSit, once. The returned pitch_deg is what the IMU measured; a miss is reported as fired=False, never hidden."""
+        RiseSit, once. The returned pitch_deg is what the IMU measured; a miss is reported as fired=False, never hidden.
+        B3: no IMU reading is pitch_deg None and, on a tilt, fired None (unverified, not retried), never a level 0."""
         out = PICTURES / f"look-{kind}.jpg"
         out_down = PICTURES / "look-down.jpg"
         with step("dog", "dog.look", "unitree", {"kind": kind}, b.state()) as r:
@@ -1268,17 +1271,19 @@ class DogSession:
                     await b.frame(out)
                     await b.cmd("Euler", {"x": 0.0, "y": 0.0, "z": 0.0}); await asyncio.sleep(0.8)
                     await b.cmd("Pose", {"flag": False}); await asyncio.sleep(0.3)
-                    if pitch <= -TILT_MIN_DEG:
+                    if pitch is None or pitch <= -TILT_MIN_DEG:   # B3: an unknown pitch is no miss: a second nod would read none either
                         break
-            fired = kind != "tilt" or pitch <= -TILT_MIN_DEG
+            fired = kind != "tilt" or (None if pitch is None else pitch <= -TILT_MIN_DEG)
             res = {"text": "here's what i see", "file": str(out), "kind": kind, "pitch_deg": pitch, "fired": fired, "attempts": attempts,
-                   "file_down": str(out_down) if pitch_down is not None else None, "pitch_down_deg": pitch_down}
+                   "file_down": str(out_down) if kind == "tilt" else None, "pitch_down_deg": pitch_down}
             r["state_after"] = res
             log("dog", f"look {kind}", pitch=pitch, fired=fired, attempts=attempts)
             return res
 
     @staticmethod
-    def _pitch(b: Body) -> float:
-        raw = b.raw() or {}
-        rpy = (raw.get("imu_state") or {}).get("rpy") or [0, 0, 0]
+    def _pitch(b: Body) -> float | None:
+        """The IMU pitch in degrees; None with a WARN when the state carries no imu_state.rpy (B3: unknown, never 0)."""
+        if not (rpy := ((b.raw() or {}).get("imu_state") or {}).get("rpy")):
+            log("dog", "WARN no IMU rpy in the dog's state: pitch unknown")
+            return None
         return round(math.degrees(rpy[1]), 1)

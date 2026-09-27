@@ -416,11 +416,12 @@ def run_look(n: int, obj: str | None, person: bool) -> list[dict[str, Any]]:
         bad = unsafe(rows)
         if out:
             hit = (obj.lower() in out["text"].lower()) if obj else True
-            fired = bool(out.get("fired", True))
+            fired = out.get("fired", True)   # B3: None when the IMU gave no pitch: unverified, graded fail and said so
             if person:
                 ok, why = bool(out["person"]), "" if out["person"] else "person not seen"
             else:
-                ok, why = fired and hit, "; ".join(w for w in ["tilt did not fire" if not fired else "", f"'{obj}' not in the sentence" if not hit else ""] if w)
+                ok, why = fired is True and hit, "; ".join(w for w in ["tilt did not fire" if fired is False else "", "tilt unverified: the IMU gave no pitch" if fired is None else "",
+                                                               f"'{obj}' not in the sentence" if not hit else ""] if w)
             detail = f"pitch {out.get('pitch_deg')} deg, fired {fired}, vision {out['vision_ms']} ms, person {out['person']}, out_of_place {out['out_of_place']}; \"{out['text']}\""
         else:
             ok, why, detail = False, err, ""
@@ -461,7 +462,7 @@ def run_follow(n: int) -> list[dict[str, Any]]:
         bad = unsafe(rows)
         if out:
             ok = bool(out.get("done")) and not out.get("error")
-            why = out.get("error") or ""
+            why = out.get("error") or ("" if ok else f"the follow ended without done and without an error (reached {out.get('reached')} of {out.get('n')}, passed {out.get('passed')})")
             resid = round(math.dist(out["end"], path[-1])) if out.get("end") else None
             detail = f"waypoints {len(out.get('reached', []))} of {out.get('n')} from {out.get('i')}, end {resid} px from the path's last point ({round(resid / 108.5, 2) if resid is not None else '?'} m), stops {out.get('stops')}"
         else:

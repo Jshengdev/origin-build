@@ -533,7 +533,8 @@ class Body:
     def _on_lidar(self, message: dict) -> None:
         """Runs inside the driver's message handler. A frame that fails to decode is counted, logged and re-raised (the
         driver prints the traceback); nothing stands in for it. The first frame logs its shape, its z layers and how far
-        the window's center is from the LF_SPORT_MOD_STATE position (the frame check in lidar.py's docstring)."""
+        the window's center is from the LF_SPORT_MOD_STATE position (the frame check in lidar.py's docstring); with no
+        position yet, a WARN that the offset is unknown (B14)."""
         try:
             d = lidar.decode(message)
         except Exception as e:  # noqa: BLE001  (counted and re-raised; lidar_points() reports the count)
@@ -542,14 +543,17 @@ class Body:
             raise
         now = time.monotonic()
         if self._lidar_n == 0:
-            pos = (self.state() or {}).get("position") or [0.0, 0.0, 0.0]
-            off = math.hypot(d["center"][0] - float(pos[0]), d["center"][1] - float(pos[1]))
+            pos = (self.state() or {}).get("position")   # B14: none yet is unknown, never the origin
+            off = math.hypot(d["center"][0] - float(pos[0]), d["center"][1] - float(pos[1])) if pos else None
             z = d["points"][:, 2]
             layers = {round(float(k), 2): int(c) for k, c in zip(*np.unique(z, return_counts=True))} if len(z) else {}
             log("dog", f"first lidar frame frame_id={d['frame']}", voxels=d["n"], width=d["width"], res=d["resolution"],
                 origin=[round(v, 2) for v in d["origin"]], center=[round(v, 2) for v in d["center"]],
-                odom_pos=[round(float(v), 2) for v in pos[:3]], center_vs_odom_m=round(off, 2), z_layers=layers)
-            if off > 1.0:
+                odom_pos=[round(float(v), 2) for v in pos[:3]] if pos else "unknown",
+                center_vs_odom_m=round(off, 2) if off is not None else "unknown", z_layers=layers)
+            if off is None:
+                log("dog", "WARN no LF_SPORT_MOD_STATE position at the first lidar frame: its offset from odometry is unknown", frame_id=d["frame"])
+            elif off > 1.0:
                 log("dog", "WARN lidar window center is far from the LF_SPORT_MOD_STATE position: the voxel frame may not be that odometry",
                     center_vs_odom_m=round(off, 2), frame_id=d["frame"], utlidar_pose=str(self._utpose)[:160])
         self._lidar, self._lidar_n, self._lidar_at = d, self._lidar_n + 1, now
