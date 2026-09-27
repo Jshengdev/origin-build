@@ -482,15 +482,14 @@ class DogSession:
 
         try:
             with step("dog", "dog.scout", "map", args) as r:
-                before: dict[str, Any] = dict.fromkeys(scout.BEFORE)
-                r["state_before"], err = before, None
+                before: dict[str, Any] = {**dict.fromkeys(scout.BEFORE), "localize": "absent", "utlidar": "absent"}   # 05b and 05a are not on 01:
+                r["state_before"], err = before, None   # when they merge, read self.loc / 05a's utpose through getattr
                 turned, prev, n0, e0, c0, avoid, t0 = 0.0, None, 0, 0, 0, bool(b._avoid), time.monotonic()
                 try:
                     st, lp = await b.fresh_state(required=True), b.lidar_points()
                     prev, n0, e0, c0 = st["rpy"][2], lp["n"], lp["cb_errors"], cells()
                     before.update(map=self.map_pose(st), heading0_deg=round(math.degrees(prev), 1), grid_frames=g.frames if (g := self.grid) is not None else 0,
-                                  cells=c0, lidar_n=n0, range_obstacle=st.get("range_obstacle"),
-                                  localize="absent", utlidar="absent")   # 05b and 05a are not on 01: when they merge, read self.loc / 05a's utpose through getattr
+                                  cells=c0, lidar_n=n0, range_obstacle=st.get("range_obstacle"))
                     if self._scout_stop:   # a stop after the press's last look and before this task could be cancelled
                         raise RuntimeError("stopped (POST /dog/stop) before the spin started")
                     await b.lidar_on(self._on_frame)   # a refused disable_traffic_saving raises here (wtdd/dog/lidar.py subscribe)
