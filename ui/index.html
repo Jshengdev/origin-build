@@ -126,6 +126,7 @@ function App() {
   const toMap = e => { const svg = svgRef.current, pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse()); return [Math.round(p.x), Math.round(p.y)]; };
   const withRooms = m => ({ ...m, lights: (m.lights || []).map(L => ({ ...L, room: roomOf(L.kind === "line" ? [(L.pts[0][0] + L.pts[1][0]) / 2, (L.pts[0][1] + L.pts[1][1]) / 2] : L.pts[0], m.rooms) })) });
   const saveMap = async () => { if (mode === "nogo" && nogoDraft.length) { setLast({ ok: false, tool: "save map", error: "not saved: a no-go zone is still being drawn: press close zone (or clear), then save" }); return; } const m = withRooms(map); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setMode(null); setPlacing(null); setPending(null); } };   // a refused save names the bad points or a stale page; the edit stays
+  const clearNogo = async () => { const m = withRooms({ ...map, zones: (map.zones || []).filter(z => z.nogo !== true) }); const r = await (await putMap(m)).json(); setLast({ ...r, tool: "save map" }); if (r.ok) { setMap({ ...m, _version: r._version }); setNogoDraft([]); setMode(null); } };   // S4: every no-go zone off the map, saved at once; the lighting zones stay
   const setEnt = (k, v) => setMap({ ...map, entity: { ...map.entity, [k]: v } });
 
   // ---------- the dog: hold-to-drive (W A S D, Q E to turn) and the looks. Velocities refresh every 200 ms while a key
@@ -243,7 +244,7 @@ function App() {
             ${dog?.calibrated && dog?.connected && !dog?.avoid && !dot && html`<button class="small" style=${{ color: "var(--bad)" }} title="the dog's obstacle-avoidance service is not answering; this drives the route without it, by your choice, and the row says so" onClick=${() => play(false)}>walk WITHOUT avoidance</button>`}
             <button class=${mode === "path" ? "on" : ""} onClick=${() => { setMode(mode === "path" ? null : "path"); setPlacing(null); }}>${mode === "path" ? "drawing path (click to add)" : "draw path"}</button>
             ${mode === "path" && html`<button onClick=${() => setMap({ ...map, path: [], stops: [] })}>clear path</button>`}
-            ${map && html`<${NoGoButtons} mode=${mode} setMode=${setMode} draft=${nogoDraft} setDraft=${setNogoDraft} map=${map} setMap=${setMap}/>`}
+            ${map && html`<${NoGoButtons} mode=${mode} setMode=${setMode} draft=${nogoDraft} setDraft=${setNogoDraft} map=${map} setMap=${setMap} clear=${clearNogo}/>`}
             <button class=${mode === "here" ? "on" : ""} onClick=${() => { setMode(mode === "here" ? null : "here"); setPlacing(null); }}>${mode === "here" ? "click where the dog is" : "dog is here…"}</button>
             <button class="small" title="ui/route-saved.json back into the map" onClick=${() => post("/map/restore", {}).then(r => r.json()).then(o => { setLast({ ...o, tool: "restore route" }); fetch("/map").then(r => r.json()).then(setMap); })}>restore saved route</button>
             <button class="key" onClick=${saveMap}>save</button>
@@ -419,14 +420,15 @@ function NoGoLayer({ map, draft }) {
     ${draft.map((p, i) => html`<circle key=${"d" + i} class="nogo-draft" cx=${p[0]} cy=${p[1]} r="6"/>`)}
   </g>`;
 }
-function NoGoButtons({ mode, setMode, draft, setDraft, map, setMap }) {
+function NoGoButtons({ mode, setMode, draft, setDraft, map, setMap, clear }) {
   const zones = map.zones || [];
   let n = zones.filter(z => z.nogo === true).length + 1;
   while (zones.some(z => z.name === `nogo-${n}`)) n++;   // a hand-edited map may skip a number: the name stays unique (it is the refusal row's zone)
   const close = () => { setMap({ ...map, zones: [...zones, { name: `nogo-${n}`, label: `no-go ${n}`, poly: draft, nogo: true }] }); setDraft([]); setMode(null); };
   return html`<button class=${mode === "nogo" ? "on" : ""} title="a zone the dog must never enter: the planner routes around it, a route through it is refused and logged" onClick=${() => { setMode(mode === "nogo" ? null : "nogo"); setDraft([]); }}>${mode === "nogo" ? "drawing no-go (click corners)" : "draw no-go"}</button>
     ${mode === "nogo" && draft.length >= 3 && html`<button onClick=${close}>close zone</button>`}
-    ${mode === "nogo" && draft.length > 0 && html`<button onClick=${() => setDraft([])}>clear</button>`}`;
+    ${mode === "nogo" && draft.length > 0 && html`<button onClick=${() => setDraft([])}>clear</button>`}
+    ${mode !== "nogo" && zones.some(z => z.nogo === true) && html`<button title="take every no-go zone off the map and save it (the lighting zones stay)" onClick=${clear}>clear no-go</button>`}`;
 }
 // 04 · nogo · end
 createRoot(document.getElementById("root")).render(html`<${App}/>`);
