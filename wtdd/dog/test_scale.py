@@ -35,8 +35,8 @@ class Scale(unittest.TestCase):
     def test_every_conversion_follows_it(self):
         reload_with("100")
         cal = nav.calibration([0.0, 0.0, 0.0], 0.0, [500.0, 500.0], 0.0)
-        p = nav.to_map(cal, [1.0, 0.0, 0.0], 0.0)["p"]
-        self.assertAlmostEqual(p[0] - 500.0, 100.0, places=6)
+        px, py, _ = nav.to_map(cal, [1.0, 0.0, 0.0], 0.0)   # one metre forward, heading 0 = +x on screen
+        self.assertAlmostEqual(px - 500.0, 100.0, places=6)
 
     def test_a_scale_that_is_not_a_number_stops_loud(self):
         with self.assertRaisesRegex(ValueError, "WTDD_PX_PER_M"):
