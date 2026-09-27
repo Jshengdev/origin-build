@@ -448,7 +448,9 @@ class DogSession:
             self._labels = {"labels": [], "source": "session", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                             "why": f"FAILED name blobs press: {type(e).__name__}: {str(e)[:160]}"}
             before = {"connected": self.body is not None, "pose": pose, "fov_deg": fov, "grid_frames": self.grid.frames if self.grid else 0}
-            with step("blobs", "blob.labelled", "unitree", {"blob_id": None, "threshold": threshold, "shift_id": decide.shift_id()}, before):
+            # args.threshold is WTDD_DECIDE_THRESHOLD on every blob.labelled row, None here as in label() before it is read
+            with step("blobs", "blob.labelled", "unitree", {"blob_id": None, "lidar_threshold": threshold, "threshold": None,
+                                                             "shift_id": decide.shift_id()}, before):
                 raise
         self._labels = {"labels": out["labels"], "source": "session", "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
         return {"labelled": len(out["labels"]), "skipped": out["skipped"], "failed": sum(1 for x in out["labels"] if x.get("error")),
