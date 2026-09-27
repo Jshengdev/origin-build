@@ -13,7 +13,10 @@ own posts are refused by confirmed guid and by the opening words of its replies.
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" from intruder_alarm opens a question (pending.json):
 the next answer within PENDING_WINDOW_S decides, "idk" and its kin = "STRANGER DANGER!!!" x3 + light_alarm, anything
-else = "ok, standing down"; no answer = stood down quietly. A housemate's reply that starts like a
+else = "ok, standing down"; no answer = stood down quietly. Goal 00: a message that is exactly WTDD_RESUME_WORD
+(default "resume"; case and surrounding spaces forgiven) from an allowed sender ends a person halt through POST
+/dog/resume {by: the sender, via: "imessage"}; it is matched before verdict() and its regex, also while holding for a
+verdict, and nothing else in the chat resumes the body. A housemate's reply that starts like a
 correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
 it (the vision model is told what the housemates said it got wrong). WTDD_ROUND=dog makes the round the
@@ -135,6 +138,8 @@ class Listener:
                 memory.store(self.guid, msgs)
                 self.last = msgs[-1]["rowid"]
                 for m in msgs:
+                    if m.get("text") and self.allowed(m) and self.resume_word(m):   # 00: the word never reaches verdict(); the hold keeps waiting
+                        continue
                     if m.get("text") and self.allowed(m) and self.verdict(m):
                         return True
             time.sleep(1.0)
@@ -204,6 +209,27 @@ class Listener:
         self.say(f"fix:{m['guid']}", f"noted: {m['text'][:120]}")
         return True
 
+    def resume_word(self, m: dict[str, Any]) -> bool:
+        """Goal 00: a message that is exactly the one resume word (WTDD_RESUME_WORD, default "resume"; case and spaces
+        forgiven, nothing else) ends a person halt: POST /dog/resume {by: the sender, via: "imessage"}, one stop.resumed
+        row on the API. No model and no regex reads it. A refused or unreachable resume is posted as "couldn't resume: ...".
+        When 03's on-call 1:1 lands, the word is also required to come from that chat (one condition here)."""
+        from ..dog.halt import is_word
+        if not is_word(m.get("text") or ""):
+            return False
+        import requests
+        try:
+            out = requests.post("http://127.0.0.1:7788/dog/resume", json={"by": m["sender"], "via": "imessage"}, timeout=5).json()
+        except Exception as e:  # noqa: BLE001  (the API is down: said in the chat and logged, the halt stands)
+            out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if not out.get("ok"):
+            log("chat", "WARN resume word refused", by=hname(m["sender"]), err=str(out.get("error"))[:120])
+            self.say(f"halt-fail:{m['guid']}", f"couldn't resume: {str(out.get('error'))[:160]}")
+            return True
+        log("chat", "RESUME", by=hname(m["sender"]))
+        self.say(f"halt:{m['guid']}", f"resumed by {hname(m['sender'])}")
+        return True
+
     def verdict(self, m: dict[str, Any]) -> bool:
         """The chat answering "who dis?!" (intruder_alarm): "idk" and its kin mean a stranger, so "STRANGER DANGER!!!"
         three times and light_alarm; anything else stands the dog down with "ok". One intruder.verdict row either way."""
@@ -258,6 +284,8 @@ class Listener:
     def handle(self, m: dict[str, Any]) -> None:
         text = m["text"]
         if not text or not self.allowed(m):
+            return
+        if self.resume_word(m):   # 00: before verdict() and its IDK regex
             return
         if self.verdict(m):
             return
