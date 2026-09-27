@@ -26,8 +26,10 @@ The contract under test (odometry metres; a cell's position is its corner, index
   DogSession.floorplan_tick(now)   the cadence: a run only when grid.frames advanced since the last run and at least
                             FLOORPLAN_S after it; never from _on_frame (the driver's dispatcher), never from a GET
   DogSession.floorplan(threshold)  POST /dog/floorplan, the button: always one run and one row; with no session grid
-                            it runs on ui/grid.json (DEMO_CACHE: the row says cached=True, source="stub"); with no grid
-                            at all it writes a failed row and raises
+                            it runs on ui/grid.json (DEMO_CACHE: the row says cached=True, source="stub", also when the
+                            file is unreadable and the row fails); with no grid at all it writes a failed row and raises;
+                            a posted threshold of 0 reaches run() and fails loud, never silently runs at 3
+  DogSession.grid_clear(why)       the floor plan goes with its grid: GET serves nothing and says why
   DogSession.floorplan_px(threshold)  GET /dog/floorplan: the newest result {segments_px, classes, class_px, ms, ts,
                             threshold, source, why?} through occupancy.to_map_px; a read, no row
   python -m wtdd.dog.floorplan --replay <npz> --png <out> [--tall M] [--save <json>]   exit 0 with segments=N on stderr,
@@ -44,6 +46,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -413,6 +416,27 @@ class Serve(Base):
         self.assertTrue(json.loads(urllib.request.urlopen(req, timeout=60).read())["ok"])
         self.assertGreaterEqual(len(get()["segments_px"]), 2)
         self.assertEqual(len(fp_rows()), 1)
+        bad = urllib.request.Request(base, data=b'{"threshold": 0}', headers={"Content-Type": "application/json"}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError, msg="threshold 0 must fail loud, never run at the default") as e:
+            urllib.request.urlopen(bad, timeout=60)
+        self.assertEqual(e.exception.code, 500)
+        self.assertEqual([(r["ok"], r["args"]["threshold"]) for r in fp_rows()][1:], [(False, 0)])
+
+    def test_clearing_the_grid_drops_its_floor_plan(self):
+        s = self.session(accumulated())
+        s.floorplan(3)
+        s.grid_clear("power cycle: the odometry frame reset")
+        r = s.floorplan_px(3)
+        self.assertEqual((r["segments_px"], r["class_px"], r["source"]), ([], {}, None), "a cleared grid's walls are still drawn")
+        self.assertTrue(r["why"].startswith("no floor plan"), r["why"])
+
+    def test_an_unreadable_ui_grid_json_fails_with_a_row_labelled_stub(self):
+        s = self.session(None)
+        (self.tmp / "grid.json").write_text("{not json")
+        with self.assertRaises(RuntimeError):
+            s.floorplan(3)
+        r = fp_rows()[-1]
+        self.assertEqual((r["ok"], r["cached"], r["source"], r["args"]["grid_source"]), (False, True, "stub", "ui/grid.json"))
 
 
 class Replay(Base):
