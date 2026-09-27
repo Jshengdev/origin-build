@@ -34,12 +34,15 @@
     {
       "item": "01", "step": "01.1", "pr": 5,
       "title": "`frame_id` must be `odom`. The grid refuses any later frame whose `frame_id` differs, so a mismatch shows as a rising `cb_errors` on `GET /dog/lidar` and `GET /dog/grid`, paired with `WARN lidar frame callback failed err=ValueError: frame_id ...` on stderr.",
-      "do": "API up from the repo checkout; connect from the page; POST /dog/lidar {on: true}; eyes: the `[wtdd:dog] first lidar frame frame_id=odom` line in the API terminal, center_vs_odom_m under 1 m.",
-      "rows": [{"tool": "dog.connect", "agent": "dog", "ok": true, "where": {}}],
-      "fatal_warns": ["WARN lidar frame callback failed", "WARN lidar frame rejected", "WARN lidar window center is far from"],
+      "do": "Start this check, then: API up from the repo checkout; connect from the page; POST /dog/lidar {on: true}; POST /dog/grid {save: true} once frames arrive; eyes: the `[wtdd:dog] first lidar frame frame_id=odom` line in the API terminal, center_vs_odom_m under 1 m.",
+      "rows": [
+        {"tool": "dog.connect", "agent": "dog", "ok": true, "where": {}},
+        {"tool": "dog.grid_save", "agent": "dog", "ok": true, "where": {"args.frame_id": "odom", "args.frames": {"gte": 1}}}
+      ],
+      "fatal_warns": ["first lidar frame frame_id=(?!odom\\b)", "WARN lidar frame callback failed", "WARN lidar frame rejected", "WARN lidar window center is far from"],
       "unsafe": [],
-      "timeout_s": 120, "settle_s": 20,
-      "note": "settle_s 20: the frames arrive after the connect row, so the frame_id refusal (a WARN, no row) can only be seen by waiting. UNVERIFIED: the first live frame."
+      "timeout_s": 120, "settle_s": 0,
+      "note": "frame_id is graded from the device twice: the `first lidar frame frame_id=` log line (fatal when it is not odom) and the dog.grid_save row's args.frame_id. On feat/01-occupancy the grid takes the first frame's frame_id and occupancy.update_frame refuses only a later frame whose frame_id differs, so a frame that is consistently not odom never prints `WARN lidar frame callback failed`; that WARN stays fatal for a frame_id that changes mid-session. A LiDAR never switched on is the timeout on dog.grid_save. settle_s 0: the first-frame line is logged before any save can hold a frame (frames gte 1), so the PASS lands within a poll of the save (22.1). UNVERIFIED: the first live frame."
     },
     {
       "item": "01", "step": "01.2", "pr": 5,
@@ -54,12 +57,12 @@
       "rows": [
         {"tool": "dog.calibrate", "agent": "dog", "ok": true, "where": {}},
         {"tool": "dog.grid_save", "agent": "dog", "ok": true, "where": {"args.frame_id": "odom", "args.frames": {"gte": 1}}},
-        {"tool": "dog.grid_save", "agent": "dog", "ok": true, "where": {"args.frame_id": "odom", "args.frames": {"gte": 30}, "state_after.cells": {"gte": 100}, "state_after.extent_m": {"gte": 3}}}
+        {"tool": "dog.grid_save", "agent": "dog", "ok": true, "where": {"args.frame_id": "odom", "args.frames": {"gte": 30}, "state_after.cells": {"gte": 100}}}
       ],
-      "fatal_warns": ["WARN lidar frame callback failed", "WARN lidar frame rejected", "WARN lidar window center is far from"],
+      "fatal_warns": ["first lidar frame frame_id=(?!odom\\b)", "WARN lidar frame callback failed", "WARN lidar frame rejected", "WARN lidar window center is far from"],
       "unsafe": [],
       "timeout_s": 180, "settle_s": 0,
-      "note": "UNVERIFIED guesses: frames gte 30 (5-10 Hz over a 10 s drive), cells gte 100, extent_m gte 3. The two saves put the growth in two rows a person reads side by side; the cells staying put is the eye's."
+      "note": "UNVERIFIED guesses: frames gte 30 (5-10 Hz over a 10 s drive), cells gte 100. The growth is not graded here: state_after.extent_m is feat/01's Grid.extent_m(), {x: [x0, x1], y: [y0, y1]}, not a number, and whether it grew while a wall's cells stayed put is read by a person on GET /dog/grid and on the two saves' rows side by side."
     },
     {
       "item": "01", "step": "01.4", "pr": 5,
