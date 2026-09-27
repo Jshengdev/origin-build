@@ -374,10 +374,11 @@ class ClosedRoom(Base):
             with self.subTest(thick=thick):
                 self.check(thick, 30)
 
-    def test_walls_1_and_2_cells_thick_at_every_3_degrees(self):
-        """The dog boots facing anywhere: no turn of the room may double a wall or drop its cells."""
+    def test_walls_1_and_2_cells_thick_at_every_degree(self):
+        """The dog boots facing anywhere: no turn of the room may double a wall or drop its cells. Every whole degree,
+        not every third: the single-highest-bin direction rule only fails at some (8, 43, 47, 82 degrees)."""
         for thick in (1, 2):
-            for angle in range(3, 90, 3):
+            for angle in range(1, 90):
                 with self.subTest(thick=thick, angle=angle):
                     self.check(thick, angle)
 
