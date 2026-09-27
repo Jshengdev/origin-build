@@ -31,6 +31,8 @@
   GET  /dog/floorplan?threshold=N the newest floor plan in map pixels {ok, segments_px, classes, class_px, cell_px, ms, ts, source, why?} (a read, no row; polled every 2 s)
   POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
   GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
+  GET  /dog/blobs                 the newest blob labels pinned on the map {labels: [{blob_id, kind, label, p, model, geometry_verdict, erase, source, xy, pos_px, error?}], source, why?} (a read, no row; polled every 2 s); WTDD_BLOBS=<file> serves planted labels (DEMO_CACHE)
+  POST /dog/blobs {threshold?}    the press at a stop: one blob.labelled row per blob in the camera's view {labelled, skipped, failed, labels}; 500 with one failed row with no dog, pose, grid or field of view
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -151,6 +153,13 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().objects_state())
             except Exception as e:  # noqa: BLE001  (a missing fixture, a bad WTDD_CAM_FOV_DEG, an unreadable watch.json: the page shows it)
                 return self._json(500, {"n": 0, "objects": [], "error": f"{type(e).__name__}: {e}"})
+        # 16 · blob-labels
+        if u.path == "/dog/blobs":   # a read: the labels in force, pinned; never connects, no row
+            from .dog.session import DogSession
+            try:
+                return self._json(200, DogSession.get().blobs_px())
+            except Exception as e:  # noqa: BLE001  (an unreadable WTDD_BLOBS file is reported, the page shows FAILED)
+                return self._json(500, {"labels": [], "error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -265,6 +274,15 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, out)   # ok=false when no wall was found: the row and `why` say so
             except Exception as e:  # noqa: BLE001  (no grid at all is a failed row and a visible FAILED, never an empty plan)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 16 · blob-labels
+        if u.path == "/dog/blobs":   # {threshold?}: the press at a stop; one blob.labelled row per blob in view, or one failed row
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = self._body().get("threshold")
+                return self._json(200, DogSession.get().blobs_label(occupancy.THRESHOLD if t is None else int(t)))
+            except Exception as e:  # noqa: BLE001  (no dog, no field of view, no pose or no grid: a failed row and a visible FAILED)
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
         name, args = u.path[len("/tools/"):], self._body()
