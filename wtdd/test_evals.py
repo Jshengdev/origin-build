@@ -464,6 +464,53 @@ class Correct(unittest.TestCase):
         self.assertIn("jev 500", why)
 
 
+class Follow(unittest.TestCase):
+    """B13: the follow trial's residual in metres is at the scale in force, never 108.5. The scale in force is the
+    API's (GET /dog/scale: the page's slider saved in dog_cal.json, else WTDD_PX_PER_M), which the evals process's own
+    nav.PX_PER_M does not see. The API is mocked: /dog/follow starts, /dog/state says the follower ended done 87 px past
+    the path's last point; config.ROOT points at a scratch map with that path, so unsafe() (which reads the repo's
+    zones) is stubbed: no rows."""
+
+    def follow(self, scale, px_per_m=87.0):
+        """One trial against the mocked API; scale is GET /dog/scale's body, or the exception that GET raises."""
+        from wtdd.dog import nav
+        root = Path(tempfile.mkdtemp(prefix="wtdd-evals-follow-"))
+        (root / "ui").mkdir()
+        (root / "ui" / "map.json").write_text(json.dumps({"path": [[100, 100], [200, 100]]}))
+
+        def api(url, **_):
+            if url.endswith("/dog/scale") and isinstance(scale, Exception):
+                raise scale
+            body = ({"ok": True} if url.endswith("/dog/follow") else scale if url.endswith("/dog/scale") else
+                    {"follow": {"active": False, "done": True, "reached": [0, 1], "n": 2, "i": 0, "stops": 0}, "map": {"p": [287, 100]}})
+            return mock.Mock(json=mock.Mock(return_value=body))
+        err = io.StringIO()
+        with mock.patch.object(nav, "PX_PER_M", px_per_m), mock.patch.object(evals.config, "ROOT", root), \
+                mock.patch.object(evals, "unsafe", return_value=[]), \
+                mock.patch("requests.post", side_effect=api), mock.patch("requests.get", side_effect=api), \
+                contextlib.redirect_stderr(err):
+            (r,) = evals.run_follow(1)
+        return r, err.getvalue()
+
+    def test_the_residual_in_metres_is_at_the_scale_in_force(self):
+        r, _ = self.follow({"px_per_m": 87.0, "source": "WTDD_PX_PER_M"})
+        self.assertEqual(r["grade"], "pass", r)
+        self.assertIn("end 87 px from the path's last point (1.0 m", r["detail"])   # 87 / 87; at 108.5 it read 0.8 m
+
+    def test_the_scale_is_the_apis_the_sliders_not_this_processs(self):
+        """The slider moved the API to 87 (source page); this process still has 108.5 from its own env."""
+        r, _ = self.follow({"px_per_m": 87.0, "source": "page"}, px_per_m=108.5)
+        self.assertEqual(r["grade"], "pass", r)
+        self.assertIn("end 87 px from the path's last point (1.0 m at 87 px/m from page)", r["detail"])
+
+    def test_an_unread_scale_leaves_the_metres_unknown_and_says_why(self):
+        r, err = self.follow(ConnectionError("the API is not answering"), px_per_m=108.5)
+        self.assertEqual(r["grade"], "pass", r)   # the grade is the follower's: done, no error
+        self.assertIn("(? m", r["detail"])
+        self.assertIn("ConnectionError: the API is not answering", r["detail"])
+        self.assertIn("WARN", err)
+
+
 class Dry(unittest.TestCase):
     """The verifying command: python -m wtdd.evals --scenario <s> runs dry on the fixture and says so."""
 

@@ -375,9 +375,10 @@ class Cli(Guard):
 
 class Http(Guard):
     """S13, the morning page over HTTP (wtdd/api.py on an ephemeral port in this process, on this module's scratch
-    ledger): GET /record?shift=<id> is exactly the JSON `python -m wtdd.record --shift <id>` prints, the default shift
-    the CLI's; GET /record/shifts is every stamped shift newest first and the run in force; an unknown shift is a 404
-    naming the shifts that exist, never an empty record. Both reads: Guard checks the ledger's bytes."""
+    ledger): GET /record?shift=<id> is exactly the JSON `python -m wtdd.record --shift <id>` prints with its handles
+    read "a member" (B10: api.redact; the CLI keeps them raw), the default shift the CLI's; GET /record/shifts is every
+    stamped shift newest first and the run in force; an unknown shift is a 404 naming the shifts that exist, never an
+    empty record. Both reads: Guard checks the ledger's bytes."""
 
     def setUp(self):
         super().setUp()
@@ -408,12 +409,14 @@ class Http(Guard):
         return json.loads(out.getvalue())
 
     def test_get_record_is_the_cli_json_for_each_shift_and_the_default(self):
+        from wtdd import api
         for sid in (A, B):
-            self.assertEqual(self.get(f"/record?shift={sid}"), (200, self.cli("--shift", sid)), sid)
+            self.assertEqual(self.get(f"/record?shift={sid}"), (200, api.redact(self.cli("--shift", sid))), sid)
+        self.assertEqual(self.get(f"/record?shift={A}")[1]["flags"][0]["resolved"]["by"], "a member")   # the CLI's reads +15550002222
         self.assertEqual(self.get(f"/record?shift={A}")[1]["rows"], 36)
         self.assertEqual(self.get(f"/record?shift={B}")[1]["signed"]["by"], "Sam Stand-in")
         code, body = self.get("/record")
-        self.assertEqual((code, body), (200, self.cli()))
+        self.assertEqual((code, body), (200, api.redact(self.cli())))
         self.assertEqual(body["shift_id"], A)
 
     def test_get_record_shifts_lists_them_newest_first_with_the_run_in_force(self):
