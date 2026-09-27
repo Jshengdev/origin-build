@@ -1014,15 +1014,28 @@ class DogSession:
 
     async def _as_drawn(self, i: int, path: list, stops: list[int], reach_px: float, fs: dict[str, Any], pose: dict) -> bool:
         """No live view: dot i straight as drawn, with the dog's own avoidance; S6's "unchecked" row once per follow.
-        Stuck (S6b) with no view to re-plan on: given up (_gave_up). True when reached."""
+        B11: a straight line that crosses a no-go zone is planned around the zones instead (plan.leg over an empty live
+        view: the zones alone, padded); no way around is refused, naming the zone. Stuck (S6b) with no view to re-plan
+        on: given up (_gave_up). True when reached."""
+        from .. import nogo
         if not fs["unchecked"]:
             fs["unchecked"] = True
             self._decided(None, "unchecked", "no live view (the LiDAR is off, its newest window is older than "
                           f"{LIVE_MAX_AGE_MS} ms, or the dog is not calibrated): the waypoints are followed as drawn, avoidance on",
                           "I can't see live right now, so I'm following your dots as drawn with my own obstacle avoidance on.")
-        fs["planned"].append([pose["p"], [int(path[i][0]), int(path[i][1])]])
+        way = [pose["p"], [int(path[i][0]), int(path[i][1])]]
+        if (h := nogo.hit(way, nogo.zones(json.loads(plan.MAP.read_text())))) is not None:
+            try:
+                way = plan.leg(pose["p"], way[1], [], [fs["reached"][-1] + 1 if fs["reached"] else None, i + 1],
+                               f"I can't see live, and the line to dot {i + 1} crosses no-go zone {h['zone']}, so I'm going around the zones.")["path"]
+            except ValueError as e:
+                self._decided(i, "refused", f"no live view, the line to dot {i + 1} crosses no-go zone {h['zone']} and there is no way around it: {e}",
+                              f"I can't see live, and I can't find a way to dot {i + 1} that keeps out of no-go zone {h['zone']}, so I'm stopping here.",
+                              zone=h["zone"], to=way[1])
+        fs["planned"].append(way)
         try:
-            await self._goto(path[i], reach_px, fs, f"waypoint {i}")
+            for k in range(1, len(way)):
+                await self._goto(way[k], reach_px, fs, f"waypoint {i}" if k == len(way) - 1 else f"point {k} of the way around the zones to waypoint {i}")
         except Stuck as e:
             return self._gave_up(i, path, stops, fs, f"{e}, and no live view to re-plan on")
         return True
