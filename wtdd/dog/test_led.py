@@ -28,8 +28,8 @@ and are absent from the wheel, so these checks pin what we send and how we recor
            (its resends die with the process otherwise), the API process does not; importing the hook module does not
            load the driver (the listener imports it).
   Page     the ring's marked block in ui/index.html with its texts in its code (not its comment, which names them too),
-           colours only as var(--x, #fallback), the dot still orange, and the night-1 dry-mode patches 1 and 1b the
-           screenshot needs.
+           the "stub" badge rendered on the ring and the label in var(--warn) amber, colours only as var(--x, #fallback),
+           the dot still orange, and the night-1 dry-mode patches 1 and 1b the screenshot needs.
 """
 from __future__ import annotations
 import asyncio
@@ -627,8 +627,13 @@ class Page(unittest.TestCase):
         css = h[h.index("/* 25 · head-led · start */"):h.index("/* 25 · head-led · end */")]
         self.assertRegex(css, r"\.led\b")
         code = "\n".join(l for l in js.splitlines() if not l.lstrip().startswith("//"))   # the block's comment names these texts too
-        for text in ("acked (no read-back)", "led FAILED · code", "stub", "cyan scanning · red asking or halted · green clear"):
+        for text in ("acked (no read-back)", "led FAILED · code", "cyan scanning · red asking or halted · green clear"):
             self.assertIn(text, code)
+        # the amber "stub" is rendered on the ring and the label, not just named as a prop
+        self.assertRegex(code, r'<text class="lbl led-stub"[^>]*>stub</text>')
+        self.assertIn('<span class="led-stub-badge">stub</span>', code)
+        self.assertRegex(css, r"\.lbl\.led-stub\s*\{\s*fill:\s*var\(--warn,\s*#[0-9a-fA-F]{3,8}\)")
+        self.assertRegex(css, r"\.led-stub-badge\s*\{\s*color:\s*var\(--warn,\s*#[0-9a-fA-F]{3,8}\)")
         bare = re.sub(r"var\(--[\w-]+,\s*#[0-9a-fA-F]{3,8}\)", "", css)
         self.assertNotRegex(bare, r"#[0-9a-fA-F]{3,8}\b", "every colour in the block is var(--x, #fallback)")
         self.assertIn(".dogdot { fill: #e8590c;", h)   # the dot stays orange: orange is the body
