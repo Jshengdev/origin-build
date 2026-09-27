@@ -9,7 +9,8 @@ and the opening below it is dark. no one is around.") and its check, then the de
 the group and the heads-up with the photo to the on-call 1:1 (kind escalate, under decide:<wake guid>:22), then the
 person's two replies read typed: "on it" 12 s later on chat.db's clock (reply.decided acknowledged, then intruder.verdict
 acknowledged / hold with acked_ms 12000: the question stays open), and "handled, cover is back on" 95 s after the post
-(reply.decided handled, intruder.verdict handled / close, then "ok, closed" to the 1:1).
+(reply.decided handled, intruder.verdict handled / close with closed_ms 95000 and no acked_ms, since a flag has one,
+then "ok, closed" to the 1:1).
 ledger-17-failed.jsonl, the same stop to the heads-up, then a live reading that failed: reply.decided ok=false, app
 openrouter, a ConnectionError planted for the screenshot (said in its response_or_error), then intruder.verdict unread /
 stand_down and "couldn't read the reply: ..." to the 1:1.
@@ -94,10 +95,11 @@ def reading(ts, heads, text, guid, ok=True):
                {"meaning": meaning, "p": round(p, 3), "named": named, "p_named": round(p_named, 3), "action": action}, before, err=raw, ms=2)
 
 
-def verdict(ts, text, guid, acked_ms, after):
-    """intruder.verdict as listen.verdict() writes it: 03's args, 17's typed state_after."""
+def verdict(ts, text, guid, ms, after):
+    """intruder.verdict as listen.verdict() writes it: 03's args (ms is {"acked_ms": n}, or {"closed_ms": n} on the close
+    after a hold, since a flag has one acked_ms), 17's typed state_after."""
     return row(ts, "central", "intruder.verdict", "imessage",
-               {"from": HANDLE, "text": text, "guid": guid, "asked": f"decide:{KEY}", "acked_ms": acked_ms, "shift_id": SHIFT, "chat": ONCALL},
+               {"from": HANDLE, "text": text, "guid": guid, "asked": f"decide:{KEY}", **ms, "shift_id": SHIFT, "chat": ONCALL},
                after)
 
 
@@ -106,9 +108,9 @@ def remote() -> list[dict]:
     on_it, done = reading("21:14:24", heads, "on it", "FIX17-R1"), reading("21:15:47", heads, "handled, cover is back on", "FIX17-R2")
     assert (on_it["state_after"]["action"], done["state_after"]["action"]) == ("hold", "close"), (on_it, done)
     return rows + [
-        on_it, verdict("21:14:24", "on it", "FIX17-R1", 12000,
+        on_it, verdict("21:14:24", "on it", "FIX17-R1", {"acked_ms": 12000},
                        {"verdict": "acknowledged", "meaning": "acknowledged", "p": on_it["state_after"]["p"], "action": "hold"}),
-        done, verdict("21:15:47", "handled, cover is back on", "FIX17-R2", 95000,
+        done, verdict("21:15:47", "handled, cover is back on", "FIX17-R2", {"closed_ms": 95000},
                       {"verdict": "handled", "meaning": "handled", "p": done["state_after"]["p"], "action": "close"}),
         *post("21:15:48", ONCALL, "", "listen", "ok:FIX17-R2", "ok, closed", None, 61005, "2026-09-28 04:15:51"),
     ]
@@ -118,7 +120,7 @@ def failed() -> list[dict]:
     rows, heads = stop()
     return rows + [
         reading("21:14:25", heads, "on it", "FIX17-R1", ok=False),
-        verdict("21:14:25", "on it", "FIX17-R1", 12000, {"verdict": "unread", "meaning": None, "p": None, "action": "stand_down"}),
+        verdict("21:14:25", "on it", "FIX17-R1", {"acked_ms": 12000}, {"verdict": "unread", "meaning": None, "p": None, "action": "stand_down"}),
         *post("21:14:26", ONCALL, "", "listen", "unread:FIX17-R1", f"couldn't read the reply: {PLANTED}", None, 61004,
               "2026-09-28 04:14:29"),
     ]
