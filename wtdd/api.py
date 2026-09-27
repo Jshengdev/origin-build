@@ -1,6 +1,6 @@
 """The local HTTP API over the tool registry, plus the static remote (ui/). Stdlib only, bound to 127.0.0.1.
 
-  python -m wtdd.api              serves http://127.0.0.1:7788/   (python -m wtdd.api 8000 for another port)
+  python -m wtdd.api              serves config.API (WTDD_API_PORT, default 7788)   (python -m wtdd.api 8000 for another port)
   GET  /                          ui/index.html (the remote and the map page); any other path is a file under ui/
                                   (house.svg; tokens.css is a symlink into ../../taste-library and is followed)
   GET  /tools                     [{name, doc, args}] for every tool
@@ -387,7 +387,7 @@ class H(BaseHTTPRequestHandler):
 def main(argv: list[str] | None = None) -> int:
     import os
     os.environ["WTDD_API_PROCESS"] = "1"   # this process owns the dog session; others reach it over HTTP
-    port = int((argv or sys.argv[1:] or ["7788"])[0])
+    port = int((argv or sys.argv[1:] or [urlparse(config.API).port])[0])
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)
     log("api", f"serving http://127.0.0.1:{port}/  tools={len(tools.registry())} ui={UI}")
     try:
