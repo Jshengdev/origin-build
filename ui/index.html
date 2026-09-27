@@ -55,6 +55,8 @@
   .cone { fill: rgba(232,89,12,.14); stroke: rgba(232,89,12,.6); stroke-width: 2; } .conetip { fill: #fff; stroke: #e8590c; stroke-width: 3; cursor: grab; }
   .trace { fill: none; stroke: #e8590c; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .8; } .mark { fill: #e8590c; stroke: #fff; stroke-width: 2; }
   .lidar { fill: none; stroke: rgba(11,13,196,.5); stroke-width: 6; stroke-linecap: round; pointer-events: none; }   /* one dot per "M x y h0" */
+  .planned { fill: none; stroke: #0a7f5a; stroke-width: 4; stroke-dasharray: 10 8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }   /* S6b: follow.planned, every leg */
+  .actual { fill: none; stroke: #e8590c; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; opacity: .9; pointer-events: none; }   /* S6b: follow.trace, where it went */
   .lbl { font-family: 'IBM Plex Mono', monospace; font-size: 17px; fill: #262323; paint-order: stroke; stroke: #fbfaf7; stroke-width: 5px; user-select: none; pointer-events: none; }
   .levels { font-family: var(--mono); font-size: 10.5px; line-height: 1.7; }
   .bar { display: inline-block; height: 7px; background: #ffcc44; border-radius: 4px; vertical-align: middle; margin-left: 8px; transition: width .2s; }
@@ -95,6 +97,7 @@ const post = (path, obj) => fetch(path, { method: "POST", headers: { "Content-Ty
 const call = async (name, args = {}) => (await post(`/tools/${name}`, args)).json();
 const putMap = m => post("/map", m);   // rewrites ui/map.json; walk_path reads it
 const inside = (p, poly) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+const redact = s => typeof s === "string" ? s.replace(/\+\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "a member") : s;   // S10: the Receipts are filmed: a phone handle or an email reads "a member"; dates, coordinates and numbers pass
 const roomOf = (p, rooms) => ((rooms || []).find(r => inside(p, r.poly)) || {}).name || null;   // the room a map point sits in, for the page's save; field.py recomputes it anyway
 // the dot, the room and the levels come from GET /field (wtdd/field.py CURRENT) while a walk runs, whoever started it.
 
@@ -310,6 +313,9 @@ function App() {
             ${dog?.rec && html`<g><polyline class="trace" points=${dog.rec.points.map(p => p.join(",")).join(" ")}/>${dog.rec.marks.map((m, i) => html`<g key=${"m" + i}><circle class="mark" cx=${m[0]} cy=${m[1]} r="10"/><text class="lbl" x=${m[0] + 14} y=${m[1] + 6}>${(dog.rec.actions || [])[i] ? `${dog.rec.actions[i].look}${dog.rec.actions[i].say ? " + say" : " photo"}${dog.rec.actions[i].ask ? " + who dis" : ""}` : "stop"}</text></g>`)}</g>`}
             <${GridLayer}/>
             ${lidar?.points_px?.length > 0 && html`<path class="lidar" d=${lidar.points_px.map(p => `M${p[0]} ${p[1]}h0`).join("")}/>`}
+            ${dog?.follow?.planned?.length > 0 && html`<g>${dog.follow.planned.map((l, i) => html`<polyline key=${"leg" + i} class="planned" points=${l.map(p => p.join(",")).join(" ")}/>`)}
+              <polyline class="actual" points=${(dog?.follow?.trace || []).map(p => p.join(",")).join(" ")}/>
+              <g transform="translate(12 70)"><line class="planned" x1="0" y1="0" x2="40" y2="0"/><text class="lbl" x="48" y="6">planned</text><line class="actual" x1="150" y1="0" x2="190" y2="0"/><text class="lbl" x="198" y="6">actual</text></g></g>`}
             <${ObjectsLayer}/>
             ${(dogDrag || dog?.map) && (() => {
               const D = dogDrag || dog.map, [x, y] = D.p, h = D.heading_deg * Math.PI / 180, L = 170, half = 0.5;   // the cone: where it points, about 60 degrees wide
@@ -380,7 +386,7 @@ function App() {
             ${shiftOut && html`<span class=${"mono " + (shiftOut.ok ? "ok" : "bad")}>${shiftOut.ok ? `started ${shiftOut.shift_id}` : `FAILED ${shiftOut.error}`}</span>`}</div>
           <div class="ledger">
           ${(pc => pc && html`<div key="pc"><span>${(pc.ts || "").slice(11)}</span><span class=${pc.ok ? "" : "bad"}>pose.corrected${pc.ok ? "" : " FAILED"} · ${pc.args?.windows} windows · largest nudge ${pc.args?.largest_m} m${pc.ok ? "" : ` · ${String(pc.response_or_error ?? "").slice(0, 200)}`}</span><span>${pc.latency_ms} ms</span></div>`)([...ledger].reverse().find(r => r.tool === "pose.corrected"))}
-          ${[...ledger].reverse().filter(r => r.tool !== "pose.corrected").slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? r.args.say : r.args ? JSON.stringify(r.args).slice(0, 60) : ""}${r.ok ? "" : ` · ${String(r.response_or_error ?? "").slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
+          ${[...ledger].reverse().filter(r => r.tool !== "pose.corrected").slice(0, 25).map((r, i) => html`<div key=${i}><span>${(r.ts || "").slice(11)}</span><span class=${r.ok ? "" : "bad"}>${r.tool}${r.ok ? "" : " FAILED"} ${r.args?.say ? redact(r.args.say) : r.args ? redact(JSON.stringify(r.args)).slice(0, 60) : ""}${r.ok ? "" : ` · ${redact(String(r.response_or_error ?? "")).slice(0, 200)}`}</span><span>${r.latency_ms} ms</span></div>`)}
         </div></div>
         ${admin && html`<div class="panel">
           <h2 style=${{ marginBottom: "var(--gap-in)" }}>Entity · the dog on the map</h2>
@@ -411,7 +417,7 @@ function App() {
           <h2>Commands · demo</h2>
           <div class="row">${cmd("the show (25 s)", "light_show", {})}${cmd("red / blue on 'special' 5 s", "hue_signal", { light: "special", seconds: 5 })}${cmd("make the fire picture", "dog_on_fire", {})}${cmd("read every light", "lights_status", {})}</div>
           <div class="cmd">${cli("light_show", {})}</div>
-          ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${JSON.stringify(last.args)} → ${last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error}</div>`}
+          ${last && html`<div class="mono" style=${{ marginTop: 6 }}>${last.ok ? html`<span class="ok">ok</span>` : html`<span class="bad">FAILED</span>`} ${last.tool} ${redact(JSON.stringify(last.args))} → ${redact(last.ok ? (last.result && (last.result.text || last.result.result || last.result.file || JSON.stringify(last.result).slice(0, 140))) : last.error)}</div>`}
         </div>
         ${Array.isArray(status?.hue) && status.strip && html`<div class="panel"><h2>State · read back</h2><div class="status">
           ${status.hue.filter(l => l.room === "Living room").map(l => html`<div key=${l.id}><b>${l.name}</b> · ${l.on ? "on" : "off"} · ${l.brightness}%</div>`)}

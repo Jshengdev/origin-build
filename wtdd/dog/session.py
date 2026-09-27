@@ -25,12 +25,16 @@ px_per_m beside the tie in dog_cal.json; a new session takes that over WTDD_PX_P
 ignored) and names the scale's source in one stderr line. Only the process that holds the session sees the saved value.
 A path that touches a drawn no-go zone (wtdd/nogo.py) is refused as the first thing follow() does, before the
 calibration check, any connect or the avoidance switch: one route.refused row and a ValueError, no dog.follow row.
-Before each waypoint the follower asks the session's occupancy grid (wtdd/plan.py occupied) whether it now sits in an
-inflated wall; when so it replans a detour to the first free waypoint after it (plan.replan, one plan.replanned row),
-drives it and rejoins; a stop on a skipped waypoint is reported in state().follow.skipped_stops, never waited on; the
-route's end occupied fails the follow. The check is per waypoint, on advancing to it: a blob that lands on the waypoint
-already being driven to is the avoidance service's and WP_TIMEOUT_S's. UNVERIFIED on the dog: exercised with a
-teleporting body only (wtdd/test_plan_grid.py).
+The follower (S6, S6b; _follow) takes the dots in order from the first. The live LiDAR view decides, without the dog's
+own body (points within SELF_M of it); the grid is memory that only labels. Every leg, from where the dog stands to the
+next dot, is planned around the live view (plan.leg) and driven point by point; before each point the rest of the leg
+is checked against the newest view and re-planned from where the dog stands when it is now blocked (MAX_REPLANS per
+leg, then refused). A dot the view covers moves to free floor within plan.LIVE_SNAP_M; with none, the dog faces it,
+looks and Jev names what is there from OBSTACLES (_classify), and the dot is passed (a person pauses the follow until
+resume()). Every decision is one route.decided row with a first-person sentence. state().follow carries planned (every
+leg's polyline) and trace (the believed pose, the actual route), both kept until the next follow. A stop on a passed dot
+is reported in skipped_stops, never waited on. UNVERIFIED on the dog: exercised with a teleporting body only
+(wtdd/test_plan_grid.py); the turn to face a dot and the look inside a follow have run in no test.
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -92,7 +96,19 @@ TILT_MIN_DEG = 8.0                            # a tilt frame counts only if the 
 STALE_MS = 5000                               # state stream (20 Hz) older than this: the peer is dead, reconnect once
 PROBE_BACKOFF_S = 15.0                        # after a failed connect, callers get the same error without a new probe row for this long
 WP_TIMEOUT_S = 30.0                           # a waypoint not reached in this long fails the follow (no retry)
-MAX_REPLANS = 5                               # detours per follow; past it the follow fails loud rather than circling
+MAX_REPLANS = 5                               # S6b: re-plans per leg; past it the follow is refused rather than circling
+SELF_M = 0.35                                 # S6b: live points this close to the believed pose are the dog's own body in its band
+TRACE_MIN_PX, TRACE_MAX = 10, 2000            # S6b: the actual route (follow.trace): a point every 10 px moved, the last 2000 kept
+FACE_DEG, FACE_S = 10.0, 8.0                  # S6b: facing a dot on blue: within this many degrees, or TimeoutError after FACE_S
+OBSTACLES = ["person", "chair", "table", "box", "bag", "wall", "door", "other"]   # S6b: what Jev may name on a dot on blue
+STUCK_M, STUCK_S = 0.05, 3.0                  # S6b: under STUCK_M closer to the point being driven to in STUCK_S is stuck
+FRONT_M, BODY_HALF_M = 0.50, 0.155            # S6b: so is a live point in the body's corridor this close ahead of its middle (the Go2 stops its nose ~0.15 m short)
+SIDESTEP_MS, SIDESTEP_S = 0.15, 1.0           # S6b: stuck, it first sidesteps toward the open side at this speed for this long
+SWEEP_DEG = (15, 30, 45)                      # S6b: then holds these headings off the direct line, the open side first
+
+
+class Stuck(RuntimeError):
+    """S6b: no heading of the sweep brought the dog closer to the point it was driving to (_unstick)."""
 REC_HZ, REC_MIN_PX, REC_STEP_PX = 5.0, 10, 45   # route recording: sample rate, min move per sample, waypoint spacing (about 0.4 m)
 LIVE_MAX_AGE_MS = 1000                        # S6: an older LiDAR window is no live view; the follower says so once
 START_PX = 90                                 # a dog this close to the path's first point replays from the start (a loop's end is also its start)
@@ -574,7 +590,7 @@ class DogSession:
         log("dog", "follow from waypoint", start=start, n=len(path), near_start=near_start, dist_to_start_px=round(math.dist(path[0], pose["p"])))
         self.follow_state = {"active": True, "i": start, "n": len(path), "stops": stops, "stopped_at": None, "resume": False,
                              "reached": [], "started": time.time(), "error": None, "avoid": bool(self.body._avoid),
-                             "replans": [], "skipped_stops": []}
+                             "replans": [], "skipped_stops": [], "passed": [], "unchecked": False, "planned": [], "trace": [pose["p"]]}
         self._follower = asyncio.run_coroutine_threadsafe(self._follow(path, stops, reach_px, start), self.loop)
         return dict(self.follow_state)
 
@@ -599,130 +615,303 @@ class DogSession:
         return lidar.to_map_points(xy, self.cal, (x, y), yaw, max_points=max(1, len(xy)))
 
     def _decided(self, i: int | None, action: str, reason: str, say: str, **extra: Any) -> None:
-        """S6: one route.decided row per decision the follower makes: the action (unchecked, snapped, detoured, refused),
-        the reason, and one first-person sentence (args.say, the receipts' main line). A refusal is a FAILED row and
-        raises, so the follow fails loud with it."""
+        """S6: one route.decided row per decision the follower makes: the action (unchecked, snapped, refused; S6b's
+        classified row is _classify's own; stuck, gave up), the reason, and one first-person sentence (args.say, the
+        receipts' main line). A refusal is a FAILED row and raises, so the follow fails loud with it; "gave up" (S6b: a dot
+        not reached, passed) is a FAILED row the follow moves on from."""
         args = {"at": i, "action": action, "reason": reason, "say": say, **extra}
         log("dog", f"decided {action}: {say}")
-        with step("dog", "route.decided", "map", args, self.map_pose()) as r:
+        try:
+            with step("dog", "route.decided", "map", args, self.map_pose()) as r:
+                if action in ("refused", "gave up"):
+                    raise RuntimeError(f"{action}: {reason}")
+                r["state_after"] = {"action": action}
+        except RuntimeError:
             if action == "refused":
-                raise RuntimeError(f"refused: {reason}")
-            r["state_after"] = {"action": action}
+                raise
 
     def _set_vel(self, x: float, y: float, z: float) -> None:
         self.vel, self.vel_t = (x, y, z), time.monotonic()   # the drive loop publishes it and stops 0.6 s after the last refresh
 
     async def _goto(self, target, reach_px: float, fs: dict[str, Any], what: str) -> dict[str, Any]:
         """nav.steer at 10 Hz feeding the drive loop until `target` is within reach_px; returns the pose there. Not
-        reached in WP_TIMEOUT_S: TimeoutError naming `what`."""
+        reached in WP_TIMEOUT_S: TimeoutError naming `what`. S6b: stuck (under STUCK_M closer in STUCK_S, or at once a live
+        point in the body's corridor within FRONT_M ahead, plan.ahead), _unstick; its sweep moving the dog no closer: Stuck."""
         t_wp = time.monotonic()
+        best, t_best = math.inf, t_wp   # the stuck window: the closest so far, and since when
         while True:
             pose = self.map_pose()
             if pose is None:
                 raise RuntimeError("no pose (state stream stopped)")
+            self._traced(fs, pose["p"])
             ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), target, reach_px)
             fs.update({"dist_px": ctl["dist_px"], "err_deg": ctl["err_deg"], "p": pose["p"], "heading_deg": pose["heading_deg"]})
             if ctl["reached"]:
                 return pose
             if time.monotonic() - t_wp > WP_TIMEOUT_S:
                 raise TimeoutError(f"{what} not reached in {WP_TIMEOUT_S}s (dist {ctl['dist_px']} px, err {ctl['err_deg']} deg)")
+            if ctl["dist_px"] <= best - STUCK_M * nav.PX_PER_M or best == math.inf:
+                best, t_best = ctl["dist_px"], time.monotonic()
+            live = self._view()[0]
+            near = None if live is None else plan.ahead(pose["p"], math.radians(pose["heading_deg"]), live, FRONT_M, BODY_HALF_M)
+            if near is not None or time.monotonic() - t_best > STUCK_S:
+                why = f"an obstacle {near} m ahead" if near is not None else f"no progress in {STUCK_S} s"
+                if not await self._unstick(target, fs, what, why):
+                    raise Stuck(f"{why}, and none of {2 * len(SWEEP_DEG)} headings brought me {STUCK_M} m closer")
+                best, t_best = math.inf, time.monotonic()
+                t_wp = t_best   # a recovery that made progress restarts the clock; each needs STUCK_M of real progress, so no endless loop
+                continue
             self._set_vel(ctl["x"], 0.0, ctl["z"])
             await asyncio.sleep(0.1)
 
+    async def _unstick(self, target, fs: dict[str, Any], what: str, why: str) -> bool:
+        """S6b, Johnny 03:48: "trust its lidar and actually just guide itself and reposition ... test the different degrees
+        and angles". The clear metres left and right of the dog in the newest live view 1 m ahead (plan.sides; the wider is
+        the open side, left on a tie), a sidestep toward it (SIDESTEP_MS for SIDESTEP_S), then headings SWEEP_DEG off the
+        direct line to `target`, the open side first and the other from 15, each held up to STUCK_S; the first that brings
+        the dog STUCK_M closer is kept and steering to the target resumes. One route.decided "stuck" row per heading. All
+        through the same drive loop, so the Go2's avoidance stays on (S3). True when a heading moved it.
+        UNVERIFIED on the dog: the sidestep (y velocity) through the avoidance service and the held headings."""
+        live, pose = self._view()
+        clear = plan.sides(pose["p"], math.radians(pose["heading_deg"]), live) if live is not None else {"left": None, "right": None}
+        first = "right" if (clear["right"] or 0) > (clear["left"] or 0) else "left"
+        for _ in range(max(1, round(SIDESTEP_S * 10))):   # refreshed every 0.1 s: the drive loop drops a velocity after DRIVE_HOLD_S
+            self._set_vel(0.0, SIDESTEP_MS if first == "left" else -SIDESTEP_MS, 0.0)
+            await asyncio.sleep(0.1)
+        n = 0
+        for side in (first, "right" if first == "left" else "left"):
+            for deg in SWEEP_DEG:
+                n, pose = n + 1, self._view()[1]
+                d0 = math.dist(pose["p"], target)
+                scan = f"where my scan shows {clear[side]} m clear" if clear[side] is not None else "with no live view to go by"
+                self._decided(fs["i"], "stuck", f"{why} on the way to {what}: holding {deg} deg {side} of the direct line",
+                              f"I'm blocked straight ahead on the way to dot {fs['i'] + 1}. Trying {deg}° {side}, {scan}.",
+                              angle=deg, side=side, clear_m=clear, attempt=n, dist_m=round(d0 / nav.PX_PER_M, 2))
+                h = nav.heading_of(pose["p"], target) + math.radians(deg if side == "right" else -deg)   # map heading is clockwise: right is +
+                t0 = time.monotonic()
+                while time.monotonic() - t0 < STUCK_S:
+                    if (pose := self.map_pose()) is None:
+                        raise RuntimeError("no pose (state stream stopped)")
+                    self._traced(fs, pose["p"])
+                    if d0 - math.dist(pose["p"], target) >= STUCK_M * nav.PX_PER_M:
+                        log("dog", f"unstuck: {deg} deg {side} moved me closer, back to steering", at=fs["i"], attempt=n)
+                        return True
+                    aim = (pose["p"][0] + 1000 * math.cos(h), pose["p"][1] + 1000 * math.sin(h))   # a point far down that heading
+                    ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), aim, 0.0)
+                    self._set_vel(ctl["x"], 0.0, ctl["z"])
+                    await asyncio.sleep(0.1)
+        return False
+
+    def _gave_up(self, i: int, path: list, stops: list[int], fs: dict[str, Any], why: str) -> bool:
+        """S6b: dot i not reached after a sweep, a re-plan and another sweep: one FAILED "gave up" row, the dot passed (a
+        stop on it skipped) and False, so the follow moves on. The last dot has no next one: refused, which raises."""
+        if i + 1 >= len(path):
+            self._decided(i, "refused", f"stuck on the way to the last dot, {i + 1}, after a sweep, a re-plan and another sweep: {why}",
+                          f"I can't get to dot {i + 1}, the last one: {why}. I'm stopping here.")
+        self._decided(i, "gave up", f"stuck on the way to dot {i + 1} after a sweep, a re-plan and another sweep: {why}",
+                      f"I couldn't get to dot {i + 1}: {why}. I'm naming it passed and moving on to dot {i + 2}.", passed=[i])
+        fs["passed"].append(i)
+        fs["skipped_stops"] += [i] if i in stops else []
+        return False
+
     async def _follow(self, path: list, stops: list[int], reach_px: float, start: int) -> None:
-        """Waypoint by waypoint from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume().
-        S6: before each waypoint the LIVE view decides (the newest LiDAR window's band, plan.blocker), and the grid is memory
-        that only labels a blocker permanent or new. A covered waypoint moves to free floor within plan.LIVE_SNAP_M
-        (snapped), else plan.replan's detour runs to the next waypoint free in the live view (detoured; no stop on it),
-        else the follow is refused; each decision is one route.decided row with a first-person sentence (args.say). No
-        live view: one "unchecked" row and the dots are followed as drawn. At most MAX_REPLANS detours per follow. One dog.follow row at the end
-        with the waypoints reached, the replans, the stops skipped and the error, if any. Never retries a waypoint."""
+        """Dot by dot from `start`: nav.steer at 10 Hz feeding the drive loop; pauses at stops until resume(). S6: the LIVE
+        view decides (the newest LiDAR window's band without the dog's own body, _view) and the grid is memory that only
+        labels a blocker permanent or new. S6b: each dot is reached by a planned leg (_leg); a dot on live blue with no free
+        floor near it is looked at, named and passed (_classify). No live view: one "unchecked" row and the dots are
+        followed as drawn. One dog.follow row at the end with the dots reached and passed, the re-plans, the stops skipped
+        and the error, if any. Never retries a dot."""
         fs = self.follow_state
         args = {"n": len(path), "start": start, "stops": stops, "reach_px": reach_px, "avoid": bool(self.body._avoid)}
         try:
             with step("dog", "dog.follow", "map", args, self.map_pose()) as r:
                 try:
-                    if self.grid is None:
-                        log("dog", "WARN following without an occupancy grid: a blob on the route cannot make a replan (POST /dog/lidar {on: true})")
-                    i, replans, warned = start, 0, False
-                    while i < len(path):
+                    for i in range(start, len(path)):
                         fs["i"] = i
-                        target, live = path[i], self._live_px()
-                        if live is None:
-                            if not warned:   # S6: said once, in words; the drawn dots are followed with the dog's own avoidance
-                                warned = True
-                                self._decided(None, "unchecked", "no live view (the LiDAR is off, its newest window is older than "
-                                              f"{LIVE_MAX_AGE_MS} ms, or the dog is not calibrated): the waypoints are followed as drawn, avoidance on",
-                                              "I can't see live right now, so I'm following your dots as drawn with my own obstacle avoidance on.")
-                        elif (b := plan.blocker(path[i], live, self.grid, self.cal, lock=self._grid_lock)) is not None:
-                            what = f"{b['kind']}, {b['cells']} cells, {b['in_memory']} in memory"
-                            seen = (f"something new ({b['cells']} cells, not in my memory: a new obstacle)" if b["kind"] == "new obstacle"
-                                    else f"something I've seen here before ({b['cells']} cells, {b['in_memory']} in my memory: permanent)")
-                            sn = plan.snap(path[i], live)
-                            if sn is not None:
-                                q, m = sn
-                                self._decided(i, "snapped", f"dot {i + 1} blocked by {what}: moved {m} m to free floor",
-                                              f"Dot {i + 1} is covered by {seen}. I'm going to the free spot {m} m away and carrying on in order.",
-                                              blocker=b, m=m, **{"from": [int(path[i][0]), int(path[i][1])], "to": q})
-                                target = q
-                            else:
-                                j = next((k for k in range(i + 1, len(path)) if plan.blocker(path[k], live) is None), None)
-                                if j is None:
-                                    self._decided(i, "refused", f"dot {i + 1} blocked by {what}: no free floor within {plan.LIVE_SNAP_M} m "
-                                                  "and no later waypoint free in the live view",
-                                                  f"Dot {i + 1} is covered by {seen}, there's no free floor within {plan.LIVE_SNAP_M} m of it and "
-                                                  "no dot after it I can reach, so I'm stopping here.", blocker=b)
-                                if replans >= MAX_REPLANS:
-                                    raise RuntimeError(f"waypoint {i} blocked after {replans} detours this follow (MAX_REPLANS): not circling")
-                                pose = self.map_pose()
-                                if pose is None:
-                                    raise RuntimeError("no pose (state stream stopped)")
-                                skipped = [k for k in stops if i <= k < j]
-                                passed = ", ".join(f"dot {k + 1}" for k in range(i, j))
-                                say = (f"Dot {i + 1} is covered by {seen} and there's no free floor within {plan.LIVE_SNAP_M} m of it. "
-                                       f"I'm going around to dot {j + 1}, passing {passed}" + (f", so stop {', '.join(str(k + 1) for k in skipped)} is missed" if skipped else "") + ".")
-                                reason = f"dot {i + 1} blocked by {what}: no free floor within {plan.LIVE_SNAP_M} m; detour to dot {j + 1}"
-                                try:
-                                    det = plan.replan(pose["p"], path, i, self.grid, self.cal, lock=self._grid_lock, live_px=live, rejoin=j, say=say)
-                                except ValueError as e:
-                                    self._decided(i, "refused", f"{reason}: no detour ({e})",
-                                                  f"Dot {i + 1} is covered by {seen} and I can't find a way around it to dot {j + 1} ({e}), so I'm stopping here.",
-                                                  blocker=b, rejoin=j)
-                                self._decided(i, "detoured", reason, say, blocker=b, rejoin=j, passed=list(range(i, j)), skipped_stops=skipped)
-                                fs["replans"].append({"at": i, "rejoin": j, "waypoints": len(det["path"]), "skipped_stops": skipped})
-                                fs["skipped_stops"] += skipped
-                                replans += 1
-                                for k, q in enumerate(det["path"]):   # every point, the first is where it stands; no stop on a detour
-                                    pose = await self._goto(q, reach_px, fs, f"detour point {k} around waypoint {i}")
-                                i = j
-                                continue
-                        pose = await self._goto(target, reach_px, fs, f"waypoint {i}")
+                        live, pose = self._view()
+                        if not await (self._as_drawn(i, path, stops, reach_px, fs, pose) if live is None
+                                      else self._leg(i, path, stops, reach_px, fs, live, pose)):
+                            continue   # passed: looked at and named, or given up; its row says so
                         fs["reached"].append(i)
-                        log("dog", f"waypoint {i}/{len(path) - 1} reached", p=pose["p"])
+                        log("dog", f"waypoint {i}/{len(path) - 1} reached", p=fs.get("p"))
                         if i in stops:
-                            self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
-                            fs["stopped_at"], fs["resume"] = i, False
-                            log("dog", f"stop at waypoint {i}: waiting for resume")
-                            t_stop = time.monotonic()
-                            while not fs["resume"]:
-                                if time.monotonic() - t_stop > STOP_TIMEOUT_S:
-                                    raise TimeoutError(f"stopped at {i} for {STOP_TIMEOUT_S}s without resume")
-                                await asyncio.sleep(0.2)
-                            fs["stopped_at"] = None
-                        i += 1
+                            await self._hold(fs, i, f"stop at waypoint {i}")
                     fs["done"] = True
                 finally:
                     self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
                     await self._halt()
                     fs["active"] = False
-                    r["state_after"] = {"reached": list(fs["reached"]), "of": len(path), "seconds": round(time.time() - fs["started"], 1), "map": self.map_pose(),
-                                        "replans": len(fs["replans"]), "skipped_stops": list(fs["skipped_stops"])}
+                    if (end := self.map_pose()) is not None:
+                        self._traced(fs, end["p"])
+                    r["state_after"] = {"reached": list(fs["reached"]), "passed": list(fs["passed"]), "of": len(path),
+                                        "seconds": round(time.time() - fs["started"], 1), "map": end, "replans": len(fs["replans"]),
+                                        "skipped_stops": list(fs["skipped_stops"])}
         except asyncio.CancelledError:
             fs["error"] = "stopped"
             log("dog", "follow cancelled (stop)")
         except Exception as e:  # noqa: BLE001  (the row above has it; the state carries it for the page)
             fs["error"] = f"{type(e).__name__}: {e}"
             log("dog", "follow FAILED", err=fs["error"][:120])
+
+    def _view(self) -> tuple[list | None, dict]:
+        """S6b: (the newest live band without the dog's own body, the believed pose). Points within SELF_M of the pose are
+        dropped: the dog's legs land in its own band. (None, pose) with no live view; no pose raises."""
+        live, pose = self._live_px(), self.map_pose()
+        if pose is None:
+            raise RuntimeError("no pose (state stream stopped)")
+        if live is None:
+            return None, pose
+        r = SELF_M * nav.PX_PER_M
+        return [q for q in live if math.dist(q, pose["p"]) > r], pose
+
+    @staticmethod
+    def _traced(fs: dict[str, Any], p) -> None:
+        """S6b: the actual route, follow.trace: the believed pose appended once it moved TRACE_MIN_PX, the last TRACE_MAX kept."""
+        t = fs["trace"]
+        if not t or math.dist(t[-1], p) >= TRACE_MIN_PX:
+            t.append([int(p[0]), int(p[1])])
+            del t[:-TRACE_MAX]
+
+    async def _as_drawn(self, i: int, path: list, stops: list[int], reach_px: float, fs: dict[str, Any], pose: dict) -> bool:
+        """No live view: dot i straight as drawn, with the dog's own avoidance; S6's "unchecked" row once per follow.
+        Stuck (S6b) with no view to re-plan on: given up (_gave_up). True when reached."""
+        if not fs["unchecked"]:
+            fs["unchecked"] = True
+            self._decided(None, "unchecked", "no live view (the LiDAR is off, its newest window is older than "
+                          f"{LIVE_MAX_AGE_MS} ms, or the dog is not calibrated): the waypoints are followed as drawn, avoidance on",
+                          "I can't see live right now, so I'm following your dots as drawn with my own obstacle avoidance on.")
+        fs["planned"].append([pose["p"], [int(path[i][0]), int(path[i][1])]])
+        try:
+            await self._goto(path[i], reach_px, fs, f"waypoint {i}")
+        except Stuck as e:
+            return self._gave_up(i, path, stops, fs, f"{e}, and no live view to re-plan on")
+        return True
+
+    async def _hold(self, fs: dict[str, Any], i: int, what: str) -> None:
+        """Stopped at dot i (zero velocity, follow.stopped_at) until resume(); STOP_TIMEOUT_S without one fails the follow."""
+        self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
+        fs["stopped_at"], fs["resume"] = i, False
+        log("dog", f"{what}: waiting for resume")
+        t_stop = time.monotonic()
+        while not fs["resume"]:
+            if time.monotonic() - t_stop > STOP_TIMEOUT_S:
+                raise TimeoutError(f"stopped at {i} for {STOP_TIMEOUT_S}s without resume")
+            await asyncio.sleep(0.2)
+        fs["stopped_at"] = None
+
+    async def _leg(self, i: int, path: list, stops: list[int], reach_px: float, fs: dict[str, Any], live: list, pose: dict) -> bool:
+        """S6b: dot i by a planned leg. The dot covered in the live view moves to free floor within plan.LIVE_SNAP_M
+        (snapped); with none it is looked at and named instead (_classify) and False is returned. The leg (plan.leg, one
+        plan.route row) runs from where the dog stands, around what the view shows; before each point after the first the
+        rest of it is checked against the newest view (plan.clear) and, now blocked, the dot is decided again and the leg
+        re-planned from where the dog stands (one plan.replanned row with its sentence). Stuck (_goto's sweep failed): one
+        re-plan from where it stands, and stuck again, given up (_gave_up). Past MAX_REPLANS re-plans, or no route:
+        refused, which raises. True when the dot (or its snapped spot) is reached."""
+        say, stuck = None, False
+        for n in range(MAX_REPLANS + 1):
+            if n:
+                live, pose = self._view()
+                if live is None:
+                    return await self._as_drawn(i, path, stops, reach_px, fs, pose)
+            target = path[i]
+            if (b := plan.blocker(target, live, self.grid, self.cal, lock=self._grid_lock)) is not None:
+                if (sn := plan.snap(target, live)) is None:
+                    await self._classify(i, path, stops, b, fs)
+                    return False
+                (q, m), what = sn, f"{b['kind']}, {b['cells']} cells, {b['in_memory']} in memory"
+                seen = (f"something new ({b['cells']} cells, not in my memory: a new obstacle)" if b["kind"] == "new obstacle"
+                        else f"something I've seen here before ({b['cells']} cells, {b['in_memory']} in my memory: permanent)")
+                self._decided(i, "snapped", f"dot {i + 1} blocked by {what}: moved {m} m to free floor",
+                              f"Dot {i + 1} is covered by {seen}. I'm going to the free spot {m} m away and carrying on in order.",
+                              blocker=b, m=m, **{"from": [int(target[0]), int(target[1])], "to": q})
+                target = q
+            try:
+                leg = plan.leg(pose["p"], target, live, [fs["reached"][-1] + 1 if fs["reached"] else None, i + 1], say, again=n > 0)
+            except ValueError as e:
+                self._decided(i, "refused", f"no route to dot {i + 1} in the live view: {e}",
+                              f"I can't find a way to dot {i + 1} around what I see ({e}), so I'm stopping here.", to=[int(v) for v in target])
+            fs["planned"].append(leg["path"])
+            if n:
+                fs["replans"].append({"at": i, "from": pose["p"], "waypoints": len(leg["path"]) - 1})
+            for k in range(1, len(leg["path"])):
+                if k > 1 and (view := self._view())[0] is not None:
+                    live, pose = view
+                    if not plan.clear([pose["p"], *leg["path"][k:]], live):
+                        say = f"The way to dot {i + 1} is blocked now by something I see live. I'm re-planning from where I stand ({n + 1} of {MAX_REPLANS})."
+                        break
+                try:
+                    pose = await self._goto(leg["path"][k], reach_px, fs, f"point {k} of the leg to waypoint {i}")
+                except Stuck as e:
+                    if stuck:
+                        return self._gave_up(i, path, stops, fs, str(e))
+                    stuck, say = True, f"I couldn't get past on the way to dot {i + 1} ({e}). I'm re-planning from where I stand."
+                    break
+            else:
+                return True
+            log("dog", f"WARN leg re-planned: {say}", at=i, re_plan=n + 1, of=MAX_REPLANS)
+        self._decided(i, "refused", f"the way to dot {i + 1} was blocked again after {MAX_REPLANS} re-plans (MAX_REPLANS): not circling",
+                      f"The way to dot {i + 1} keeps getting blocked, {MAX_REPLANS} re-plans, so I'm stopping here instead of circling.")
+
+    async def _classify(self, i: int, path: list, stops: list[int], b: dict, fs: dict[str, Any]) -> None:
+        """S6b: dot i sits on live blue with no free floor within plan.LIVE_SNAP_M. The dog faces it and looks (_look_at),
+        Jev picks one label from OBSTACLES (decide._jev, never decide.decide: no `decided` row, no escalation; with no
+        JEV_API_KEY decide._stub, the row cached, source stub). One route.decided row, action classified, with the label,
+        p, the scene sentence and a first-person say; the dot is passed (follow.passed, a stop on it skipped). A person
+        pauses the follow here like a stop until resume(). A failed look or label is the same row FAILED, and the follow
+        still moves on."""
+        from .. import decide
+        nxt = f"I'm moving on to dot {i + 2}." if i + 1 < len(path) else "It was the last dot, so I'm done."
+        kind = "a new obstacle" if b["kind"] == "new obstacle" else "something my memory already had (permanent)"
+        args = {"at": i, "action": "classified", "blocker": b, "passed": [i],
+                "reason": f"dot {i + 1} on live blue ({b['kind']}, {b['cells']} cells) with no free floor within {plan.LIVE_SNAP_M} m: looked and named"}
+        try:
+            with step("dog", "route.decided", "map", args, self.map_pose()) as r:
+                try:
+                    sight = await self._look_at(path[i])
+                    state = (f"a robot dog following a drawn route stopped short of a dot its lidar sees covered ({b['kind']}). facing it, "
+                             f"its camera sees: {sight['text']}" + (" someone is in view." if sight.get("person") else ""))
+                    stub = not config.maybe("JEV_API_KEY")
+                    label, p, model, raw = decide._stub(state, OBSTACLES) if stub else await asyncio.to_thread(decide._jev, state, OBSTACLES)
+                    if label not in OBSTACLES or not 0.0 <= p <= 1.0:
+                        raise ValueError(f"label out of contract: {label!r} (choices {OBSTACLES}), p={p!r}")
+                    if stub:
+                        r["cached"], r["source"] = True, "stub"
+                    name = "something I can't name" if label == "other" else f"a {label}"
+                    args |= {"label": label, "p": round(p, 3), "scene": sight["text"], "model": model,
+                             "say": f"There's a person on dot {i + 1}. I'm waiting here until you press resume." if label == "person"
+                             else f"Dot {i + 1} is on {name} ({p:.2f}), {kind}. {nxt}"}
+                    r["state_after"], r["response_or_error"] = {"label": label, "p": round(p, 3), "passed": [i]}, raw[:600]
+                except Exception as e:
+                    args["say"] = f"I tried to see what's on dot {i + 1}, but {type(e).__name__}: {str(e)[:120]}. I'm naming it passed. {nxt}"
+                    raise
+        except Exception:  # noqa: BLE001  (the row above is FAILED with the error; S6b: the follow still moves on)
+            label = None
+        log("dog", f"decided classified{'' if label else ' FAILED'}: {args['say']}")
+        fs["passed"].append(i)
+        fs["skipped_stops"] += [i] if i in stops else []
+        if label == "person":
+            await self._hold(fs, i, f"a person on waypoint {i}")
+
+    async def _look_at(self, p) -> dict[str, Any]:
+        """S6b: what is on map point p, in words. The dog turns in place to face it (nav.steer's turn, no step forward,
+        until within FACE_DEG, else TimeoutError after FACE_S), the level look (_look: one frame, its dog.look row), and
+        the vision model's sentence on that frame (dog_say.see: {text, person, ...}, its llm.generate row). Raises on any
+        failure. UNVERIFIED on the dog: the tests replace this."""
+        from ..tools.dog_say import see
+        t0 = time.monotonic()
+        while True:
+            if (pose := self.map_pose()) is None:
+                raise RuntimeError("no pose (state stream stopped)")
+            ctl = nav.steer(pose["p"][0], pose["p"][1], math.radians(pose["heading_deg"]), p, 0.0)
+            if abs(ctl["err_deg"]) <= FACE_DEG:
+                break
+            if time.monotonic() - t0 > FACE_S:
+                raise TimeoutError(f"not facing {[int(v) for v in p]} in {FACE_S}s (err {ctl['err_deg']} deg)")
+            self._set_vel(0.0, 0.0, ctl["z"])
+            await asyncio.sleep(0.1)
+        self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
+        shot = await self._look(self.body, "level")
+        return await asyncio.to_thread(see, shot["file"])
 
     def close(self) -> None:
         if self.body is not None:
