@@ -192,6 +192,8 @@ class Dry(unittest.TestCase):
         """Rows planted before the session starts (Restore)."""
 
     def tearDown(self):
+        with self.s._person_lock:   # an in-flight tick ends on a running loop, and no later tick halts on a stopped one
+            self.s.halted = self.s.halted or {"was": "torn down"}
         stop_loop(self.s)
         wait_for(lambda: not any(t.name == "person-watch" and t.is_alive() for t in threading.enumerate()), 2.0)
         for p in reversed(self._p):
