@@ -64,7 +64,7 @@
   .cmd { margin: var(--gap-in) 0 var(--gap-group) 2px; }
   .name { min-width: 118px; display: inline-block; }
   /* 17 · decision-to-action · start */
-  .pin17 { font-size: 15px; fill: var(--live, #0b0dc4); } .pin17.bad { fill: var(--bad); }
+  .pin17 { font-weight: 600; fill: var(--live, #0b0dc4); } .pin17.bad { fill: var(--bad); }   /* just above the stop's own label */
   .rules17 { font-family: var(--mono); font-size: 11px; line-height: 1.7; margin-bottom: var(--gap-group); } .rules17 .mono { opacity: .6; }
   .decided17 { font-family: var(--mono); font-size: 10.5px; line-height: 1.55; }
   .decided17 > div { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(38,35,35,.06); }
@@ -383,13 +383,13 @@ function useRules17() {
   return rules;
 }
 const p17 = x => (typeof x === "number" ? x.toFixed(2) : "?");
-function DecidePins({ map, ledger }) {   // each stop's newest decision under its pin: a label is never drawn without its number
+function DecidePins({ map, ledger }) {   // each stop's newest decision on its pin: a label is never drawn without its number
   const rules = useRules17(), band = rules?.unconfirmed;
   return html`<g>${(map.stops || []).map(i => {
     const r = [...ledger].reverse().find(x => x.tool === "decided" && (x.args || {}).stop === i), pt = map.path[i];
     if (!r || !pt) return null;
     const d = r.state_after || {}, unconfirmed = band && d.p >= band[0] && d.p < band[1];
-    return html`<text key=${"d17-" + i} class=${"lbl pin17" + (r.ok ? "" : " bad")} x=${pt[0] + 16} y=${pt[1] + 30}>${r.ok ? `${d.label} ${p17(d.p)}${unconfirmed ? " · unconfirmed" : ""} · ${d.action}` : "couldn't decide"}</text>`;
+    return html`<text key=${"d17-" + i} class=${"lbl pin17" + (r.ok ? "" : " bad")} x=${pt[0] + 16} y=${pt[1] - 14}>${r.ok ? `${d.label} ${p17(d.p)}${unconfirmed ? " · unconfirmed" : ""} · ${d.action}` : "couldn't decide"}</text>`;
   })}</g>`;
 }
 function DecideRules({ ledger }) {   // the Rules panel: what a stop does, then the decided and done columns, typed
