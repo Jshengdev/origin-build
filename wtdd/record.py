@@ -1,6 +1,6 @@
 """The morning page (item 10): one shift's record, rendered from nothing but the ledger and the map.
 
-  python -m wtdd.record --shift <id> --html /tmp/record.html    the page (default shift: WTDD_SHIFT, else today)
+  python -m wtdd.record --shift <id> --html /tmp/record.html    the page (default shift: the run in force, shift.current())
   python -m wtdd.record --shift <id>                            the same record as JSON on stdout
   WTDD_LEDGER=wtdd/fixtures/ledger_shift.jsonl python -m wtdd.record --shift 2026-09-26 --html /tmp/record.html
 
@@ -306,7 +306,7 @@ Rendered by python -m wtdd.record from the ledger and the map; every number on t
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m wtdd.record", description="One shift's record as a page, from the ledger and the map.")
-    ap.add_argument("--shift", help="the shift id (args.shift_id); default WTDD_SHIFT, else today YYYY-MM-DD")
+    ap.add_argument("--shift", help="the shift id (args.shift_id); default the run in force: shift.json, else WTDD_SHIFT, else today YYYY-MM-DD")
     ap.add_argument("--html", help="write the page here; without it the record is printed as JSON")
     o = ap.parse_args(argv)
     sid = o.shift or oncall.shift_id()
