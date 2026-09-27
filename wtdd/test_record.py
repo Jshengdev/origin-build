@@ -287,6 +287,34 @@ class ByHand(Guard):
         self.assertEqual(last["posted"], {"rowid": 54682, "ts": "2026-09-13 22:19:44", "file": "look-down-boxed.jpg"})
 
 
+class Outcome(Guard):
+    """B1: a flag's resolved is its final outcome, the newest intruder.verdict for its trigger, never the first. Item
+    17's fixture (wtdd/fixtures/ledger-17-remote.jsonl, as listen.verdict() writes it): "on it" holds the flag
+    (acknowledged / hold, acked_ms 12000), then "handled, cover is back on" closes it (handled / close, closed_ms 95000,
+    no acked_ms: a flag has one). The fixture is only read; the expiry row is added in memory as listen._drop writes it."""
+
+    def setUp(self):
+        super().setUp()
+        self.rows = [json.loads(x) for x in (HERE / "fixtures" / "ledger-17-remote.jsonl").read_text().splitlines() if x.strip()]
+
+    def test_a_held_then_handled_flag_reads_handled_with_the_holds_acked_ms(self):
+        rec = record.build("2026-09-27", rows=self.rows, site=EMPTY_SITE)
+        (f,) = rec["flags"]
+        self.assertEqual(f["resolved"], {"by": "+15550002222", "text": "handled, cover is back on", "verdict": "handled",
+                                         "acked_ms": 12000, "closed_ms": 95000, "ts": "2026-09-27T21:15:47"})
+        self.assertEqual(rec["acked_ms"], [12000])   # the flag's one acked_ms, the hold's
+        self.assertNotIn("acknowledged", record.html(rec))
+
+    def test_a_held_flag_that_expired_reads_expired(self):
+        hold = next(i for i, r in enumerate(self.rows) if r["tool"] == "intruder.verdict")
+        a = {k: v for k, v in self.rows[hold]["args"].items() if k != "acked_ms"}
+        expired = {**self.rows[hold], "ts": "2026-09-27T21:44:24", "args": {**a, "window_s": 1800},
+                   "state_after": {**self.rows[hold]["state_after"], "verdict": "expired", "action": "stand_down"}}
+        (f,) = record.build("2026-09-27", rows=self.rows[:hold + 1] + [expired], site=EMPTY_SITE)["flags"]
+        self.assertEqual(f["resolved"], {"by": "+15550002222", "text": "on it", "verdict": "expired", "acked_ms": 12000,
+                                         "ts": "2026-09-27T21:44:24"})
+
+
 class Isolation(Guard):
     def test_no_shift_leaks_into_another(self):
         a, b = record.shift_rows(A, ledger.rows()), record.shift_rows(B, ledger.rows())

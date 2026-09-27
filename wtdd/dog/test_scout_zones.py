@@ -105,7 +105,7 @@ from PIL import Image
 
 from ..config import ROOT
 from .. import config, evals, field, ledger
-from . import lidar, objects, occupancy
+from . import lidar, nav, objects, occupancy
 from .fixtures import make_objects_fixture as ofx
 from .fixtures import make_scout_fixture as sfx
 from .fixtures import make_voxel_frames as fx
@@ -1003,7 +1003,8 @@ class Fixture(unittest.TestCase):
         self.assertEqual((z["kind"], z["label"], z["p"], z["app"]), ("chair", "table", CHAIR["conf"], "stub"))
         g = accumulated()
         self.assertEqual(as_set(z["cells"]), wall_a_expected(CHAIR["xyxy"], chair_hit(g)))
-        self.assertEqual(z["cells_px"], px_of(z["cells"]))
+        with mock.patch.object(nav, "PX_PER_M", 108.5):   # scout.json was written at the default scale; a .env WTDD_PX_PER_M (87 live) must not move its pixels
+            self.assertEqual(z["cells_px"], px_of(z["cells"]))
         for c in z["cells_px"]:
             self.assertTrue(field.inside(tuple(c), z["poly"]))
             self.assertGreaterEqual(dist_to_outline(c, z["poly"]), scout_zones.PAD_PX - 1)
