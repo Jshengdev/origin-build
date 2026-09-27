@@ -36,11 +36,13 @@ yolo11n.pt
 dog_cal.json
 .claude/worktrees/
 ui/map.prev.json
+ui/grid.json
 state.json
 intruder.on
 listen.json
 pending.json
 field.stop
+shift.json
 
 # sources of truth (the origin folder), read locally, never committed
 context/

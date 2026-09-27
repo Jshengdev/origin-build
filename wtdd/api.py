@@ -11,6 +11,8 @@
   GET  /evals                     <repo>/evals.json, every scenario's newest trials (python -m wtdd.evals --write)
   GET  /watch                     <repo>/watch.json, the detector's newest counts and boxes plus age_ms and the intruder flag
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)
+  GET  /shift                     the run in force {shift_id, source: file | WTDD_SHIFT | date} (a read, no row; wtdd/shift.py)
+  POST /shift {name}              start a "morning" or "night" run: <repo>/shift.json, one shift.started row; any other name is a 400
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status); POST /dog/drive {x,y,z}, /dog/stop
@@ -22,9 +24,19 @@
   GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, why?} (polled every 500 ms while
                                   connected); POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)
   GET  /dog/frame.jpg             the newest camera frame (no ledger row; the page's live view), 503 without a dog
+  GET  /dog/scale                 the map scale in force {px_per_m, source: default | WTDD_PX_PER_M | dog_cal.json | page} (a read, no row)
+  POST /dog/scale {px_per_m}      the page's slider: one dog.scale row, saved in dog_cal.json beside the tie; a bad value is a 400 naming it
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
+  POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
+                                  a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
+  GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
+  GET  /dog/floorplan?threshold=N the newest floor plan in map pixels {ok, segments_px, classes, class_px, cell_px, ms, ts, source, why?} (a read, no row; polled every 2 s)
+  POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
+  GET  /dog/blobs                 the newest blob labels pinned on the map {labels: [{blob_id, kind, label, p, model, geometry_verdict, erase, source, xy, pos_px, error?}], source, moved, why?} (a read, no row; polled every 2 s); erase and moved are GET /dog/floorplan's own erase at the read (newest plan, threshold now), not stamped at the press; WTDD_BLOBS=<file> serves planted labels (DEMO_CACHE)
+  POST /dog/blobs {threshold?}    the press at a stop: one blob.labelled row per blob in the camera's view {labelled, skipped, failed, labels}; 500 with one failed row with no dog, pose, grid or field of view
   GET  /rules                     decide.rules(): the site labels, the escalate table (map or default), the thresholds in force, the Rules panel's lines
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
@@ -39,7 +51,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import tools
+from . import config, shift, tools
 from .config import ROOT
 from .field import FIELD, MAP, STOP, check_path
 from pathlib import Path
@@ -102,18 +114,65 @@ class H(BaseHTTPRequestHandler):
                 d["age_ms"] = round((time.time() - f.stat().st_mtime) * 1000)
             d["intruder"] = (ROOT / "intruder.on").exists()
             return self._json(200, d)
+        if u.path == "/shift":   # the run in force, a read (no row); a malformed shift.json is a 500 naming the file
+            try:
+                return self._json(200, shift.read())
+            except ValueError as e:
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path == "/dog/state":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().state())
         if u.path == "/dog/lidar":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().lidar())
+        if u.path == "/dog/scale":
+            from .dog.session import DogSession
+            return self._json(200, DogSession.get().scale())
         if u.path == "/dog/frame.jpg":
             from .dog.session import DogSession
             try:
                 return self._send(200, "image/jpeg", DogSession.get().snapshot())
             except Exception as e:  # noqa: BLE001  (no dog, or stale video: reported, the page shows nothing)
                 return self._json(503, {"error": f"{type(e).__name__}: {e}"})
+        # 01 · occupancy
+        if u.path == "/dog/grid":   # a read: never connects, no ledger row; `source` says which grid is drawn
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = int((parse_qs(u.query).get("threshold") or [occupancy.THRESHOLD])[0])
+                return self._json(200, DogSession.get().grid_px(t))
+            except Exception as e:  # noqa: BLE001  (a bad threshold or an unreadable ui/grid.json is reported, the page shows it)
+                return self._json(500, {"n": 0, "cells_px": [], "error": f"{type(e).__name__}: {e}"})
+        # 07 · objects
+        if u.path == "/dog/objects":   # a read: never connects, no row of its own; the store's events are object.seen rows
+            try:
+                fixture = config.maybe("WTDD_OBJECTS")
+                if fixture:
+                    # DEMO_CACHE: WTDD_OBJECTS=<file> serves that file (wtdd/dog/fixtures/objects.json: two objects pinned on
+                    # WALL_A of the synthetic grid, one stale) so the remote's pins can be screenshotted with no dog, no
+                    # detector and no key; `source` names the file. Live: unset it; the session store fed by watch.json answers.
+                    f = Path(fixture) if Path(fixture).is_absolute() else ROOT / fixture
+                    return self._json(200, {**json.loads(f.read_text()), "source": f"fixture: {fixture}"})
+                from .dog.session import DogSession
+                return self._json(200, DogSession.get().objects_state())
+            except Exception as e:  # noqa: BLE001  (a missing fixture, a bad WTDD_CAM_FOV_DEG, an unreadable watch.json: the page shows it)
+                return self._json(500, {"n": 0, "objects": [], "error": f"{type(e).__name__}: {e}"})
+        # 15 · floorplan
+        if u.path == "/dog/floorplan":   # a read: the newest floor plan in map pixels; never runs one, no ledger row
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = int((parse_qs(u.query).get("threshold") or [occupancy.THRESHOLD])[0])
+                return self._json(200, DogSession.get().floorplan_px(t))
+            except Exception as e:  # noqa: BLE001  (a bad threshold is reported, the page shows FAILED)
+                return self._json(500, {"segments_px": [], "error": f"{type(e).__name__}: {e}"})
+        # 16 · blob-labels
+        if u.path == "/dog/blobs":   # a read: the labels in force, pinned; never connects, no row
+            from .dog.session import DogSession
+            try:
+                return self._json(200, DogSession.get().blobs_px())
+            except Exception as e:  # noqa: BLE001  (an unreadable WTDD_BLOBS file is reported, the page shows FAILED)
+                return self._json(500, {"labels": [], "error": f"{type(e).__name__}: {e}"})
         # 17 · decision-to-action
         if u.path == "/rules":   # the page's Rules panel prints this; a malformed table or threshold is its 500, shown red
             try:
@@ -156,6 +215,11 @@ class H(BaseHTTPRequestHandler):
                 f.unlink(missing_ok=True)
             log("api", "intruder watch " + ("armed" if on else "disarmed"))
             return self._json(200, {"ok": True, "intruder": on})
+        if u.path == "/shift":   # {name: morning | night}: one shift.started row, ok or not; a bad name is the caller's 400
+            try:
+                return self._json(200, {"ok": True, **shift.start(self._body().get("name"))})
+            except Exception as e:  # noqa: BLE001  (the row has it; a bad name or a malformed shift.json is a 400, anything else ours)
+                return self._json(400 if isinstance(e, ValueError) else 500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if u.path == "/map":
             data = self._body()
             seen = data.pop("_version", None)
@@ -216,6 +280,41 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a connect failure or a refused follow is reported, never hidden)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 01 · occupancy
+        if u.path == "/dog/grid":   # {save: true} (default) or {clear: true, why?}; each is one ledger row, ok or not
+            from .dog.session import DogSession
+            body, s = self._body(), DogSession.get()
+            try:
+                out = s.grid_clear(str(body.get("why") or "cleared from the page")) if body.get("clear") else s.grid_save()
+                return self._json(200, {"ok": True, **out})
+            except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        if u.path == "/dog/scale":   # {px_per_m}: the page's slider; one dog.scale row, ok or not; no value is a bad value, not a read
+            from .dog.session import DogSession
+            v = self._body().get("px_per_m")
+            try:
+                return self._json(200, {"ok": True, **DogSession.get().scale("none sent" if v is None else v)})
+            except Exception as e:  # noqa: BLE001  (the row has it; a bad value is the caller's 400, anything else ours)
+                return self._json(400 if isinstance(e, ValueError) else 500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 15 · floorplan
+        if u.path == "/dog/floorplan":   # {threshold?}: the button, always one run and one dog.floorplan row, ok or not
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = self._body().get("threshold")   # absent only: a posted 0 reaches run() and fails loud with its row
+                out = DogSession.get().floorplan(occupancy.THRESHOLD if t is None else int(t))
+                return self._json(200, out)   # ok=false when no wall was found: the row and `why` say so
+            except Exception as e:  # noqa: BLE001  (no grid at all is a failed row and a visible FAILED, never an empty plan)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 16 · blob-labels
+        if u.path == "/dog/blobs":   # {threshold?}: the press at a stop; one blob.labelled row per blob in view, or one failed row
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = self._body().get("threshold")
+                return self._json(200, DogSession.get().blobs_label(occupancy.THRESHOLD if t is None else int(t)))
+            except Exception as e:  # noqa: BLE001  (no dog, no field of view, no pose or no grid: a failed row and a visible FAILED)
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
         name, args = u.path[len("/tools/"):], self._body()

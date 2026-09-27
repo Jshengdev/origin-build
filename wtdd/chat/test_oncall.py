@@ -3,8 +3,9 @@ the reply time is a logged field (acked_ms), and record.signed closes the shift 
     python -m unittest wtdd.chat.test_oncall -v
 Offline like test_chat: a scratch ledger and memory.db via WTDD_LEDGER / WTDD_MEMORY (set before wtdd.ledger is
 imported), a fake WTDD_CHAT_GUID, a fake on-call person (WTDD_ON_CALL_NAME / WTDD_ON_CALL_HANDLE, E.164-shaped, not a
-real handle), WTDD_SHIFT pinned. osascript is stubbed to fail loudly; chat.db is read only where test_chat reads it
-(the gate's lookups are patched so no 1:1 chat has to exist on this Mac). The listener's runtime files (pending.json,
+real handle), WTDD_ON_CALL_GUID empty (Castle sets it: the group as the on-call target), WTDD_SHIFT pinned.
+osascript is stubbed to fail loudly; chat.db is read only where test_chat reads it (the gate's lookups are patched so
+no 1:1 chat has to exist on this Mac). The listener's runtime files (pending.json,
 state.json, listen.json) are pointed at the scratch dir. The fixture wtdd/chat/fixtures/oncall-shift.jsonl is one
 shift's rows as this item writes them, every row labeled cached=true source="stub" (no fixture row claims to be live).
 
@@ -27,6 +28,7 @@ os.environ["WTDD_CHAT_GUID"] = "any;+;00000000000000000000000000000000"
 os.environ["WTDD_CHAT_NAME"] = "wtdd test"
 os.environ["WTDD_ON_CALL_NAME"] = "Sam Stand-in"
 os.environ["WTDD_ON_CALL_HANDLE"] = "+15550002222"
+os.environ["WTDD_ON_CALL_GUID"] = ""     # S10: a .env naming the group as on-call must not turn the 1:1 checks into Castle's
 os.environ["WTDD_SHIFT"] = "2026-09-27"
 os.environ["WTDD_WAKE_SHOW"] = "0"
 os.environ["WTDD_AGENT"] = "0"
@@ -434,6 +436,114 @@ class Answers(unittest.TestCase):
             self._handle(_msg("R-8", "thats my friend", ONCALL))
         self.assertEqual(len(self._verdicts()), 1)
         self.assertEqual(self.posts, [(ONCALL, "ok:R-8", "listen", "ok, standing down", None)])
+
+
+class Castle(unittest.TestCase):
+    """S10 · for the demo the on-call target is the group itself: WTDD_ON_CALL_GUID = the group's guid (THE CASTLE live,
+    the fake group here). The flag goes to the group through the unchanged gate, the group keeps its wake words,
+    commands and chat turns while a flag is open, and the first clear reply from a member decides. Its intruder.verdict
+    row names them by display name in args.by (HOUSEMATES, else "a member"; never a phone or an email: the page's
+    Receipts are filmed), says what happened in one first-person sentence (args.say), sets args.decided, and keeps the
+    raw handle in args.from (the ledger is private). The 1:1 checks above run with WTDD_ON_CALL_GUID empty, unchanged."""
+
+    JO = "+15550003333"   # a member of the fake group, E.164-shaped, not a real handle
+
+    def setUp(self):
+        env = mock.patch.dict(os.environ, {"WTDD_ON_CALL_GUID": GROUP})
+        env.start()
+        self.addCleanup(env.stop)
+        self.posts: list[tuple] = []
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            self.l = L.Listener(GROUP, lambda g, k, kind, t, f: self.posts.append((g, k, kind, t, f)), listen_s=60)
+        self.trigger = f"alarm:{self._testMethodName}"
+        self.pend = _TMP / f"pending-{self._testMethodName}.json"
+        self.addCleanup(lambda: self.pend.unlink(missing_ok=True))
+
+    def _ask(self, kind: str = "who_dis", posted: bool = True) -> None:
+        """An open question in the group; with its confirmed post (chat.db 12:18:10) acked_ms is a number."""
+        if posted:
+            ledger.append({"step": "chat.post", "agent": "central", "tool": "chat.post", "app": "imessage", "ok": True,
+                           "args": {"guid": GROUP, "kind": "escalate", "trigger": self.trigger, "text": "who dis?!",
+                                    "file": "/tmp/f.jpg", "shift_id": SHIFT},
+                           "state_before": {"max_rowid": 1}, "state_after": {"guid": "P-C", "rowid": 2, "ts": "2026-09-27 12:18:10"},
+                           "response_or_error": None, "latency_ms": 900})
+        self.pend.write_text(json.dumps({"kind": kind, "t": time.time(), "file": "/tmp/f.jpg", "seconds": 5,
+                                         "trigger": self.trigger, "chat": GROUP}))
+
+    def _handle(self, m: dict, housemates: dict | None = None, **env: str):
+        with mock.patch.dict(os.environ, env), mock.patch.dict(L.HOUSEMATES, housemates or {}, clear=True), \
+             mock.patch.object(L, "PENDING", self.pend), mock.patch.object(L, "STATE", _TMP / "state-castle.json"), \
+             mock.patch("wtdd.tools.call", return_value={"signaled": [], "errors": []}) as call:
+            self.l.handle(m)
+        return call
+
+    def _verdicts(self) -> list[dict]:
+        return [r for r in ledger.rows() if r["tool"] == "intruder.verdict" and r["args"]["asked"] == self.trigger]
+
+    def test_person_is_the_group_when_its_guid_is_set(self):
+        self.assertEqual(_oncall().person(), {"name": NAME, "handle": None, "guid": GROUP, "group": True})
+
+    def test_the_group_needs_no_handle_and_is_named_the_group_by_default(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("WTDD_ON_CALL_HANDLE", None)
+            os.environ.pop("WTDD_ON_CALL_NAME", None)
+            self.assertEqual(_oncall().person(), {"name": "the group", "handle": None, "guid": GROUP, "group": True})
+
+    def test_the_key_is_in_env_example(self):
+        lines = (Path(__file__).resolve().parents[2] / ".env.example").read_text().splitlines()
+        self.assertTrue(any(l.startswith("WTDD_ON_CALL_GUID=") for l in lines), "WTDD_ON_CALL_GUID is not in .env.example")
+
+    def test_the_flag_goes_to_the_group_through_the_unchanged_gate(self):
+        self.assertEqual(list(self.l.marks), [GROUP])            # the group is read once; no 1:1 is read
+        self.l.escalate("alarm:c1:11", "who dis?!", "/tmp/look-level-boxed.jpg")
+        self.assertEqual(self.posts, [(GROUP, "alarm:c1:11", "escalate", "who dis?!", "/tmp/look-level-boxed.jpg")])
+        with mock.patch.object(db, "chat_name", return_value=send.TARGET_NAME):
+            self.assertEqual(send.gate(GROUP), send.TARGET_NAME)
+
+    def test_the_group_keeps_its_wake_words_commands_and_chat_turns_while_a_flag_is_open(self):
+        self._ask()
+        self.l.chat = mock.Mock()   # the chat turn itself (the model, a 6 s gather) is not under test: only that it is reached
+        with mock.patch.object(L.cmds, "run", return_value={"text": "lights off: 3 of 3"}) as run:
+            self._handle(_msg("W-1", "what the dog doin", GROUP, sender=self.JO))
+            self._handle(_msg("C-1", "lights off", GROUP, sender=self.JO))
+            self._handle(_msg("Y-1", "yo dog who was that", GROUP, sender=self.JO))
+        self.assertTrue(self.l.armed)
+        run.assert_called_once_with("lights off")
+        self.l.chat.assert_called_once()
+        self.assertEqual([p[1] for p in self.posts], ["wake:W-1", "ack:C-1", "res:C-1"])
+        self.assertEqual(self._verdicts(), [])
+        self.assertTrue(self.pend.exists())                        # still open: none of those answered it
+
+    def test_the_first_clear_reply_decides_and_its_row_names_the_member(self):
+        self._ask()
+        self._handle({**_msg("D-1", "who dis?!", GROUP), "is_from_me": 1}, WTDD_ALLOW_SELF="1")   # the dog's own caption, read back
+        self._handle(_msg("R-1", "thats my friend", GROUP, "2026-09-27 12:18:22", sender=self.JO), {self.JO: "Jo"})
+        [row] = self._verdicts()
+        a = row["args"]
+        self.assertEqual((a["from"], a["by"], a["decided"], a["chat"], a["acked_ms"]), (self.JO, "Jo", True, GROUP, 12000))
+        self.assertEqual(a["say"], "Jo answered first: 'thats my friend' (known) after 12 s. I'm standing down.")
+        self.assertEqual(row["state_after"], {"verdict": "known"})
+        self.assertFalse(self.pend.exists())
+        self.assertEqual(self.posts, [(GROUP, "ok:R-1", "listen", "ok, standing down", None)])
+
+    def test_a_member_not_in_housemates_is_a_member_and_no_handle_reaches_by_or_say(self):
+        self._ask()
+        call = self._handle(_msg("R-2", "idk ask +15550004444 or jo@example.com", GROUP, "2026-09-27 12:18:40", sender=self.JO))
+        [row] = self._verdicts()
+        a = row["args"]
+        self.assertEqual((a["from"], a["by"]), (self.JO, "a member"))
+        self.assertEqual(a["say"], "A member answered first: 'idk ask a member or a member' (stranger) after 30 s. I'm sounding the alarm.")
+        for field in (a["by"], a["say"]):
+            self.assertNotRegex(field, r"\+\d{7,15}|@")
+        call.assert_called_once_with("light_alarm", seconds=5)
+
+    def test_a_decide_answer_is_answered_and_no_post_time_is_no_number(self):
+        self._ask("decide", posted=False)
+        call = self._handle(_msg("R-3", "idk", GROUP, sender=self.JO), {self.JO: "Jo"})
+        [row] = self._verdicts()
+        self.assertIsNone(row["args"]["acked_ms"])
+        self.assertEqual(row["args"]["say"], "Jo answered first: 'idk' (answered). I'm standing down.")
+        call.assert_not_called()
 
 
 class Sign(unittest.TestCase):

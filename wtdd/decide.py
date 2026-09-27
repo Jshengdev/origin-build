@@ -11,6 +11,7 @@ that action asked is read the same way, typed: {meaning, p, named, p_named, acti
   at_stop(i, seen, det, frame_file)                   both, for dog_say.look_and_see: (state, decision | {error})
   policy(label, p, thr, table)                        {action, rule}: the table below
   choose(name, state, criteria, instructions)         the one System One Choice call (decide and read_reply use it)
+  _jev(state, choices, describe?, instructions?)      choose() over one `stop` question: (label, p, model, raw)
   ask_line(d) / heads_up_line(d, stop)                the chat line: "not sure: ..." / what the person on call gets
   read_reply(asked, text)                             {meaning, p, named, p_named, action}; one `reply.decided` row
   rules()                                             what the page's Rules panel prints (GET /rules)
@@ -44,8 +45,8 @@ a yes or no to the re-ask is read against the re-ask first (no -> stranger, yes 
 tool "reply.decided" (never "decided": 11's unsafe() counts that as a stop's model call), agent central, app stub |
 openrouter; args {question, text, shift_id, threshold, model, plus the listener's trigger, chat, guid, from};
 state_before {meanings, labels}; state_after the reading; a live failure is the row with ok=False, raised, never the regex.
-Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD, WTDD_REPLY_THRESHOLD,
-WTDD_SHIFT.
+Env, read at the point of use: JEV_API_KEY, JEV_MODEL, JEV_LIVE (CLI only), WTDD_DECIDE_THRESHOLD, WTDD_REPLY_THRESHOLD;
+shift_id is shift.current().
 UNVERIFIED: this code has not made a live Jev call with a key (the probe above was a separate script, 22 calls, all
 200). The body and the parse follow OpenRouter's own API reference,
 "Submit a System One request" (POST https://openrouter.ai/api/v1/systemone, Bearer key; {model, state, questions} in;
@@ -65,7 +66,7 @@ from pathlib import Path
 
 import requests
 
-from . import config, ledger
+from . import config, ledger, shift
 
 DEFAULT_LABELS = ["clear", "material_stack", "opening", "hazard", "person", "other"]   # the one site list, as on ui/map.json
 DESCRIBE = {"clear": "nothing to report at this stop",
@@ -166,7 +167,7 @@ def reply_threshold() -> float:
 
 
 def shift_id() -> str:
-    return config.maybe("WTDD_SHIFT") or time.strftime("%Y-%m-%d")
+    return shift.current()
 
 
 def _word(n: int) -> str:
@@ -240,8 +241,14 @@ def _stub(state: str, choices: list[str]) -> tuple[str, float, str, str]:
     # lowers p by 0.3 (two eyes disagreeing is the one uncertainty signal the shipped system has). Why: no Jev key in a
     # worktree, and the round must reach the escalate and ask beats dry. Live: set JEV_API_KEY in .env (JEV_LIVE=1 on
     # the CLI refuses the stub); decide() then POSTs the same state to JEV_URL with model JEV_MODEL and the row says
-    # source=live.
+    # source=live. A custom closed list (S6b: what sits on a dot the LiDAR sees covered, session.OBSTACLES): the first
+    # choice the state names as a word (a person also by "someone") at p 0.6, else "other" at 0.4 when it is a choice;
+    # neither: the ValueError below. Live: the same JEV_API_KEY; the follower then calls _jev with the list.
     s = state.lower()
+    if not set(choices) <= set(DEFAULT_LABELS):
+        hit = next((c for c in choices if re.search(rf"\b{re.escape(c)}s?\b", s) or (c == "person" and PERSON.search(s))), None)
+        if hit or "other" in choices:
+            return (hit, 0.6, "stub", f"stub: {hit} named in the state") if hit else ("other", 0.4, "stub", "stub: no choice named, other")
     if OPENING.search(s):
         label, p = "opening", 0.9
     elif HAZARD.search(s):
@@ -292,6 +299,16 @@ def choose(name: str, state: str, criteria: dict, instructions: str,
         if choice not in qs[q]["criteria"]:
             raise ValueError(f"jev chose {choice!r} for {q}, not one of {list(qs[q]['criteria'])}")
     return got, str(data.get("model") or model), resp.text
+
+
+def _jev(state: str, choices: list[str], describe: dict[str, str] | None = None, instructions: str | None = None) -> tuple[str, float, str, str]:
+    """One System One Choice request over the labels; the reply's chosen label and the probability it gives that label.
+    describe/instructions default to a stop's (DESCRIBE, INSTRUCTIONS); wtdd/dispatch.py passes its own three choices.
+    A thin wrapper over choose() with one `stop` question, kept for its callers (16's blobs, S6b's follower): (label, p,
+    model, raw); a choice that was not offered is choose()'s ValueError."""
+    got, model, raw = choose("stop", state, {c: (describe or DESCRIBE).get(c, c.replace("_", " ")) for c in choices},
+                             instructions or INSTRUCTIONS)
+    return (*got["stop"], model, raw)
 
 
 def decide(state: str, stop: int | None = None, labels: list[str] | None = None) -> dict:
