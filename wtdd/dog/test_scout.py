@@ -180,6 +180,10 @@ class FakeBody:
     async def lidar_off(self) -> None:
         self._lidar_on = False
 
+    async def avoid(self, on: bool) -> bool:   # Body.avoid's read-back, for the follower (wtdd/test_noplan.py)
+        self._avoid = bool(on)
+        return self._avoid
+
     def lidar_points(self) -> dict:
         d = self._lidar
         return {"on": self._lidar_on, "n": self._lidar_n, "errors": 0, "cb_errors": self._lidar_cb_err,

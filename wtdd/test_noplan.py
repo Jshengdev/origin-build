@@ -22,7 +22,12 @@ The contract under test:
   POST /map         under the flag a path outside every room is saved (200, why "rooms off: WTDD_NO_PLAN") and the
                     no_plan that GET added is never written into ui/map.json; without the flag it is refused (400)
   POST /dog/follow  under the flag the room rule does not refuse (the next refusal is the session's "not calibrated");
-                    without the flag it is refused naming the room
+                    without the flag it is refused naming the room; on a calibrated session (the FakeBody of
+                    wtdd/dog/test_scout.py, no dog) the dog.follow row's args carry why "rooms off: WTDD_NO_PLAN"
+                    when the rule would have refused, and no why when every point is in a room or the flag is unset
+  POST /dog/record {on: false}   the recorded route is saved either way (as today); under the flag its response's rec
+                    has why "rooms off: WTDD_NO_PLAN" and no room lines in rec.problems; without it, the room lines
+                    and no why
   ui/index.html     the house.svg layer is conditioned on no_plan, and the `no plan · site` chip is on the page;
                     roomOf is defined, so the page's save sends POST /map at all (night-1 contracts F patch 2)
 """
@@ -32,6 +37,8 @@ import json
 import os
 import tempfile
 import threading
+import time
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -215,6 +222,68 @@ class Api(NoPlan):
         self.assertEqual(code, 500, o)
         self.assertNotIn("outside every room", o["error"])
         self.assertIn("not calibrated", o["error"], "the room rule is off at this caller; the session's own refusal is next")
+
+    def test_post_dog_record_says_why_on_its_response_under_the_flag_only(self):
+        rec = {"active": False, "path": OUTSIDE, "stops": [], "actions": {}, "length_px": 200, "samples": 30}
+        self.stack.enter_context(mock.patch.object(session.DogSession, "_inst", types.SimpleNamespace(record=lambda on: dict(rec))))
+        base = self.serve()   # DogSession.record stands in: a route recorded by driving, every point outside the house's room
+        self.flag(None)
+        code, o = self.call(base, "/dog/record", {"on": False})
+        self.assertEqual(code, 200, o)
+        self.assertEqual(sum("outside every room" in b for b in o["rec"]["problems"]), 3, o)
+        self.assertNotIn("why", o["rec"])
+        self.flag("1")
+        code, o = self.call(base, "/dog/record", {"on": False})
+        self.assertEqual(code, 200, o)
+        self.assertEqual(o["rec"].get("why"), WHY, o)
+        self.assertEqual(o["rec"]["problems"], [], "the room lines are gone under the flag; the other two rules found nothing")
+        self.assertEqual(json.loads(self.map.read_text())["path"], OUTSIDE, "saved, as the record route always did")
+
+
+class FollowRow(NoPlan):
+    """The dog.follow row through POST /dog/follow on a calibrated session with test_scout's FakeBody (no dog), stopped
+    by POST /dog/stop: its args carry why only when the room rule would have refused."""
+
+    def follow_row(self, path: list) -> dict:
+        from .dog.test_scout import FakeBody
+        self.write_map(path)
+        self.stack.enter_context(mock.patch.object(session, "CAL_FILE", self.tmp / "dog_cal.json"))
+        s = session.DogSession()
+
+        def close() -> None:   # the session's loop thread, as test_scout's Harness closes it
+            s.loop.call_soon_threadsafe(s.loop.stop)
+            while s.loop.is_running():
+                time.sleep(0.01)
+            s.loop.close()
+
+        self.addCleanup(close)
+        s.body = FakeBody(yaw_rate=0.0)
+        s.calibrate([300, 300], 0.0)
+        self.stack.enter_context(mock.patch.object(session.DogSession, "_inst", s))
+        base = self.serve()
+        code, o = self.call(base, "/dog/follow", {})
+        self.assertEqual(code, 200, o)
+        code, o = self.call(base, "/dog/stop", {})
+        self.assertEqual(code, 200, o)
+        t0 = time.monotonic()
+        while not self.rows("dog.follow"):
+            self.assertLess(time.monotonic() - t0, 10, "the follow never wrote its row")
+            time.sleep(0.02)
+        rows = self.rows("dog.follow")
+        self.assertEqual(len(rows), 1, rows)
+        return rows[0]
+
+    def test_under_the_flag_a_follow_the_rooms_would_refuse_says_why_on_its_row(self):
+        self.flag("1")
+        self.assertEqual(self.follow_row(OUTSIDE)["args"].get("why"), WHY)
+
+    def test_under_the_flag_a_follow_inside_the_rooms_has_no_why(self):
+        self.flag("1")
+        self.assertNotIn("why", self.follow_row(INSIDE)["args"])
+
+    def test_without_the_flag_a_follow_has_no_why(self):
+        self.flag(None)
+        self.assertNotIn("why", self.follow_row(INSIDE)["args"])
 
 
 class Page(unittest.TestCase):
