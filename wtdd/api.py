@@ -25,6 +25,8 @@
   GET  /map                       ui/map.json
   POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
+  POST /dog/resume {by, via?}     ends a person halt (goal 00): by a non-empty name, via page (default) or imessage; one
+                                  stop.resumed row, refused ones too (500, ok false); an empty body is the follow-stop resume
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -203,6 +205,9 @@ class H(BaseHTTPRequestHandler):
                     out = {"rec": rec}
                 elif u.path == "/dog/lidar":          # {on: true|false}: the dog's LiDAR voxel stream (GET /dog/lidar reads it)
                     out = {"lidar": s.lidar(bool(body.get("on", True)))}
+                # 00 · halt-on-person
+                elif u.path == "/dog/resume" and "by" in body:   # {by, via?}: a named person ends a person halt (one stop.resumed row); no by = the follow-stop resume below
+                    out = {"resumed": s.resume_halt(body["by"], body.get("via", "page"))}
                 else:
                     out = {"follow": s.resume()}
                 return self._json(200, {"ok": True, **out})
