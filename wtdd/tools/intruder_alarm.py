@@ -4,18 +4,20 @@ listener then reads the group's verdict for PENDING_WINDOW_S: "idk" (no idea, du
 "STRANGER DANGER!!!" three times and the living room strobing red and blue for N seconds (light_alarm); any other
 answer stands it down with "ok". ask=false skips the question and alarms at once. Triggered by python -m wtdd.watch when the intruder watch is armed (GET/POST
 /intruder) and a person is in view for a few frames, at most once a minute; or by hand. One intruder.alarm row around
-the look, the boxes, the post and the lights; each part has its own rows. Nothing here retries."""
+the look, the boxes, the post and the lights; each part has its own rows. Nothing here retries. file=<a frame> skips the
+look and asks about that frame instead (a fixed camera's, wtdd/cam); everything after the look is the same path."""
 ARGS = {"look": {"type": "string", "default": "level", "doc": "level | tilt | sit"},
         "seconds": {"type": "number", "default": 5},
         "trigger": {"type": "string", "default": None, "doc": "idempotence key of the post; defaults to intruder-<epoch>"},
-        "ask": {"type": "boolean", "default": True, "doc": "true = post the photo with 'who dis?!' and wait for the chat's verdict (the listener sounds the alarm on 'idk'); false = alarm now"}}
+        "ask": {"type": "boolean", "default": True, "doc": "true = post the photo with 'who dis?!' and wait for the chat's verdict (the listener sounds the alarm on 'idk'); false = alarm now"},
+        "file": {"type": "string", "default": None, "doc": "a frame to use instead of the dog's look (a fixed camera's, wtdd/cam); the detector still boxes it"}}
 
 TEXT = "STRANGER DANGER!!! STRANGER DANGER!!! STRANGER DANGER!!!"
 ASK = "who dis?!"
 PENDING_WINDOW_S = 120
 
 
-def run(look="level", seconds=5, trigger=None, ask=True):
+def run(look="level", seconds=5, trigger=None, ask=True, file=None):
     import json
     import time
     from ..commands import look as _look
@@ -24,8 +26,8 @@ def run(look="level", seconds=5, trigger=None, ask=True):
     from . import chat_post, light_alarm
     from .dog_say import boxed
     key = trigger or f"intruder-{int(time.time())}"
-    with step("central", "intruder.alarm", "wtdd", {"look": look, "seconds": seconds, "ask": ask}) as r:
-        shot = _look(look)
+    with step("central", "intruder.alarm", "wtdd", {"look": look, "seconds": seconds, "ask": ask, "file": file}) as r:
+        shot = {"file": file} if file else _look(look)
         file, det = shot["file"], None
         try:
             det = boxed(file)

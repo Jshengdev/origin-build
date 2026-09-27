@@ -1,7 +1,8 @@
 """The ears' state machine: a wake phrase arms the dog for listen_s; while armed, messages are matched against the
 command list and run; "stop" disarms. Every wake, command, and ask is a ledger row (chat.wake / chat.command /
 chat.ask); every post goes through __main__.post keyed on the guid of the message that caused it
-(wake:/fire:/doin:/say:/alarm:/done:/ack:/res:/stop:/ai:<guid>), so a re-read message can never post twice.
+(wake:/fire:/doin:/say:/alarm:/done:/ack:/res:/stop:/ai:<guid>, and decide:<guid>:<stop> for a stop's "not sure"
+question), so a re-read message can never post twice.
 
 Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once]
      python -m wtdd.chat simulate "what the dog doin" "lights off" "stop"   (dry-run posts, REAL commands)
@@ -52,7 +53,7 @@ GATHER_S = 6.0                # after "yo dog ...", the same sender's next messa
 Poster = Callable[[str, str, str, str | None, str | None], Any]   # (guid, trigger_key, kind, text, file)
 OWN_OPENERS = ("the dog is doin", "dog doin", "dog done", "on it:", "couldn't", "here's what i see", "yo, we don't know", "noted:",
                "who dis", "stranger danger", "ok, standing down", "ok, done listening",
-               "living room lights", "did:", "listening for")   # how the dog's own text posts begin
+               "living room lights", "did:", "listening for", "not sure:", "person at camera")   # how the dog's own text posts begin
 
 
 def _flag(key: str) -> bool:
@@ -102,7 +103,8 @@ class Listener:
         """A look point: nod, photograph, one sentence from the vision model, posted with the photo; a person in frame
         sounds the alarm (WTDD_ALARM) and posts the line, and the strobe is given its seconds before the walk resumes.
         Keys carry the stop index, so every stop of one wake is its own never-twice claim. A failure is posted as its
-        error, never faked."""
+        error, never faked. The stop's decision (wtdd/decide.py) asks when it is not sure: the "not sure" line with the
+        photo, the same pending question and hold as "who dis?!", which wins when both would ask (one question per stop)."""
         from .. import tools
         from ..tools.dog_say import look_and_see
         k = m["guid"] + (f":{at}" if at is not None else "")
@@ -121,6 +123,16 @@ class Listener:
             self.say(f"alarm:{k}", "who dis?!")
             PENDING.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": seen.get("file"), "seconds": 5,
                                            "trigger": f"alarm:{k}", "classes": (seen.get("detector") or {}).get("classes")}))
+            self.await_verdict(VERDICT_WAIT_S)
+        dec = seen["decision"]   # look_and_see always returns one: {label, p, needs_person, model} or {error}
+        if "error" in dec:
+            self.say(f"decide:{k}", f"couldn't decide: {dec['error']}")
+        elif dec["needs_person"] and not (seen.get("person") and ask):
+            from ..decide import ask_line
+            self.say(f"decide:{k}", ask_line(dec), seen.get("file"))
+            PENDING.write_text(json.dumps({"kind": "decide", "t": time.time(), "file": seen.get("file"), "seconds": 5,
+                                           "trigger": f"decide:{k}", "classes": (seen.get("detector") or {}).get("classes"),
+                                           "decision": dec}))
             self.await_verdict(VERDICT_WAIT_S)
 
     def await_verdict(self, seconds: float) -> bool:
@@ -206,7 +218,9 @@ class Listener:
 
     def verdict(self, m: dict[str, Any]) -> bool:
         """The chat answering "who dis?!" (intruder_alarm): "idk" and its kin mean a stranger, so "STRANGER DANGER!!!"
-        three times and light_alarm; anything else stands the dog down with "ok". One intruder.verdict row either way."""
+        three times and light_alarm; anything else stands the dog down with "ok". One intruder.verdict row either way.
+        An answer to a decide question (pending kind "decide", "not sure: ...") is the same row and always stands down:
+        only "who dis?!" can sound the alarm, so WTDD_ALARM and the map's ask flags still gate it."""
         if not PENDING.exists():
             return False
         pend = json.loads(PENDING.read_text())
@@ -214,8 +228,33 @@ class Listener:
             PENDING.unlink(missing_ok=True)
             log("chat", "who dis: no answer in time, standing down")
             return False
+        if pend.get("kind") == "dispatch":   # 18: "send the dog? yes / no" (wtdd/dispatch.py): a yes walks, anything else stands down, never the alarm
+            import threading
+            from .. import dispatch
+            PENDING.unlink(missing_ok=True)
+            yes = bool(dispatch.AFFIRM.fullmatch(normalize(m["text"])))   # the whole reply, or "ok, no" walks the dog
+            append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
+                    "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger")},
+                    "state_before": None, "state_after": {"verdict": "approved" if yes else "declined"}, "response_or_error": None, "latency_ms": 0})
+            log("chat", "VERDICT", by=hname(m["sender"]), verdict="approved" if yes else "declined", cam=pend.get("cam"), text=m["text"][:60])
+            if not yes:
+                self.say(f"ok:{m['guid']}", "ok, standing down")
+                return True
+            self.say(f"go:{m['guid']}", f"on it: sending the dog to camera {pend['cam']}")
+
+            def go() -> None:   # the API process owns the dog: the approved run goes there; its refusals are posted by dispatch itself
+                try:
+                    if cmds._via_api("dispatch", cam=pend["cam"], approved=True, trigger=pend["trigger"], by=m["sender"]) is None:
+                        self.say(f"{pend['trigger']}:refused", "couldn't dispatch: the API is not running (python -m wtdd.api owns the dog)")
+                except Exception as e:  # noqa: BLE001  (same key as dispatch's own refusal post, so the claim never lets both through)
+                    try:
+                        self.say(f"{pend['trigger']}:refused", f"couldn't dispatch: {str(e)[:160]}")
+                    except PermissionError as told:
+                        log("chat", "dispatch already told the thread", err=str(told)[:80])
+            threading.Thread(target=go, daemon=True, name=f"dispatch-go-{m['guid']}").start()
+            return True
         from .. import tools
-        stranger = bool(IDK.search(normalize(m["text"])))
+        stranger = pend.get("kind") != "decide" and bool(IDK.search(normalize(m["text"])))
         PENDING.unlink(missing_ok=True)
         append({"step": "intruder.verdict", "agent": "central", "tool": "intruder.verdict", "app": "imessage", "ok": True,
                 "args": {"from": m["sender"], "text": m["text"][:200], "guid": m["guid"], "asked": pend.get("trigger")},
