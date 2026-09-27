@@ -408,8 +408,12 @@ function App() {
 // `0 · <why>` in amber. Gauges: one tile per served number, with a sparkline of its last SPARK_N served values kept in a
 // useRef (one sample per poll result). A tile shows the served number only: red with its age when stale or off, amber
 // with the reason when there is nothing to show, never blank. A poll that has not answered (its value is null) reads
-// `no answer from GET <route>`, never a cause the API did not serve. A state served from WTDD_STATE_FIXTURE wears `stub`.
-const NO_DOG = "no answer from GET /dog/state";   // dog is null until /dog/state first answers, and stays null while it fails
+// `no answer from GET <route>`, never a cause the API did not serve. A poll that answered once and then fails keeps App's
+// last answer (main's polls end in .catch(() => {})), so an answer older than three poll periods turns its tiles red with
+// `no answer from GET <route> · N s`, the last served number still shown. A one-second re-render tick (it fetches nothing)
+// keeps that age moving when no poll renders. A state served from WTDD_STATE_FIXTURE wears `stub`.
+const NO_DOG = "no answer from GET /dog/state";   // dog is null until /dog/state first answers; a later failed poll keeps the last answer, which Gauges ages (PERIOD)
+const PERIOD = { "/dog/state": 1000, "/dog/lidar": 500, "/watch": 500, "/chat": 3000 };   // main's poll periods (App's setIntervals); three missed answers read as no answer
 const poseWhy = d => !d ? NO_DOG : !d.connected ? "not connected" : !d.calibrated ? "not located" : "no pose";
 const LAYERS = [   // bottom to top, as the svg draws them; n = what the layer draws now, text when n > 0, why when it is 0
   { layer: "house", swatch: html`<rect class="lg-house" x="-8" y="-6" width="16" height="12"/>`, n: s => (s.map.rooms || []).length, text: (s, n) => `${n} rooms`, why: () => "no rooms in ui/map.json" },
@@ -450,14 +454,21 @@ function Spark({ v }) {
   return html`<svg class="gg-spark" viewBox="0 0 60 16" preserveAspectRatio="none">${d && html`<path d=${d}/>`}</svg>`;
 }
 function Gauges({ dog, lidar, watch, chat }) {
-  const hist = useRef({}), seen = useRef({});
+  const hist = useRef({}), seen = useRef({}), heard = useRef({}), now = Date.now();
+  const [, tick] = useState(0);   // a re-render once a second when nothing else renders; not a poll: it fetches nothing
+  useEffect(() => { const t = setTimeout(() => tick(n => n + 1), 1000); return () => clearTimeout(t); });
+  const quiet = (route, src) => {   // the age of a poll's last answer: a new object is a new answer; a failed poll leaves the old one
+    if (heard.current[route]?.src !== src) heard.current[route] = { src, at: now };
+    const ms = now - heard.current[route].at;
+    return src && ms > 3 * PERIOD[route] ? `no answer from GET ${route} · ${Math.round(ms / 1000)} s` : null;
+  };
   const st = dog?.state, f = dog?.follow, stub = dog?.source === "stub";
-  const dogBad = !dog ? NO_DOG : !dog.connected ? "off · not connected" : st?.age_ms == null ? "no state served" : st.age_ms >= 2000 ? `stale · ${st.age_ms} ms` : null;   // the dog card's rule
+  const dogBad = quiet("/dog/state", dog) || (!dog ? NO_DOG : !dog.connected ? "off · not connected" : st?.age_ms == null ? "no state served" : st.age_ms >= 2000 ? `stale · ${st.age_ms} ms` : null);   // the dog card's rule
   const idle = f?.active ? null : "not following";
-  const lidarBad = !lidar ? "off" : lidar.age_ms >= 2000 ? `stale · ${lidar.age_ms} ms` : null;
+  const lidarBad = quiet("/dog/lidar", lidar) || (!lidar ? "off" : lidar.age_ms >= 2000 ? `stale · ${lidar.age_ms} ms` : null);
   const lidarIdle = lidar && lidar.age_ms == null ? lidar.why || "no frame served" : null;
-  const watchBad = !watch ? "no answer from GET /watch" : watch.age_ms == null ? "off · python -m wtdd.watch" : watch.age_ms >= 3000 ? `stale · ${watch.age_ms} ms` : null;   // the detector card's rule
-  const chatBad = !chat ? "no answer from GET /chat" : chat.alive ? null : `listener down${chat?.age_s != null ? ` · ${chat.age_s} s` : ""}`;
+  const watchBad = quiet("/watch", watch) || (!watch ? "no answer from GET /watch" : watch.age_ms == null ? "off · python -m wtdd.watch" : watch.age_ms >= 3000 ? `stale · ${watch.age_ms} ms` : null);   // the detector card's rule
+  const chatBad = quiet("/chat", chat) || (!chat ? "no answer from GET /chat" : chat.alive ? null : `listener down${chat?.age_s != null ? ` · ${chat.age_s} s` : ""}`);
   const tiles = [   // label, the poll result it rides, the served number, unit, red why, amber why, wears stub
     ["dog hz", dog, st?.hz, "", dogBad, null, stub],
     ["dog age", dog, st?.age_ms, " ms", dogBad, null, stub],
