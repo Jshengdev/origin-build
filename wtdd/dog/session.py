@@ -46,7 +46,8 @@ chip, never a silent no-halt. UNVERIFIED on the dog:
 halt.NEAR_FRAC and halt.HALT_MS (00.1, 00.2); the frame read after watch.json can be one 4 Hz frame newer than its
 boxes (frame_sha names the bytes read); that the zero through the avoidance service stops a walking dog, and
 halt.STILL_MPS and halt.SETTLE_S, the read-back that decides it did (00.3: above it after the settle, or no velocity
-in the read-back at all, stop.person is ok false and the halt stands).
+in the read-back at all, stop.person is ok false and the halt stands; state_after.still_ms times the read-back that
+said still, and the eval's ceiling is on it).
 """
 from __future__ import annotations
 import asyncio
@@ -535,7 +536,8 @@ class DogSession:
         is also the chip (_pw_fail) until a tick gets through. A failed _halt is the row's ok false and the halt stays
         set; so is a body whose read-back velocity is still above halt.STILL_MPS halt.SETTLE_S after the first read-back
         (state_after.velocity_settled), or whose read-backs carry no velocity at all: ok is what the device says, not
-        that _halt() returned. state_after.velocity is the velocity as read (None when none came, never main's default)."""
+        that _halt() returned. state_after.velocity is the velocity as read (None when none came, never main's default);
+        state_after.still_ms is the read-back that said still minus watch.json's t (the settle read when one ran)."""
         with self._person_lock:
             was = self.activity()
             if self.halted or was is None:
@@ -592,10 +594,11 @@ class DogSession:
                     except Exception as e:  # noqa: BLE001  (the body is stopped, only the picture failed: on the row, the log line and the page)
                         r["state_after"]["file_error"] = f"{type(e).__name__}: {str(e)[:120]}"
                         log("halt", "WARN thumbnail not written", err=r["state_after"]["file_error"])
-                    v = h["velocity_read"]
+                    v, t_still = h["velocity_read"], h["t"]
                     if v is None or max(abs(x) for x in v) > halt.STILL_MPS:   # 00.3: ok only when read back still; none is not
                         time.sleep(halt.SETTLE_S)
                         v = self.run(self.body.fresh_state(required=True), timeout=10).get("velocity")
+                        t_still = time.time()
                         r["state_after"]["velocity_settled"] = v
                         if v is None:
                             raise RuntimeError(f"no velocity in the read-back: the body never said it is still (first read-back "
@@ -603,10 +606,12 @@ class DogSession:
                         if max(abs(x) for x in v) > halt.STILL_MPS:
                             raise RuntimeError(f"body still moving after the halt: velocity {v} above STILL_MPS {halt.STILL_MPS} m/s "
                                                f"{halt.SETTLE_S} s after the first read-back {h['velocity_read']}")
+                    r["state_after"]["still_ms"] = round((t_still - d["t"]) * 1000)   # read back still: the eval's clock
             except Exception as e:  # noqa: BLE001  (the row has it; the halt stays set, the page shows it FAILED)
                 log("halt", "stop.person FAILED: the halt stays set", err=f"{type(e).__name__}: {str(e)[:120]}")
             self.halted = halt.summary(r)
-            log("halt", "STOPPED: person in frame", was=was, latency_ms=self.halted["latency_ms"], h_frac=args["band"]["h_frac"], ok=self.halted["ok"])
+            log("halt", "STOPPED: person in frame", was=was, latency_ms=self.halted["latency_ms"], still_ms=self.halted["still_ms"],
+                h_frac=args["band"]["h_frac"], ok=self.halted["ok"])
             return self.halted
 
     def resume_halt(self, by: str, via: str = "page") -> dict[str, Any]:
