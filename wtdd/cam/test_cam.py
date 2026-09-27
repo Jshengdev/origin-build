@@ -76,8 +76,9 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.calls: list[tuple[bytes, str]] = []   # (the frame bytes the detector was given, the boxed path it was asked for)
 
-        def fake_detect(frame, out):
+        def fake_detect(frame, out):   # like python -m wtdd.watch --out: the boxed copy lands at `out` (here, the frame marked)
             self.calls.append((Path(frame).read_bytes(), str(out)))
+            Path(out).write_bytes(b"boxed:" + Path(frame).read_bytes())
             return {**DETECT, "file": str(out)}
         self.detector = mock.patch.object(cam, "detect_file", fake_detect)
         self.detector.start()
@@ -197,13 +198,9 @@ class Person(Case):
 
         def fake_boxed(file):   # intruder_alarm boxes the frame it posts; here the detector has no weights
             return {"file": file.rsplit(".", 1)[0] + "-boxed.jpg", "classes": {"person": 1}, "n": 1, "ms": 1}
-
-        def boxing_detect(frame, out):   # the real detector writes its boxed copy to `out`; this one marks the frame's bytes
-            Path(out).write_bytes(b"boxed:" + Path(frame).read_bytes())
-            return {**DETECT, "file": str(out)}
         for p in (mock.patch.object(chat_post, "run", fake_post), mock.patch.object(dog_say, "boxed", fake_boxed),
                   mock.patch.object(config, "ROOT", _TMP), mock.patch.object(cam, "ARMED", _TMP / "intruder.on"),
-                  mock.patch.object(cam, "detect_file", boxing_detect), mock.patch.dict(cam._last, clear=True)):
+                  mock.patch.dict(cam._last, clear=True)):
             p.start()
             self.addCleanup(p.stop)
         (_TMP / "intruder.on").unlink(missing_ok=True)
