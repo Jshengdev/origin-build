@@ -33,5 +33,8 @@ def run(cam=None, approved=False, dry=False, trigger=None, file=None, by=None):
     if approved:
         by, unseen = dispatch.approval(cam, trigger, by), None
     else:
-        unseen = dispatch.why_unseen(cam)
+        try:
+            unseen = dispatch.why_unseen(cam)
+        except Exception as e:  # noqa: BLE001  (run() refuses it loud, even dry: one FAILED row, the failed page, "couldn't dispatch")
+            unseen = f"FAILED to read the camera's sighting: {type(e).__name__}: {e}"
     return dispatch.run(cam, approved=approved, dry=dry, trigger=trigger, file=file, by=by, unseen=unseen)

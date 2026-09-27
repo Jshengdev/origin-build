@@ -45,7 +45,10 @@ Every refusal and failure raises, after its FAILED row, one "couldn't dispatch: 
 failures are told by whoever ran it: the listener, the API's reply) and the page's `failed` phase naming why, unless
 another dispatch owns the page (the lock is held, or the open question is a dispatch's). A camera's refused sighting
 (its frame given, no person's yes yet) is named in that post, "(person at camera <id>, <label>)", with the frame, so
-the person on call still learns of the person; the open-question refusal stays text only (two eyes).
+the person on call still learns of the person; the open-question refusal stays text only (two eyes). Anything else
+that raises inside a run (an unreadable ui/grid.json or map, a sighting the tool could not read from the ledger, a
+pending.json that would not write) goes through the same refusal once, text only, named by its exception: the camera
+hook runs this on a thread, so a traceback alone would reach nobody.
 
 Rows: plan.route (06's, unchanged) precedes dispatch.decided {agent dispatch, app, args {cam, trigger, shift_id,
 threshold, auto, choices, pt, arrival, route {exists, length_m, nogo}, state_chars, approved, by}, state_before {dog {p,
@@ -369,9 +372,12 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
                        "latency_ms": round((time.perf_counter() - t0) * 1000), **label})
         ledger.log("dispatch", "dispatch.decided ok=False REFUSED", app=app, cam=cam, why=why[:100])
         if own_page:
-            _publish(page, phase="failed", error=why)
+            try:
+                _publish(page, phase="failed", error=why)
+            except Exception as e:  # noqa: BLE001  (the row above and the post below still say it; the page cannot)
+                ledger.log("dispatch", "FAILED to draw the failed page", err=f"{type(e).__name__}: {str(e)[:100]}")
         told = tell(why, frame)
-        raise RuntimeError(why + (f" (and the thread was not told: {told})" if told else ""))
+        raise _told(RuntimeError(why + (f" (and the thread was not told: {told})" if told else "")))
 
     if not _lock.acquire(blocking=False):
         refuse("one dispatch at a time: another dispatch is running", own_page=False)
@@ -392,7 +398,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         before["dog"] = {"p": pose and pose["p"], "heading_deg": pose and pose["heading_deg"],
                          "calibrated": cal is not None and pose is not None and confirmed,
                          "following": bool(s and s.follow_state.get("active")), "recording": bool(s and s.rec), "pending": bool(pend)}
-        if unseen and not dry:   # the device's sighting first: nothing plans, asks a model or asks the thread about nobody
+        if unseen and (not dry or unseen.startswith("FAILED")):   # the device's sighting first: nothing plans, asks a model or the thread about nobody
             refuse(f"no person seen at camera {cam}: {unseen}", own_page=(pend or {}).get("kind") != "dispatch", frame=False)
         if not before["dog"]["calibrated"]:
             refuse("not calibrated: " + (uncal if cal is None or pose is None else "the calibration was loaded from disk or kept "
@@ -449,6 +455,7 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         except Exception as e:  # noqa: BLE001  (the FAILED dispatch.decided row above has it; told, drawn, re-raised)
             _publish(page, phase="failed", error=f"{type(e).__name__}: {e}")
             tell(f"{type(e).__name__}: {e}")
+            _told(e)
             raise
         page.update(choice=d["choice"], p=d["p"], probabilities=d["probabilities"], demoted=d["demoted"])
         done = _publish(page, phase="decided")
@@ -462,8 +469,19 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         if d["choice"] == "ask":
             return _ask(page, c, trigger, file, refuse)
         return _walk(page, s, c, trigger)
+    except Exception as e:  # noqa: BLE001  (the last net: a failure no step above has told, e.g. an unreadable ui/grid.json)
+        if getattr(e, "told", False):
+            raise
+        refuse(f"{type(e).__name__}: {e}", frame=False)
     finally:
         _lock.release()
+
+
+def _told(e: BaseException) -> BaseException:
+    """Marks a failure whose rows, page and post are already written (a refusal, the decision, the ask's post, the walk),
+    so run()'s last net passes it on as it is instead of refusing it a second time."""
+    e.told = True
+    return e
 
 
 def _ask(page: dict, c: dict, trigger: str, file: str | None, refuse) -> dict:
@@ -490,6 +508,7 @@ def _ask(page: dict, c: dict, trigger: str, file: str | None, refuse) -> dict:
         chat_post.run(text=ask_line(c), file=frame, trigger=trigger)
     except Exception as e:  # noqa: BLE001  (its chat.* rows have it; drawn and re-raised)
         _publish(page, phase="failed", error=f"the ask was not posted: {type(e).__name__}: {e}")
+        _told(e)
         raise
     hold("while the ask was posted")
     PENDING.write_text(json.dumps({"kind": "dispatch", "t": time.time(), "cam": c["id"], "trigger": trigger, "file": frame}))
@@ -534,6 +553,7 @@ def _walk(page: dict, s, c: dict, trigger: str) -> dict:
                                + (f" [{derr[:120]}]" if derr else ""), file=seen["file"], trigger=f"{trigger}:done")
     except Exception as e:  # noqa: BLE001  (the dog.follow / dog.look / chat.* rows have it; drawn and re-raised)
         _publish(page, phase="failed", error=f"{type(e).__name__}: {e}")
+        _told(e)
         raise
     return _publish(page, phase="arrived", error=derr)
 
