@@ -483,11 +483,12 @@ def run_twice() -> list[dict[str, Any]]:
     posts: list[tuple[str, str]] = []
     l = Listener("eval", lambda guid, key, kind, text, file: posts.append((key, text or "")), listen_s=60, dry_run=False)
     l.allowed = lambda m: True   # the gate on senders is not under test here
+    stamp = time.time_ns()   # one per run: epoch seconds let two runs in one second share the claim key and fail
     for i in (1, 2):
-        l.handle({"rowid": -i, "guid": f"eval-{int(time.time())}-{i}", "text": "what the dog doin", "is_from_me": 0,
+        l.handle({"rowid": -i, "guid": f"eval-{stamp}-{i}", "text": "what the dog doin", "is_from_me": 0,
                   "sender": "+10000000000", "ts_utc": "", "attachments": []})
     wakes_ok = len(posts) == 1 and posts[0][0].startswith("wake:")
-    k = f"eval-claim-{int(time.time())}"
+    k = f"eval-claim-{stamp}"
     first, second = memory.claim(k), memory.claim(k)
     claim_ok = first is True and second is False
     res = [{"scenario": "twice", "trial": 1, "grade": "pass" if wakes_ok else "fail", "seconds": 0.0,
