@@ -16,7 +16,8 @@ the next answer within PENDING_WINDOW_S decides, "idk" and its kin = "STRANGER D
 else = "ok, standing down"; no answer = stood down quietly. Goal 00: a message that is exactly WTDD_RESUME_WORD
 (default "resume"; case and surrounding spaces forgiven) from an allowed sender ends a person halt through POST
 /dog/resume {by: the sender, via: "imessage"}; it is matched before verdict() and its regex, also while holding for a
-verdict, and nothing else in the chat resumes the body. A housemate's reply that starts like a
+verdict and while the chat's own round holds on the halt (read_resume, field.walk's on_hold; other messages read
+there are counted on a WARN line and not acted on), and nothing else in the chat resumes the body. A housemate's reply that starts like a
 correction ("that's socks", "not a bird", "actually ...") within 30 min of the dog's last posted look is a
 chat.correction row, is appended to state.json, is acknowledged with "noted: ...", and the next look's prompt carries
 it (the vision model is told what the housemates said it got wrong). WTDD_ROUND=dog makes the round the
@@ -69,6 +70,7 @@ class Listener:
         self.armed_by: str | None = None
         self.last = db.max_rowid()          # no replay at boot
         self._warned = False
+        self._held_read = 0.0               # 00: when read_resume last read the chat while the round held on a halt
 
     @property
     def armed(self) -> bool:
@@ -171,7 +173,7 @@ class Listener:
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})
-            out = walk(on_stop=lambda i, p, here: self.look_and_say(m, i), source=source)
+            out = walk(on_stop=lambda i, p, here: self.look_and_say(m, i), source=source, on_hold=self.read_resume)
             stops = out.get("stops", [])
             log("chat", "walked", seconds=out["seconds"], writes=out["writes"], errors=out["errors"], stops=len(stops), rooms=",".join(out["rooms"]))
             if out.get("errors"):
@@ -229,6 +231,22 @@ class Listener:
         log("chat", "RESUME", by=hname(m["sender"]))
         self.say(f"halt:{m['guid']}", f"resumed by {hname(m['sender'])}")
         return True
+
+    def read_resume(self) -> None:
+        """Goal 00: field.walk's on_hold while the chat's own round holds on a person halt. The listener is inside that
+        walk, so it reads the chat here, about once a second (await_verdict's pattern at a who-dis stop): the resume word
+        from an allowed sender resumes the body; any other message is read, counted on a WARN line, and not acted on."""
+        if time.monotonic() - self._held_read < 1.0:
+            return
+        self._held_read = time.monotonic()
+        msgs = db.new_messages(self.guid, self.last)
+        if not msgs:
+            return
+        memory.store(self.guid, msgs)
+        self.last = msgs[-1]["rowid"]
+        n = sum(1 for m in msgs if m.get("text") and self.allowed(m) and self.resume_word(m))
+        if n < len(msgs):
+            log("chat", "WARN halted: read while the round holds, not the resume word, not acted on", n=len(msgs) - n)
 
     def verdict(self, m: dict[str, Any]) -> bool:
         """The chat answering "who dis?!" (intruder_alarm): "idk" and its kin mean a stranger, so "STRANGER DANGER!!!"
