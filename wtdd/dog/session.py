@@ -136,6 +136,7 @@ class DogSession:
     def state(self) -> dict[str, Any]:
         from .. import config
         if fx := config.maybe("WTDD_STATE_FIXTURE"):   # DEMO_CACHE: a typed GET /dog/state (wtdd/dog/fixtures/state-vitals.json) for the dry screenshot; unset WTDD_STATE_FIXTURE and the live Body's state is served; a missing file raises
+            # Only GET /dog/state is typed; every other dog route stays live (the page's /dog/frame.jpg pull connects a reachable dog), so set it only with the dog off.
             return self._fixture(fx)
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
