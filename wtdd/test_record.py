@@ -322,7 +322,10 @@ class Cli(Guard):
         bare = _TMP / "bare"                                   # a repo root whose ui/map.json lost its rooms, path and lights
         (bare / "ui").mkdir(parents=True, exist_ok=True)
         (bare / "ui" / "map.json").write_text(json.dumps(EMPTY_SITE))
-        for root, warn in ((record.ROOT, False), (bare, True)):
+        full = _TMP / "full"                                   # a repo root whose ui/map.json has its shapes: the old shipped route
+        (full / "ui").mkdir(parents=True, exist_ok=True)        # (S2 ships ui/map.json with no path, so the tracked map is not it)
+        (full / "ui" / "map.json").write_text((HERE / "fixtures" / "map_route.json").read_text())
+        for root, warn in ((full, False), (bare, True)):
             err = io.StringIO()
             with mock.patch.object(record, "ROOT", root), contextlib.redirect_stderr(err):
                 self.assertEqual(record.main(["--shift", A, "--html", str(_TMP / "map.html")]), 0)
