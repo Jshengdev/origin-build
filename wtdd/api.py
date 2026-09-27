@@ -28,6 +28,8 @@
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog)
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
+  GET  /dog/floorplan?threshold=N the newest floor plan in map pixels {ok, segments_px, classes, class_px, cell_px, ms, ts, source, why?} (a read, no row; polled every 2 s)
+  POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -125,6 +127,15 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().grid_px(t))
             except Exception as e:  # noqa: BLE001  (a bad threshold or an unreadable ui/grid.json is reported, the page shows it)
                 return self._json(500, {"n": 0, "cells_px": [], "error": f"{type(e).__name__}: {e}"})
+        # 15 · floorplan
+        if u.path == "/dog/floorplan":   # a read: the newest floor plan in map pixels; never runs one, no ledger row
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                t = int((parse_qs(u.query).get("threshold") or [occupancy.THRESHOLD])[0])
+                return self._json(200, DogSession.get().floorplan_px(t))
+            except Exception as e:  # noqa: BLE001  (a bad threshold is reported, the page shows FAILED)
+                return self._json(500, {"segments_px": [], "error": f"{type(e).__name__}: {e}"})
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -228,6 +239,15 @@ class H(BaseHTTPRequestHandler):
                 out = s.grid_clear(str(body.get("why") or "cleared from the page")) if body.get("clear") else s.grid_save()
                 return self._json(200, {"ok": True, **out})
             except Exception as e:  # noqa: BLE001  (a save with no grid is a visible FAILED and a failed row, never an empty file)
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+        # 15 · floorplan
+        if u.path == "/dog/floorplan":   # {threshold?}: the button, always one run and one dog.floorplan row, ok or not
+            from .dog import occupancy
+            from .dog.session import DogSession
+            try:
+                out = DogSession.get().floorplan(int(self._body().get("threshold") or occupancy.THRESHOLD))
+                return self._json(200, out)   # ok=false when no wall was found: the row and `why` say so
+            except Exception as e:  # noqa: BLE001  (no grid at all is a failed row and a visible FAILED, never an empty plan)
                 return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not u.path.startswith("/tools/"):
             return self._json(404, {"error": "not found"})
