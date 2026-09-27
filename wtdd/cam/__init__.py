@@ -3,7 +3,8 @@
 (python -m wtdd.watch --source <frame> --once --out <boxed>; cv2 never loads in the API process), writes one cam.frame
 and one cam.detect row, publishes <id>.json for the remote (GET /cam, GET /cam/<id>/frame.jpg), and a person box while
 the intruder watch is armed (<repo>/intruder.on, the same gate as the dog's feed) is handed to dispatch on a thread
-(wtdd/dispatch.py: a route, a typed decision, the ask in the thread with the frame), at most once per COOLDOWN_S per camera.
+(wtdd/dispatch.py: a route, a typed decision, the ask in the thread with the sighting's own boxed copy,
+cams/<id>.<epoch>.boxed.jpg, which no later frame replaces), at most once per COOLDOWN_S per camera.
 The contract is wtdd/cam/test_cam.py; the laptop side is wtdd/cam/__main__.py (python -m wtdd.cam).
 
   ingest(cam_id, jpeg)     the POST: cam.frame row (the file lands), cam.detect row (the detector's boxes), <id>.json, the ask
@@ -28,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -102,18 +104,20 @@ def ingest(cam_id: str, jpeg: bytes) -> dict:
     _publish(pub, {**base, "ms": d["ms"], "n": d["n"], "classes": d["classes"], "boxes": d["boxes"], "boxed": Path(d["file"]).name})
     detect = {"classes": d["classes"], "n": d["n"], "boxes": d["boxes"], "ms": d["ms"], "model": MODEL}
     try:
-        person = person_seen(cam_id, path, d["boxes"])
-    except Exception as e:  # noqa: BLE001  (the intruder.alarm row already has the failure; the cooldown holds)
+        person = person_seen(cam_id, path, d["boxes"], boxed=Path(d["file"]))
+    except Exception as e:  # noqa: BLE001  (the sighting never reached dispatch, e.g. its boxed copy: this line and the reply say so; the cooldown holds)
         err = f"{type(e).__name__}: {e}"
-        log("cam", f"{cam_id}: who dis FAILED", err=err[:120])
+        log("cam", f"{cam_id}: dispatch hand-off FAILED", err=err[:120])
         return {"ok": False, "cam": cam_id, "frame": frame, "detect": detect, "person": {"asked": False, "why": f"FAILED {err}"[:200]}, "error": err}
     seen = ", ".join(f"{k} x{v}" for k, v in d["classes"].items()) or "nothing in view"
     log("cam", f"{cam_id}: {seen}", ms=d["ms"], bytes=len(jpeg), person="none" if person is None else person.get("trigger") or person["why"])
     return {"ok": True, "cam": cam_id, "frame": frame, "detect": detect, "person": person}
 
 
-def person_seen(cam_id: str, frame: Path, boxes: list[dict]) -> dict | None:
-    """A person box at this camera while armed: handed to the dispatch tool on a thread, once per cooldown; returns now."""
+def person_seen(cam_id: str, frame: Path, boxes: list[dict], boxed: Path | None = None) -> dict | None:
+    """A person box at this camera while armed: handed to the dispatch tool on a thread, once per cooldown; returns now.
+    boxed (ingest passes the detector's <id>-boxed.jpg) is copied to <id>.<epoch>.boxed.jpg and that copy is the ask's
+    photo: the next POST replaces both shared files while dispatch plans and decides. Without it, the frame as given."""
     from ..ledger import log
     from ..watch import COOLDOWN_S
     if not any(b.get("name") == "person" for b in boxes):
@@ -128,7 +132,10 @@ def person_seen(cam_id: str, frame: Path, boxes: list[dict]) -> dict | None:
     if left > 0:
         return {"asked": False, "why": f"cooldown {int(left)} s"}
     key = f"cam:{cam_id}:{int(now)}"
-    log("cam", f"INTRUDER: person at camera {cam_id} while armed, dispatching", trigger=key)
+    if boxed is not None:   # ids have no ".", so the copy never collides with another camera's files (a missing boxed file raises)
+        frame = cams() / f"{cam_id}.{int(now)}.boxed.jpg"
+        shutil.copyfile(boxed, frame)
+    log("cam", f"INTRUDER: person at camera {cam_id} while armed, dispatching", trigger=key, file=frame.name)
     from .. import tools
     threading.Thread(target=tools.call, args=("dispatch",), kwargs={"cam": cam_id, "trigger": key, "file": str(frame)}, daemon=True,
                      name=f"dispatch-{key}").start()   # 18: a dispatch can take a walk's length; the camera's POST returns now
