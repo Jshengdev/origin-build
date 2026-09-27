@@ -394,7 +394,7 @@ class DogSession:
                 self._fp = ({"ok": False, "why": f"FAILED floor plan press: {type(e).__name__}: {str(e)[:120]}", "threshold": threshold,
                              "frames": g.frames if g is not None else 0, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}, source, None)
             raise
-        return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution")}
+        return {k: v for k, v in res.items() if k not in ("cls", "runs", "origin", "resolution")}
 
     def floorplan_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/floorplan: the newest floor plan in map pixels (floorplan.to_px) through a file grid's saved

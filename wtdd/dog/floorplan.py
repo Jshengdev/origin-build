@@ -84,13 +84,15 @@ def _layer(z: float, grid: occupancy.Grid) -> int:
     return min(max(math.ceil((z - grid.z_ref) / grid.resolution - 1e-6), 0), 64)
 
 
-def _runs(ix: np.ndarray, iy: np.ndarray, res: float) -> tuple[list[tuple], np.ndarray, list[int], int]:
+def _runs(ix: np.ndarray, iy: np.ndarray, res: float) -> tuple[list[tuple], np.ndarray, list[int], int, list[np.ndarray]]:
     """Grounded cells (grid indices) -> (segments in grid index units [(x0, y0, x1, y1, cells)], on-run bool per cell,
-    the two directions in degrees, the most cells in one cell of offset along the main direction)."""
+    the two directions in degrees, the most cells in one cell of offset along the main direction, and per segment the
+    indices of the cells it took, its thickness included: a corner cell or a shelf column within THICK of two lines is
+    in both)."""
     n = len(ix)
     on = np.zeros(n, dtype=bool)
     if n == 0:
-        return [], on, [], 0
+        return [], on, [], 0, []
     x, y = ix.astype(np.float64), iy.astype(np.float64)
     score, peaks = [], []
     for a in range(180):
@@ -125,7 +127,7 @@ def _runs(ix: np.ndarray, iy: np.ndarray, res: float) -> tuple[list[tuple], np.n
         return out
 
     cand = [best(b) for b in bands]
-    segs = []
+    segs, takes = [], []
     while any(cand):
         i = max((j for j in range(len(cand)) if cand[j]), key=lambda j: cand[j][:2])
         d, rho, along, _idx = bands[i]
@@ -140,18 +142,20 @@ def _runs(ix: np.ndarray, iy: np.ndarray, res: float) -> tuple[list[tuple], np.n
         take = (np.abs(rho - m) <= THICK / res + 1e-9) & (along >= t0 - 1e-9) & (along <= t1 + 1e-9)
         take[part] = True
         used[d][take] = on[take] = True
+        takes.append(np.nonzero(take)[0])
         # removing cells only shrinks or splits runs: a band whose best run kept all its cells keeps it
         cand = [best(b) if c_ is not None and used[b[0]][c_[2]].any() else c_ for b, c_ in zip(bands, cand)]
-    return segs, on, dirs, peaks[a0]
+    return segs, on, dirs, peaks[a0], takes
 
 
 def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
-    """classes() and segments() in one pass: {cls, segments (odometry metres, 3 dp), why?, dirs, peak}."""
+    """classes() and segments() in one pass: {cls, segments (odometry metres, 3 dp), runs, why?, dirs, peak}; runs[k] is
+    segment k's cells as an int array (m, 2) of [ix, iy], every one class 1 (goal 16's erase greys a run by them)."""
     if threshold < 1:
         raise ValueError(f"threshold must be at least 1 frame, got {threshold}")
     cls = np.zeros(grid.counts.shape, dtype=np.uint8)
     iy, ix = np.nonzero(grid.counts >= threshold)
-    out = {"cls": cls, "segments": [], "dirs": [], "peak": 0}
+    out = {"cls": cls, "segments": [], "runs": [], "dirs": [], "peak": 0}
     if len(ix) == 0:
         return {**out, "why": f"no wall found: 0 cells seen {threshold}+ times in {grid.frames} frames"}
     m = grid.zmask[iy, ix]
@@ -163,7 +167,7 @@ def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
     lowest = np.argmax(bits, axis=1)
     top = 63 - np.argmax(bits[:, ::-1], axis=1)
     grounded = has & (lowest < _layer(GROUND, grid))
-    segs, on, dirs, peak = _runs(ix[grounded], iy[grounded], grid.resolution)
+    segs, on, dirs, peak, takes = _runs(ix[grounded], iy[grounded], grid.resolution)
     onrun = np.zeros(len(ix), dtype=bool)
     onrun[np.nonzero(grounded)[0][on]] = True
     tallc = top >= _layer(tall, grid)
@@ -171,6 +175,7 @@ def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
     r, (ox, oy) = grid.resolution, grid.origin
     out["segments"] = [tuple(round(float(v), 3) for v in (ox + x0 * r, oy + y0 * r, ox + x1 * r, oy + y1 * r)) + (n,)
                        for x0, y0, x1, y1, n in segs]
+    out["runs"] = [np.column_stack([ix[grounded][t], iy[grounded][t]]) for t in takes]
     if not (cls == 1).any():
         out["why"] = f"no wall found: {len(ix)} cells, 0 grounded straight runs >= {RUN} m"
     return {**out, "dirs": dirs, "peak": peak}
@@ -199,7 +204,7 @@ def _line(counts: dict, p: dict, ms: float, threshold: int, source: str) -> None
 
 def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: float = TALL, grid_source: str = "session") -> dict[str, Any]:
     """One floor plan and one `dog.floorplan` row. Returns {ok, why?, threshold, frames, cells, classes, segments, ms, ts,
-    grid_source, cls, origin, resolution}; no wall is ok=false with `why` (the row already says so); any other raise
+    grid_source, cls, runs, origin, resolution}; no wall is ok=false with `why` (the row already says so); any other raise
     propagates after its failed row."""
     t0 = time.perf_counter()
     args = {"threshold": threshold, "constants": {"FLOOR": FLOOR, "GROUND": GROUND, "TALL": tall, "RUN": RUN, "GAP": GAP, "THICK": THICK},
@@ -214,7 +219,7 @@ def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: flo
             p = _plan(grid, threshold, tall)
             counts, ms = _counts(p["cls"]), round((time.perf_counter() - t0) * 1000, 1)
             r["state_after"] = {"classes": counts, "segments": [list(s) for s in p["segments"]], "ms": ms}
-            out.update(classes=counts, segments=p["segments"], ms=ms, cls=p["cls"])
+            out.update(classes=counts, segments=p["segments"], ms=ms, cls=p["cls"], runs=p["runs"])
             _line(counts, p, ms, threshold, grid_source)
             if counts["wall"] == 0:
                 raise NoWall(p.get("why") or "no wall found")
