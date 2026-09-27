@@ -556,5 +556,20 @@
       "say": true,
       "ask": false
     }
+  },
+  "labels": [
+    "clear",
+    "material_stack",
+    "opening",
+    "hazard",
+    "person",
+    "other"
+  ],
+  "policy": {
+    "escalate": [
+      "opening",
+      "hazard",
+      "person"
+    ]
   }
 }
