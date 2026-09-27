@@ -323,7 +323,7 @@ class Escalate(unittest.TestCase):
     def test_each_escalate_check_fails_on_its_own(self):
         """A reply from the group is not the on-call person's (drill rows 6 and 8); a flag with no shift_id joins no record."""
         for name, mutate, pinned in (
-                ("reply from the group", lambda rs: rs[at(rs, "intruder.verdict")]["args"].update(chat=GROUP), "1:1"),
+                ("reply from the group", lambda rs: rs[at(rs, "intruder.verdict")]["args"].update(chat=GROUP), "not the chat the flag went to"),
                 ("flag without shift_id", lambda rs: rs[at(rs, "chat.post", kind="escalate")]["args"].pop("shift_id"), "shift_id")):
             with self.subTest(name):
                 rs = rows("escalate")
