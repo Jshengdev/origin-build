@@ -3,8 +3,11 @@ The from-me rule is tested in its strict form (WTDD_ALLOW_SELF=0); the wake demo
 (WTDD_WAKE_SHOW=0, WTDD_AGENT=0) so the machine is wake -> command -> stop with a stubbed commands.run."""
 from __future__ import annotations
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 os.environ["WTDD_WAKE_SHOW"] = "0"
@@ -12,8 +15,8 @@ os.environ["WTDD_AGENT"] = "0"
 os.environ["WTDD_ALLOW_SELF"] = "0"
 os.environ["WTDD_TRIGGERS"] = "what the dog doin,what the dog doing,whats the dog doing,what is the dog doing,wtdd"
 os.environ["WTDD_COMMANDS"] = "do a round,lights on,lights off,dim,bright,show,sit,stand,hello,look,status,stop"
-os.environ.setdefault("WTDD_LEDGER", os.path.join(tempfile.mkdtemp(), "ledger.jsonl"))
-os.environ.setdefault("WTDD_MEMORY", os.path.join(tempfile.mkdtemp(), "memory.db"))
+os.environ["WTDD_LEDGER"] = os.path.join(tempfile.mkdtemp(), "ledger.jsonl")   # assigned, never setdefault: an exported
+os.environ["WTDD_MEMORY"] = os.path.join(tempfile.mkdtemp(), "memory.db")      # real ledger or memory.db must not get test rows
 
 from wtdd.chat import listen as L  # noqa: E402
 from wtdd.chat import triggers as T  # noqa: E402
@@ -89,6 +92,21 @@ class Machine(unittest.TestCase):
         with mock.patch.object(L.cmds, "run", return_value={"text": "here's what i see", "file": "/tmp/x.jpg"}):
             self.l.handle(_m("wtdd")); self.l.handle(_m("look"))
             self.assertEqual(self.posts[-1], ("res:" + self.posts[-1][0].split(":")[1], "here's what i see", "/tmp/x.jpg"))
+
+
+class Scratch(unittest.TestCase):
+    def test_an_exported_ledger_and_memory_are_never_written(self):
+        """An exported WTDD_LEDGER / WTDD_MEMORY (the real files on the dog's Mac) must not receive this module's rows:
+        run the other classes in a child with both exported to a temp dir, and the files stay as they were."""
+        with tempfile.TemporaryDirectory() as d:
+            led, mem = os.path.join(d, "exported.jsonl"), os.path.join(d, "exported.db")
+            Path(led).write_text('{"sentinel": 1}\n')
+            r = subprocess.run([sys.executable, "-m", "unittest", "wtdd.chat.test_triggers.Recognize", "wtdd.chat.test_triggers.Machine"],
+                               cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=60,
+                               env={**os.environ, "WTDD_LEDGER": led, "WTDD_MEMORY": mem})
+            self.assertEqual(r.returncode, 0, r.stderr[-800:])
+            self.assertEqual(Path(led).read_text(), '{"sentinel": 1}\n', "the child appended rows to the exported WTDD_LEDGER")
+            self.assertFalse(os.path.exists(mem), "the child wrote the exported WTDD_MEMORY")
 
 
 if __name__ == "__main__":
