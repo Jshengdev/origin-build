@@ -10,7 +10,8 @@ hook(state) is the one line at a call site. It never raises and never blocks the
 process that holds the dog it schedules hold() on the session loop and returns; in the API process without a dog it is
 one WARN and no row (a light never triggers a connect); in any other process (the listener) it posts the dog_led tool to
 the API on a daemon thread (_post_api). hold() sends one request of time_s() seconds (Body.led: one dog.led row each)
-and a keeper task resends it every time_s() until the state's HOLD_S is covered; a newer state cancels the keeper, and a
+and a keeper task resends it every time_s() until the state's HOLD_S is covered, the k-th at first send + k*time_s()
+(a request that waits on a slow 1006 read-back never stretches the period); a newer state cancels the keeper, and a
 refused request is never resent. Imports stdlib, config and the ledger only: the listener imports this module, and it
 must not load the driver.
 
@@ -45,17 +46,19 @@ async def hold(b: Any, color: str, seconds: float, flash_ms: float | None = None
     if b._led_keeper and not b._led_keeper.done():
         b._led_keeper.cancel()
     t = min(float(seconds), time_s())
+    t0 = asyncio.get_running_loop().time()   # the resends keep this clock: the k-th starts at t0 + k*t, whatever 1006 took
     st = await b.led(color, t, flash_ms, **row)
     n = math.ceil(float(seconds) / t - 1e-9) if t > 0 else 1   # requests to cover `seconds`; a time <= 0 is sent once, the dog's to refuse
     if n > 1 and b._led_gen == gen:   # a newer hold that began while this request was in flight wins
-        b._led_keeper = asyncio.get_running_loop().create_task(_resend(b, gen, color, t, flash_ms, n, row))
+        b._led_keeper = asyncio.get_running_loop().create_task(_resend(b, gen, color, t, flash_ms, n, row, t0))
     return st
 
 
-async def _resend(b: Any, gen: int, color: str, t: float, flash_ms: float | None, n: int, row: dict) -> None:
+async def _resend(b: Any, gen: int, color: str, t: float, flash_ms: float | None, n: int, row: dict, t0: float) -> None:
+    loop = asyncio.get_running_loop()
     try:
         for k in range(1, n):
-            await asyncio.sleep(t)
+            await asyncio.sleep(max(0.0, t0 + k * t - loop.time()))
             if b._led_gen != gen:
                 return
             await b.led(color, t, flash_ms, resend=k, **row)
