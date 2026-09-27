@@ -1,6 +1,7 @@
 """TEST ONLY. A local HTTPS fake of the Hue bridge (self-signed cert, like the real one) plus the checks that run
 against it: request shaping, the read-back rule, bad key, rate limit, the pair poll, zones, and the signal refusal.
-Nothing here touches a real bridge. Run: python -m wtdd.hue.test_stub
+Nothing here touches a real bridge. Run: python -m wtdd.hue.test_stub, or python -m unittest wtdd.hue.test_stub
+(one TestCase runs the same checks; without it unittest found no tests and the standing line ran none of them).
 """
 from __future__ import annotations
 import contextlib
@@ -12,8 +13,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest import mock
 
 TMP = Path(tempfile.mkdtemp(prefix="wtdd-hue-"))
 os.environ["WTDD_LEDGER"] = str(TMP / "ledger.jsonl")  # before importing the ledger: never the real file
@@ -311,6 +314,17 @@ def main() -> int:
 
     print(f"ok: {n} checks passed against the stub at https://{host}; ledger rows in {ledger.LEDGER}")
     return 0
+
+
+class Stub(unittest.TestCase):
+    def test_every_check_passes_against_the_stub(self):
+        """main()'s checks as one test. The ledger is pinned to TMP (wtdd.ledger binds WTDD_LEDGER at its first import,
+        which in a shared process is another module's) and main()'s HUE_* env writes are undone after."""
+        out = io.StringIO()
+        with mock.patch.object(ledger, "LEDGER", TMP / "ledger.jsonl"), mock.patch.dict(os.environ), contextlib.redirect_stdout(out):
+            code = main()
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("ok: 34 checks passed", out.getvalue())
 
 
 if __name__ == "__main__":

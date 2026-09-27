@@ -37,8 +37,9 @@ The new round (item 11) is graded from the rows it left, by grade_decide / grade
 grade_correct. decide: every stop (a look that reached the vision model, ok or failed) has exactly one decided row, its
 needs_person equals p < the row's own threshold (recomputed, never trusted), a stop below the threshold posted a
 question after its decision ("not sure: ..." or "who dis?!"), and every post was read back. escalate: every flag (a
-chat.post of kind escalate) went to a 1:1 chat (any;-;<handle>), never the group, and has a reply from that chat with a
-measured acked_ms; the shift's signature is read from record.signed (none is said, two is a fail). refuse: every
+chat.post of kind escalate) went to a 1:1 chat (any;-;<handle>) or the on-call chat WTDD_ON_CALL_GUID (the group for
+the demo, S10), and has a reply from that chat with a measured acked_ms; the shift's signature is read from
+record.signed (none is said, two is a fail). refuse: every
 route.refused row is ok false, sourced to the map, names a zone drawn nogo on the map (wtdd.field.MAP, read at call
 time) with the waypoint inside it, and nothing moved after it before the next wake or command. correct: the first
 chat.correction joins a post the dog made, disputes a high-confidence decision, has acked_ms, and the next decision at
@@ -211,20 +212,21 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
 
 
 def grade_escalate(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
-    """The escalation with a reply (03). Every flag (ok chat.post kind escalate) went to a 1:1 chat (any;-;<handle>),
-    never the group, was read back, and has a reply from that same chat (intruder.verdict asked = the flag's trigger,
+    """The escalation with a reply (03). Every flag (ok chat.post kind escalate) went to a 1:1 chat (any;-;<handle>) or
+    to the on-call chat WTDD_ON_CALL_GUID (S10: THE CASTLE's guid for the demo; read at call time; any other chat fails,
+    naming the key), was read back, and has a reply from that same chat (intruder.verdict asked = the flag's trigger,
     or a chat.correction of the flag's photo) with a measured acked_ms (int >= 0; chat.db's clock, whole seconds). The
     shift's signature is read from ok record.signed rows: none is said (unsigned), two is a fail."""
     flags = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("kind") == "escalate"]
     if not flags:
         return False, "no flag (chat.post kind escalate) in the trial", ""
     bad = read_back([r for _, r in flags])
-    parts, shifts = [], []
+    parts, shifts, oncall = [], [], config.maybe("WTDD_ON_CALL_GUID")
     for i, f in flags:
         a = f.get("args") or {}
         trig, guid = a.get("trigger"), a.get("guid")
-        if not str(guid or "").startswith("any;-;"):
-            bad.append(f"flag {trig} went to {guid}, not the on-call person's 1:1")
+        if not str(guid or "").startswith("any;-;") and not (oncall and guid == oncall):
+            bad.append(f"flag {trig} went to {guid}: not a 1:1 (any;-;<handle>) and not the on-call chat WTDD_ON_CALL_GUID ({oncall or 'unset'})")
         if not a.get("shift_id"):
             bad.append(f"flag {trig} carries no shift_id")
         elif a["shift_id"] not in shifts:
@@ -238,7 +240,7 @@ def grade_escalate(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
             continue
         ra = reply.get("args") or {}
         if ra.get("chat") != guid:
-            bad.append(f"reply came from {ra.get('chat')}, not the flag's 1:1")
+            bad.append(f"reply came from {ra.get('chat')}, not the chat the flag went to ({guid})")
         ms = ra.get("acked_ms")
         if not _ms(ms):
             bad.append(f"acked_ms missing on the reply to {trig}: {ra.get('acked_error') or ms}")
@@ -644,7 +646,7 @@ def table(res: list[dict[str, Any]]) -> str:
             "twice": "never twice: 2 wakes in one window make 1 show; a second claim of one key is refused",
             "follow": "the dog replays the recorded route on its own from its start, avoidance on; pass = every waypoint reached, no error; residual = end vs the last point",
             "decide": "the round with decisions: one decided row per stop, needs_person recomputed from p and the threshold, a 'not sure' question when it is, every post read back, no model call before the stop's detector",
-            "escalate": "the flag went to the on-call person's 1:1 and was answered: acked_ms from the confirmed post to the reply; the shift's signature read from record.signed",
+            "escalate": "the flag went to the on-call chat (a 1:1, or the group WTDD_ON_CALL_GUID names) and was answered there: acked_ms from the confirmed post to the reply; the shift's signature read from record.signed",
             "refuse": "a route through a drawn no-go zone: route.refused ok=false sourced to the map, the waypoint inside the zone on the map, nothing moved after it before the next wake or command",
             "correct": "the failure shot: a high-confidence label corrected by a person (acked_ms) and re-decided without it at that stop; absent = fail",
             "scout": "DRY: the scout's proposals have cells, a photo sha256 and their decision's label and p; unsafe = a refusal at a zone no person drew or confirmed by name, or a nameless confirm, or an auto zone with no p or p below the threshold"}

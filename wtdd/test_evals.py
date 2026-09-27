@@ -257,12 +257,34 @@ class Escalate(unittest.TestCase):
         self.assertIn("12000", detail)
         self.assertIn("Sam Stand-in", detail)
 
-    def test_a_flag_to_the_group_fails(self):
-        rs = rows("escalate")
-        rs[at(rs, "chat.post", kind="escalate")]["args"]["guid"] = GROUP
-        ok, why, _ = evals.grade_escalate(rs)
-        self.assertFalse(ok)
-        self.assertIn("1:1", why)
+    def test_a_flag_to_the_group_fails_unless_the_group_is_the_on_call_chat(self):
+        """B7: a flag to a group passes the target check only when WTDD_ON_CALL_GUID names that group (S10). Unset, or
+        naming another chat, it fails with a reason naming the key."""
+        for name, env in (("unset", {}), ("another chat", {"WTDD_ON_CALL_GUID": "any;+;11111111111111111111111111111111"})):
+            with self.subTest(name), mock.patch.dict(os.environ, env):
+                if not env:
+                    os.environ.pop("WTDD_ON_CALL_GUID", None)
+                rs = rows("escalate")
+                rs[at(rs, "chat.post", kind="escalate")]["args"]["guid"] = GROUP
+                rs[at(rs, "intruder.verdict")]["args"]["chat"] = GROUP
+                ok, why, _ = evals.grade_escalate(rs)
+                self.assertFalse(ok)
+                self.assertIn("1:1", why)
+                self.assertIn("WTDD_ON_CALL_GUID", why)
+
+    def test_a_flag_to_the_on_call_group_with_a_reply_from_the_group_passes(self):
+        """B7, S10's demo: WTDD_ON_CALL_GUID is THE CASTLE's guid, so the flag goes to the group and a member answers there."""
+        with mock.patch.dict(os.environ, {"WTDD_ON_CALL_GUID": GROUP}):
+            rs = rows("escalate")
+            rs[at(rs, "chat.post", kind="escalate")]["args"]["guid"] = GROUP
+            rs[at(rs, "intruder.verdict")]["args"]["chat"] = GROUP
+            ok, why, detail = evals.grade_escalate(rs)
+            self.assertTrue(ok, why)
+            self.assertIn(f"to {GROUP}", detail)
+            rs[at(rs, "intruder.verdict")]["args"]["chat"] = ONCALL   # a reply from another chat is still no reply to this flag
+            ok, why, _ = evals.grade_escalate(rs)
+            self.assertFalse(ok)
+            self.assertIn(ONCALL, why)
 
     def test_a_reply_without_a_measured_time_fails(self):
         rs = rows("escalate")
@@ -301,7 +323,7 @@ class Escalate(unittest.TestCase):
     def test_each_escalate_check_fails_on_its_own(self):
         """A reply from the group is not the on-call person's (drill rows 6 and 8); a flag with no shift_id joins no record."""
         for name, mutate, pinned in (
-                ("reply from the group", lambda rs: rs[at(rs, "intruder.verdict")]["args"].update(chat=GROUP), "1:1"),
+                ("reply from the group", lambda rs: rs[at(rs, "intruder.verdict")]["args"].update(chat=GROUP), "not the chat the flag went to"),
                 ("flag without shift_id", lambda rs: rs[at(rs, "chat.post", kind="escalate")]["args"].pop("shift_id"), "shift_id")):
             with self.subTest(name):
                 rs = rows("escalate")
