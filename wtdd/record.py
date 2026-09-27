@@ -6,8 +6,9 @@
   GET /record?shift=<id>, GET /record/shifts (wtdd/api.py)     the same JSON over HTTP; shifts() newest first, the run in force
 
 On the page: the stops (each look, what the detector and the model said, whether a person was pinged, the post that
-confirmed it, the correction that fixes it), the flags with who resolved what and when (the reply's acked_ms, or
-"unanswered"), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
+confirmed it, the correction that fixes it), the flags with who resolved what and when (the newest intruder.verdict for
+the flag: a hold then "handled" reads handled, a hold then its expiry reads expired; the first reply's acked_ms, the
+close's closed_ms; or "unanswered"), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
 the path, the shift's planned stops), and the signature line: "unsigned" until an ok record.signed {by, at, shift_id}
 row exists (item 03, `python -m wtdd record_sign`), then the name and the time. Every number is counted from rows,
 nothing is typed by hand. It reads the ledger through ledger.rows() (so WTDD_LEDGER is honoured) and ui/map.json; it
@@ -172,11 +173,13 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
     for r in members:
         a = r.get("args") or {}
         if ok(r, "chat.post") and a.get("kind") == "escalate" and not late(r):   # a flag after the signature is listed, not counted
-            v = next((x for x in verdicts if x["args"].get("asked") == a.get("trigger")), None)
+            vs = [x for x in verdicts if x["args"].get("asked") == a.get("trigger")]   # a hold, then handled or expired: the newest is the outcome
+            v = vs[-1] if vs else None
             flags.append({"ts": r["ts"], "trigger": a.get("trigger"), "stop": _index(a.get("trigger")), "to": a.get("guid"),
                           "text": a.get("text"), "file": a.get("file"),
                           "resolved": v and {"by": v["args"].get("from"), "text": v["args"].get("text"),
-                                             "verdict": (v.get("state_after") or {}).get("verdict"), "acked_ms": v["args"].get("acked_ms"), "ts": v["ts"]}})
+                                             "verdict": (v.get("state_after") or {}).get("verdict"), "acked_ms": vs[0]["args"].get("acked_ms"), "ts": v["ts"],
+                                             **({"closed_ms": v["args"]["closed_ms"]} if v["args"].get("closed_ms") is not None else {})}})
     acked = [a["acked_ms"] for r in members for a in [r.get("args") or {}]
              if (ok(r, "intruder.verdict") or ok(r, "chat.correction")) and a.get("acked_ms") is not None]
     bad = [{"ts": r.get("ts"), "tool": r.get("tool"), "error": r.get("response_or_error"), "args": r.get("args")} for r in members if not r.get("ok")]
