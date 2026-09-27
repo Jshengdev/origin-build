@@ -19,6 +19,7 @@ time (model load + predict, about 1-2 s). One row per posted frame, no HOLD: at 
 is a two-second event. shift_id is WTDD_SHIFT or today's date. A person starts at most one dispatch per camera per
 COOLDOWN_S, keyed cam:<id>:<epoch> so the chat's claim refuses a second post on the same key; the cooldown starts before
 the dispatch (wtdd/watch.py's order), so a failed one waits for the next window instead of re-firing every frame.
+A sighting whose hand-off fails (its boxed copy, the thread) is one FAILED dispatch.decided row (agent cam) naming it.
 The hook is the one call in person_seen(): a thread running the dispatch tool (item 18), so the camera's POST returns
 at once while dispatch plans, decides, asks the thread or refuses loud (its own rows), and walks only on a person's yes.
 
@@ -73,7 +74,7 @@ def _publish(pub: Path, d: dict) -> None:
 def ingest(cam_id: str, jpeg: bytes) -> dict:
     """One posted frame. Raises ValueError (after its FAILED cam.frame row) on a bad id or bytes that are not a JPEG;
     a failed detector or ask is {ok: False, error} with its rows written and <id>.json showing the error."""
-    from ..ledger import log, step
+    from ..ledger import append, log, step
     from ..watch import MODEL
     sid, home = shift_id(), cams()
     path, pub = home / f"{cam_id}.jpg", home / f"{cam_id}.json"
@@ -105,8 +106,11 @@ def ingest(cam_id: str, jpeg: bytes) -> dict:
     detect = {"classes": d["classes"], "n": d["n"], "boxes": d["boxes"], "ms": d["ms"], "model": MODEL}
     try:
         person = person_seen(cam_id, path, d["boxes"], boxed=Path(d["file"]))
-    except Exception as e:  # noqa: BLE001  (the sighting never reached dispatch, e.g. its boxed copy: this line and the reply say so; the cooldown holds)
-        err = f"{type(e).__name__}: {e}"
+    except Exception as e:  # noqa: BLE001  (the sighting never reached dispatch, e.g. its boxed copy: its row, this line and the reply say so; the cooldown holds)
+        err, boxed = f"{type(e).__name__}: {e}", Path(d["file"]).name
+        append({"step": "dispatch.decided", "agent": "cam", "tool": "dispatch.decided", "app": "camera",
+                "args": {"cam": cam_id, "shift_id": sid, "file": boxed}, "state_before": None, "state_after": None, "ok": False,
+                "response_or_error": f"{err}: the person at camera {cam_id} (boxed in {boxed}) never reached dispatch", "latency_ms": 0})
         log("cam", f"{cam_id}: dispatch hand-off FAILED", err=err[:120])
         return {"ok": False, "cam": cam_id, "frame": frame, "detect": detect, "person": {"asked": False, "why": f"FAILED {err}"[:200]}, "error": err}
     seen = ", ".join(f"{k} x{v}" for k, v in d["classes"].items()) or "nothing in view"
