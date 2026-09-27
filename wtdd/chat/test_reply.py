@@ -23,6 +23,9 @@ From the third review: a reply stamped before the open question's confirmed post
 about an earlier flag): no reading, no verdict, the question stays open.
 From the final review (round 4, fixed by the head's grant): a re-ask nobody answers is one unclear / stand_down verdict
 row with the first reply's acked_ms and reading, when the hold times out or the window expires, never a silent unlink.
+An acknowledged flag is exempt from PENDING_WINDOW_S, so "handled" 130 s after the heads-up still closes it; it lasts
+ACK_WINDOW_S (1800 s, the head's choice for beat 2.4b) from the acknowledgement, then one expired / stand_down row
+naming the acknowledgement and the window, never a silent unlink.
 
 Offline: the scratch ledger and memory.db are set through WTDD_LEDGER / WTDD_MEMORY before wtdd.ledger is imported. Run
 alone, they are this module's; after wtdd.test_decide in one process they are that module's (wtdd.ledger reads the
@@ -520,6 +523,51 @@ class Verdict(unittest.TestCase):
         self.assertEqual(self._verdicts(), [("unclear", "stand_down")])
         self.assertEqual(self._rows("intruder.verdict")[0]["args"]["acked_ms"], 9000)
         self.assertFalse(self.pend.exists())
+
+    def test_a_held_flag_outlives_the_question_window_and_handled_closes_it(self):
+        """Beat 2.4b: "on it" 12 s after the heads-up, then "handled" when the pending's t is 130 s old, past
+        PENDING_WINDOW_S. An acknowledged flag is exempt from that window in poll() and in verdict(), so the close is
+        read: handled / close with closed_ms, and "ok, closed"."""
+        self._ask("heads_up")
+        self._flagged("2026-09-27 12:00:00")
+        self._say("on it", 1, "2026-09-27 12:00:12")
+        self.pend.write_text(json.dumps({**json.loads(self.pend.read_text()), "t": time.time() - 130}))
+        self._poll()
+        self.assertTrue(self.pend.exists())   # poll() did not drop the held flag
+        got, call = self._say("handled, cover is back on", 2, "2026-09-27 12:02:10")
+        self.assertTrue(got)
+        call.assert_not_called()
+        self.assertEqual(self._verdicts(), [("acknowledged", "hold"), ("handled", "close")])
+        self.assertEqual(self._rows("intruder.verdict")[1]["args"]["closed_ms"], 130000)
+        self.assertEqual(self._texts(), ["ok, closed"])
+        self.assertFalse(self.pend.exists())
+
+    def test_a_held_flag_never_closed_expires_at_the_ack_window_with_its_row(self):
+        """A held flag lasts ACK_WINDOW_S (1800 s) after the acknowledgement. Then one loud intruder.verdict row,
+        expired / stand_down, naming the acknowledgement it held on and the window (no acked_ms: the hold's row carries
+        the flag's one), and one WARN; never a silent unlink."""
+        self._ask("heads_up")
+        self._flagged("2026-09-27 12:00:00")
+        acked_at = time.time()
+        self._say("on it", 1, "2026-09-27 12:00:12")
+        self._poll(acked_at + 1799)
+        self.assertTrue(self.pend.exists())   # inside the window: still open for "handled"
+        self.assertEqual(L.ACK_WINDOW_S, 1800)
+        with mock.patch.object(L, "log") as log:
+            self._poll(acked_at + 1801)
+        self.assertFalse(self.pend.exists())
+        self.assertEqual(self._verdicts(), [("acknowledged", "hold"), ("expired", "stand_down")])
+        held, expired = self._rows("intruder.verdict")
+        a = expired["args"]
+        self.assertEqual((a["guid"], a["text"], a["chat"], a["window_s"], a["shift_id"]),
+                         (f"R-{self._testMethodName}-1", "on it", ONCALL, 1800, held["args"]["shift_id"]))
+        self.assertNotIn("acked_ms", a)
+        self.assertEqual((expired["state_after"]["meaning"], expired["state_after"]["p"]), ("acknowledged", 0.85))
+        self.assertEqual((expired["cached"], expired["source"]), (True, "stub"))
+        warns = [c for c in log.call_args_list if str(c.args[1]).startswith("WARN")]
+        self.assertEqual(len(warns), 1, log.call_args_list)
+        self.assertEqual(warns[0].kwargs["trigger"], self.trigger)
+        self.assertEqual(self.posts, [])
 
 
 class Fixture(unittest.TestCase):
