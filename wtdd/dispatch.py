@@ -17,8 +17,9 @@ row; the person's yes (wtdd/chat/listen.py verdict, pending kind "dispatch") run
 
 run(), in this order, each step a phase of <repo>/dispatch.json (OUT, written atomically, the full KEYS every time):
   1. One dispatch at a time: a module lock, taken without waiting; a second one is refused, never queued.
-  2. Refusals, before any plan: not calibrated, following, recording, a question open (pending.json younger than
-     QUESTION_S: tonight's two-eyes rule, one question at a time and the dog's own eye wins, so no second ask).
+  2. Refusals, before any plan: not calibrated (no calibration or believed pose, or DogSession.recheck: loaded from
+     disk or kept across a reconnect and not confirmed by a drag), following, recording, a question open (pending.json
+     younger than QUESTION_S: tonight's two-eyes rule, one question at a time and the dog's own eye wins, no second ask).
   3. plan.plan from the believed pose to arrival(): one plan.route row, no-go zones hard blocks. No route: a FAILED
      dispatch.decided offering only ask / ignore, the planner's own words in the thread. Phase `planned`.
   4. One dispatch.decided row: app imessage (a person said yes: choice dispatch, no model call), openrouter (JEV_API_KEY
@@ -358,10 +359,15 @@ def run(cam: str, approved: bool = False, dry: bool = False, trigger: str | None
         page.update(label=c.get("label"), pt=c["pt"])
         s, g, cal, lock, source, pose, uncal = _body(dry)
         pend = _open_question()
-        before["dog"] = {"p": pose and pose["p"], "heading_deg": pose and pose["heading_deg"], "calibrated": cal is not None and pose is not None,
+        # DogSession.recheck: the calibration was loaded from dog_cal.json on an API restart, or kept across a reconnect,
+        # and nobody has dragged the dog since; a power cycle resets the odometry frame, so the believed pose may be metres off
+        confirmed = not getattr(s, "recheck", False)
+        before["dog"] = {"p": pose and pose["p"], "heading_deg": pose and pose["heading_deg"],
+                         "calibrated": cal is not None and pose is not None and confirmed,
                          "following": bool(s and s.follow_state.get("active")), "recording": bool(s and s.rec), "pending": bool(pend)}
         if not before["dog"]["calibrated"]:
-            refuse(f"not calibrated: {uncal}")
+            refuse("not calibrated: " + (uncal if cal is None or pose is None else "the calibration was loaded from disk or kept "
+                                         "across a reconnect and not confirmed (drag the dog on the remote)"))
         if before["dog"]["following"]:
             refuse("following: the dog is on a route now (POST /dog/stop first)")
         if before["dog"]["recording"]:
