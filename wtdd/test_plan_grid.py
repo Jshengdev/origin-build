@@ -337,6 +337,8 @@ class _Harness(unittest.TestCase):
 
         self.enterContext(mock.patch.object(session.nav, "steer", steer))
         self.enterContext(mock.patch.object(session, "CAL_FILE", _TMP / "dog_cal.json"))   # never the checkout's calibration
+        self.grid_file = Path(self.enterContext(tempfile.TemporaryDirectory())) / "grid.json"
+        self.enterContext(mock.patch.object(session, "GRID_FILE", self.grid_file))   # S13: memory, the saved map; none unless a test saves one
         s = self.s = session.DogSession()
         s.cal = dict(CAL)
         s.body = types.SimpleNamespace(_avoid=True)
@@ -354,6 +356,11 @@ class _Harness(unittest.TestCase):
         """S6: the follower sees this band as the newest LiDAR window (map pixels); [] is a clear view."""
         band = [[int(p[0]), int(p[1])] for p in pts]
         self.s._live_px = lambda: band
+
+    def save(self, grid) -> None:
+        """S13: a scan saved as memory, the way POST /dog/grid {save: true} does it (the session's grid_save, one row)."""
+        self.s.grid = grid
+        self.s.grid_save()
 
     def decided(self) -> list[dict]:
         return rows_since(self.n0, "route.decided")
@@ -458,13 +465,42 @@ class FollowerLive(_Harness):
         self.assertGreaterEqual(d, CLEAR_PX, f"the follower drove to {at}, {d:.0f} px from the obstacle: {self.targets}")
 
     def test_the_same_blocker_already_in_memory_is_named_permanent(self):
+        """S13: memory is the map saved after a scan (what was there before this walk), not the live session grid: the
+        blob was in the saved scan, and the live grid this walk has not taken it yet."""
+        self.save(fx.grid(blob_px=(500, 1435)))
         self.live(fx.blob_px((500, 1435)))
-        self.run_follow([], fx.grid(blob_px=(500, 1435)))
+        self.run_follow([], fx.grid())
         snaps = [r for r in self.decided() if r["args"]["action"] == "snapped"]
         self.assertTrue(snaps, self.decided())
         for r in snaps:
             self.assertEqual(r["args"]["blocker"]["kind"], "permanent", r["args"])
+            self.assertGreater(r["args"]["blocker"]["in_memory"], 0, r["args"])
             self.assertIn("permanent", r["args"]["reason"])
+
+    def test_a_box_set_down_after_the_save_is_a_new_obstacle_after_10_live_frames(self):
+        """S13, Johnny: "if it was there before maybe its permanent but if it wasnt maybe its classified as an obstacle".
+        The live session grid takes a box in a few frames (5 to 10 a second); memory is the scan saved before it."""
+        self.save(fx.grid())
+        live = fx.grid(blob_px=(500, 1435))
+        for _ in range(10 - occupancy.THRESHOLD):
+            live.update(fx.blob_points((500, 1435)))
+        self.assertGreaterEqual(live.cell(*fx.metres(500, 1435)), 10, "the live grid has taken the box: 10 frames")
+        self.live(fx.blob_px((500, 1435)))
+        self.run_follow([], live)
+        snaps = [r for r in self.decided() if r["args"]["action"] == "snapped"]
+        self.assertTrue(snaps, self.decided())
+        for r in snaps:
+            self.assertEqual((r["args"]["blocker"]["kind"], r["args"]["blocker"]["in_memory"]), ("new obstacle", 0), r["args"])
+            self.assertIn("new obstacle", r["args"]["reason"])
+
+    def test_no_saved_map_is_a_new_obstacle_and_the_reason_says_so(self):
+        self.live(fx.blob_px((500, 1435)))
+        self.run_follow([], fx.grid(blob_px=(500, 1435)))   # the live grid has it; no map was ever saved
+        snaps = [r for r in self.decided() if r["args"]["action"] == "snapped"]
+        self.assertTrue(snaps, self.decided())
+        for r in snaps:
+            self.assertEqual((r["args"]["blocker"]["kind"], r["args"]["blocker"]["in_memory"]), ("new obstacle", 0), r["args"])
+            self.assertIn("memory: no saved map", r["args"]["reason"])
 
     def test_a_dot_walled_in_by_the_live_view_is_refused_loud(self):
         """S6b: the dot itself is free but the live view rings it: no leg reaches it, the follow is refused (a FAILED row
