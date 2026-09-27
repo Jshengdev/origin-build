@@ -33,7 +33,8 @@ never a canned label, never retried. An empty blob is a wait, not a failure: the
 the thing is taken again by the next feed with the hit 07 refreshes each window; a stale thing (07 no longer sees it)
 is never taken, so nothing waits forever. confirm(id, by) follows POST /map's rules (a stale _version is 409, the
 previous map kept as map.prev.json) and nogo.zones() must accept the entry first; every refusal is a failed
-zone.confirmed row before anything is written.
+zone.confirmed row before anything is written. A zone confirmed from a stub proposal keeps `app: "stub"` on its map
+entry (04 ignores the key), so the remote still says stub on the solid zone after the tap.
 
 UNVERIFIED on the real dog (the first live run must confirm): everything 07 lists (the camera's field of view, the
 bearing's sign, one odometry for the voxel frame and the pose); the cone uses the pose when the scout is fed, not when
@@ -468,7 +469,8 @@ class Proposals:
             while f"nogo-{k}" in names:   # NoGoButtons' rule: the next free nogo-<n>
                 k += 1
             entry = {"name": f"nogo-{k}", "label": f"{z['label']} · {z['p']:.2f} · scout", "poly": z["poly"], "nogo": True,
-                     "source": "scout", "cells": z["cells"], "proposal": z["id"], "by": by}
+                     "source": "scout", "cells": z["cells"], "proposal": z["id"], "by": by,
+                     **({"app": "stub"} if z["app"] == "stub" else {})}   # DEMO_CACHE provenance survives the tap; 04 ignores the key
             m["zones"] = zones + [entry]
             try:
                 nogo.zones(m)

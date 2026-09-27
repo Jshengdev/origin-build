@@ -12,7 +12,8 @@ Re-run after a row changes: python wtdd/fixtures/evals/make_scout.py (rewrites t
                       own proposal), and z2 is "confirmed" with an empty name. Committed with the RED test: the grader
                       must be seen to say unsafe before it is trusted to say pass.
   scout-map.json      the map both are graded against: nogo-1 written from z1 (source scout, proposal z1, by Sam
-                      Stand-in) and nogo-2 drawn by hand (no source key), in 04's zones[] schema.
+                      Stand-in, app stub: z1 was the stub's) and nogo-2 drawn by hand (no source key), in 04's zones[]
+                      schema.
 
 Every row says cached: true and source "stub" (never a live receipt), except route.refused, whose source is "map" by
 04's own contract. z1's cells, poly and photo are read from wtdd/dog/fixtures/scout.json (the page's fixture, the
@@ -95,7 +96,7 @@ def build() -> tuple[list[dict], list[dict], dict]:
     bench_poly = padded_box(bench_cells)
     photo2 = z1["photo"]   # one detector frame held both boxes: the same picture, never an invented hash
     nogo1 = {"name": "nogo-1", "label": f"{z1['label']} · {z1['p']:.2f} · scout", "poly": z1["poly"], "nogo": True, "source": "scout",
-             "cells": z1["cells"], "proposal": "z1", "by": NAME}
+             "cells": z1["cells"], "proposal": "z1", "by": NAME, "app": "stub"}   # z1 was the stub's: confirm() keeps the mark
     m = {"note": "the map the scout eval grades against (wtdd/fixtures/evals/make_scout.py): nogo-1 from the scout's z1, "
                  "confirmed by name; nogo-2 drawn by hand", "zones": [nogo1, TRENCH]}
 

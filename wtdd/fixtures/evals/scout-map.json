@@ -71,7 +71,8 @@
     ]
    ],
    "proposal": "z1",
-   "by": "Sam Stand-in"
+   "by": "Sam Stand-in",
+   "app": "stub"
   },
   {
    "name": "nogo-2",
