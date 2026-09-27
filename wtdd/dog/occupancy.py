@@ -3,7 +3,8 @@ odometry frame, so the map keeps what the dog has seen instead of only the newes
 
 Run. Body._on_lidar (wtdd/dog/body.py) hands every decoded frame to the session (wtdd/dog/session.py), whose grid
 takes it through update_frame(); GET /dog/grid serves walls(threshold) in map pixels through the same calibration as
-the LiDAR dots (to_map_px is nav.to_map vectorised), and the remote draws it under the dots. POST /dog/grid {save}
+the LiDAR dots (to_map_px is nav.to_map vectorised), with each cell's count beside it (hits, S13), and the remote draws
+it under the dots. POST /dog/grid {save}
 writes ui/grid.json (runtime, gitignored) with the calibration it was tied to (`cal`): a saved grid carries that tie
 and the page draws it through that, not the current one, because its cells are in the odometry frame of the power-on
 that made them; {clear} drops the grid after a power cycle. Offline:
@@ -250,9 +251,10 @@ def to_map_px(xy, cal: dict) -> np.ndarray:
 
 
 def response(grid: Grid | None, cal: dict | None, threshold: int, source: str | None) -> dict[str, Any]:
-    """The GET /dog/grid JSON: {n, cells_px (cell corners, plain ints), cell_px, threshold, resolution, frames,
-    frame_id, extent_m, source}; whenever n is 0 a `why` says which of no grid / not calibrated / no cell seen often
-    enough."""
+    """The GET /dog/grid JSON: {n, cells_px (cell corners, plain ints), hits, cell_px, threshold, resolution, frames,
+    frame_id, extent_m, source}; hits (S13, the heat toggle) is each served cell's count, the one threshold is applied
+    to, in cells_px's order; whenever n is 0 a `why` says which of no grid (hits absent) / not calibrated / no cell seen
+    often enough."""
     if grid is None:
         return {"n": 0, "cells_px": [], "cell_px": None, "threshold": threshold, "resolution": None, "frames": 0,
                 "frame_id": None, "extent_m": None, "source": None,
@@ -262,7 +264,8 @@ def response(grid: Grid | None, cal: dict | None, threshold: int, source: str | 
     if cal is None:
         return {"n": 0, "cells_px": [], **base, "why": "not calibrated: drag the dog to where it is (POST /dog/calibrate)"}
     w = grid.walls(threshold)
-    out = {"n": int(len(w)), "cells_px": to_map_px(w, cal).tolist(), **base}
+    out = {"n": int(len(w)), "cells_px": to_map_px(w, cal).tolist(),
+           "hits": grid.counts[grid.counts >= threshold].tolist(), **base}   # a boolean mask reads in walls()' nonzero order
     if len(w) == 0:
         out["why"] = f"0 cells seen {threshold}+ times in {grid.frames} frames"
     return out
