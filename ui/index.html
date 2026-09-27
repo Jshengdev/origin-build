@@ -403,7 +403,8 @@ function App() {
 // tiles. Neither component polls. Both draw what App already holds: GET /dog/state (1 s), GET /dog/lidar (500 ms, only
 // while connected), GET /watch (500 ms), GET /chat (3 s), and GET /map, /route-saved.json and GET /field for the counts.
 // Legend: one row per data-layer wrapper in the map svg, at a fixed y slot. A tap toggles the wrapper's class "off": CSS
-// hides it, it stays mounted, so its poll runs on and its row keeps its count and its why. An empty layer's row reads
+// hides it, it stays mounted, so its poll runs on and its row keeps its count and its why. A click anywhere on the legend
+// stops there: no path point, lamp or calibration lands under it. An empty layer's row reads
 // `0 · <why>` in amber. Gauges: one tile per served number, with a sparkline of its last SPARK_N served values kept in a
 // useRef (one sample per poll result). A tile shows the served number only: red with its age when stale or off, amber
 // with the reason when there is nothing to show, never blank. A state served from WTDD_STATE_FIXTURE wears `stub`.
@@ -424,7 +425,7 @@ const LAYERS = [   // bottom to top, as the svg draws them; n = what the layer d
 const DOG_FED = new Set(["trace", "mark", "cone", "dog"]);   // rows drawn from GET /dog/state: they wear `stub` when it is the fixture
 function Legend({ s, hidden, toggle }) {
   const stub = s.dog?.source === "stub", W = 470;
-  return html`<g class="lg" transform="translate(10 10)">
+  return html`<g class="lg" transform="translate(10 10)" onClick=${e => e.stopPropagation()}>
     <rect class="lg-bg" x="0" y="0" width=${W} height=${22 * (LAYERS.length + 1) + 12} rx="6"/>
     ${LAYERS.map((L, i) => { const n = L.n(s), off = hidden.has(L.layer); return html`<g key=${L.layer} class="lg-row" transform=${`translate(0 ${22 + 22 * i})`}>
       <text class="lg-t" x="10" y="0">${off ? "□" : "■"}</text>
