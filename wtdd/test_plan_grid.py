@@ -699,6 +699,40 @@ class OnBlue(_Harness):
         self.assertIn("moving on to dot 6", c[0]["args"]["say"])
 
 
+class NoViewZones(_Harness):
+    """B11 (the head's probe on main): LiDAR off, a two-dot line across a no-go zone gave route.decided "unchecked", then
+    dog.follow ok, straight through the zone. S12 let follow() refuse only a dot inside a zone and left a crossing line to
+    S6b's legs, which only run with a live view; with none, _as_drawn drove the line as drawn. Without a live view the dog
+    still keeps out of every zone: the line is planned around them, or refused naming the zone."""
+
+    def test_with_no_live_view_a_line_across_a_zone_is_driven_around_it(self):
+        line = [[400, 1150], [560, 1150]]   # either side of nogo-1 (x 450..510, y 1040..1250), the line straight through it
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)   # no self.live(): the LiDAR is off
+        self.assertIsNone(fs.get("error"), fs)
+        self.assertEqual(fs["reached"], [0, 1], fs)
+        self.assertEqual(self.targets[-1], tuple(line[1]), "it still gets to dot 2")
+        through = [q for q in samples([line[0], *self.targets]) if inside(q, POLY)]
+        self.assertEqual(through[:3], [], f"the dog drove through {ZONE['name']}: {self.targets}")
+        route = rows_since(self.n0, "plan.route")
+        self.assertEqual(len(route), 1, "one leg planned around the zone")
+        self.assertIn(ZONE["name"], route[0]["args"]["nogo"])
+        self.assertSays(route[0])
+
+    def test_with_no_live_view_no_way_around_a_zone_is_refused_by_name(self):
+        line = [[400, 1150], [515, 1150]]   # dot 2 sits beside nogo-1, inside its padding: no floor the body fits on there
+        self.believed[:] = line[0]
+        fs, _ = self.run_follow([], fx.grid(), path=line)
+        self.assertIn("refused", fs.get("error") or "", fs)
+        self.assertIn(ZONE["name"], fs.get("error") or "", fs)
+        self.assertEqual(self.targets, [tuple(line[0])], "nothing driven toward the zone")
+        ref = [r for r in self.decided() if r["args"]["action"] == "refused"]
+        self.assertEqual(len(ref), 1, self.decided())
+        self.assertIs(ref[0]["ok"], False)
+        self.assertIn(ZONE["name"], ref[0]["args"]["reason"])
+        self.assertSays(ref[0])
+
+
 class Stuck(_Harness):
     """S6b, live 03:41 and 03:42: "TimeoutError: waypoint 2 not reached in 30.0s (dist 131 px, err -0.8 deg)", twice: it
     aimed within 1 degree and the Go2's own avoidance held it at the gap. Johnny, 03:48: "if it decided to trust its lidar
