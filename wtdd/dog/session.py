@@ -102,7 +102,7 @@ class DogSession:
         self.objects = objects.Store(draft=objects.drafter())   # what the detector boxed, placed on the grid (GET /dog/objects)
         self._objects_lock = threading.Lock()        # one detector window at a time: the objects thread and GET /dog/objects both tick
         self._objects_ticker: threading.Thread | None = None   # started by the first objects_state()
-        self.scout = scout_zones.Proposals()         # the scout's proposed no-go zones, fed by the objects thread (GET/POST /dog/scout)
+        self.scout = scout_zones.Proposals()         # the scout's auto no-go zones, fed by the objects thread (GET/POST /dog/scout)
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -359,9 +359,9 @@ class DogSession:
                     log("objects", "WARN tick FAILED", err=err[:160])
                 last = err
 
-    # ---- the scout (wtdd/dog/scout_zones.py): each placed object asked once; a hazard is a proposed zone until a named tap
+    # ---- the scout (wtdd/dog/scout_zones.py): each placed object asked once; a hazard at p >= the threshold is on the map at once, a named tap dismisses it
     def scout_state(self) -> dict[str, Any]:
-        """GET /dog/scout: {n, proposals, failed, why, source: "session"}. A read, no row."""
+        """GET /dog/scout: {n, proposals, zones, _version, failed, why, source: "session"}. A read, no row."""
         return {**self.scout.state(), "source": "session"}
 
     def scout_feed(self) -> None:

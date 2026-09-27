@@ -29,9 +29,9 @@
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
   GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
-  GET  /dog/scout                 the scout's proposed no-go zones {n, proposals: [{id, kind, label, p, app, cells_px, poly, thumb, ...}], failed, source, why} (polled every 2 s); WTDD_SCOUT=<file> serves a fixture instead (DEMO_CACHE)
-  POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes 04's nogo zone into ui/map.json
-                                  (map.prev.json kept); 400 no name, 404 no open proposal, 409 a stale page, each with its failed row
+  GET  /dog/scout                 the scout's no-go zones {n, proposals: [{id, kind, label, p, app, cells_px, poly, thumb, ...}], zones: [the auto zones on ui/map.json], _version, failed, source, why} (polled every 2 s); WTDD_SCOUT=<file> serves a fixture instead (DEMO_CACHE)
+  POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes a proposal as 04's nogo zone into ui/map.json,
+                                  dismiss takes an auto zone (id = its name) off it (map.prev.json kept); 400 no name, 404 no open proposal or auto zone, 409 a stale page, each with its failed row
 Every tool call is already its own ledger row; the API adds one stderr log line per request and nothing else.
 CORS headers (and OPTIONS) are sent so the page also works when opened from another origin; today it is same-origin.
 The ui/index.html buttons are these tools: lights_status, identify, walk_path, lights_on, lights_off, lights_dim,
@@ -272,7 +272,7 @@ class H(BaseHTTPRequestHandler):
                 return self._json(400, {"ok": False, "error": f"action must be confirm or dismiss, got {body.get('action')!r}"})
             s = DogSession.get().scout
             try:
-                out = s.confirm(body.get("id"), body.get("by"), body.get("_version")) if body["action"] == "confirm" else s.dismiss(body.get("id"), body.get("by"))
+                out = (s.confirm if body["action"] == "confirm" else s.dismiss)(body.get("id"), body.get("by"), body.get("_version"))
                 return self._json(200, {"ok": True, **out})
             except Refused as e:   # no name, no open proposal, a stale page, a zone 04 refuses: its failed row is written
                 return self._json(e.code, {"ok": False, "error": str(e)})
