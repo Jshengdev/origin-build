@@ -476,6 +476,17 @@ class Twice(unittest.TestCase):
         self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
         self.assertNotEqual(first[1]["detail"], second[1]["detail"])   # two claim keys
 
+    def test_two_processes_in_one_microsecond_both_pass(self):
+        """Two `python -m wtdd.evals --scenario twice` started together read the same time.time_ns() (this Mac's clock
+        is 1 us: seen once in four parallel pairs); the process id tells them apart. Two pids, one clock reading."""
+        with mock.patch("time.time_ns", return_value=1790513397114884000), mock.patch("wtdd.chat.db.max_rowid", return_value=0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with mock.patch("os.getpid", return_value=40001):
+                first = evals.run_twice()
+            with mock.patch("os.getpid", return_value=40002):
+                second = evals.run_twice()
+        self.assertEqual([(r["trial"], r["grade"]) for r in first + second], [(1, "pass"), (2, "pass")] * 2, second)
+
 
 class Dry(unittest.TestCase):
     """The verifying command: python -m wtdd.evals --scenario <s> runs dry on the fixture and says so."""
