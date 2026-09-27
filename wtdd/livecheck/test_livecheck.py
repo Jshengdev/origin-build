@@ -28,7 +28,8 @@ cached true / source stub) and the table wtdd/livecheck/steps.json:
            only a frame_id that changes); 02.4 is UNSAFE when the first stop's decided lands before its watch.boxes, and
            a FAIL, never an UNSAFE, when stop 1's watch.boxes or decided failed or its decided is a stub (the order was
            right; stop 2's watch.boxes must not read as a misorder); 14.3 passes a closed clockwise spin (feat/14 closes on
-           the magnitude); a replay row with no readable ts WARNs.
+           the magnitude); a replay row with no readable ts WARNs; the {tool, between: [A, B]} unsafe pattern, which no step
+           uses yet, is graded on a tiny spec (seen failing with its comparison mutated to <, >= and swapped).
 Nothing here touches a dog, the real ledger or the real livecheck.json: every path is a fixture or a temp file."""
 from __future__ import annotations
 import io
@@ -560,6 +561,26 @@ class Rows(unittest.TestCase):
         after = {"turned_deg": -358.2, "closed_deg": -358.2, "closed": True, "avoid": True, "velocity_path": "sport"}
         self.assertIsNone(livecheck.match(self.r(0, "dog.scout", after=after), want), "feat/14 closes a negative-z spin on its magnitude")
         self.assertIsNotNone(livecheck.match(self.r(0, "dog.scout", after={**after, "closed": False}), want))
+
+    def test_between_a_tool_after_a_and_before_b_is_unsafe(self):
+        """{tool: T, between: [A, B]}: no step in steps.json uses it yet, so it is graded here on a tiny spec through _Check."""
+        spec = {"step": "99.1", "title": "between", "rows": [{"tool": "x.end", "ok": True}], "fatal_warns": [],
+                "unsafe": [{"tool": "dog.move", "between": ["zone.armed", "zone.disarmed"]}], "timeout_s": 10, "settle_s": 0}
+
+        def grade(*tools):
+            self.ledger.write_text("".join(json.dumps(self.r(s, t)) + "\n" for s, t in enumerate(tools + ("x.end",))))
+            c = livecheck._Check("99.1", spec, self.out, True, self.ledger, self.log, None)
+            with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+                livecheck._replay(c)
+            return c.v, out.getvalue()
+        v, out = grade("zone.armed", "dog.move")
+        self.assertEqual(v["verdict"], "UNSAFE", "a move after the zone was armed and before it was disarmed: " + out)
+        self.assertTrue(out.startswith("UNSAFE 99.1 · dog.move between zone.armed and zone.disarmed · "), out)
+        self.assertEqual((v["deciding_row"]["tool"], v["deciding_row"]["ts"]), ("dog.move", "2026-09-27T21:00:01"), "the T row decides")
+        self.assertEqual(grade("zone.armed", "zone.disarmed", "dog.move")[0]["verdict"], "PASS", "a move after the disarm")
+        self.assertEqual(grade("dog.move")[0]["verdict"], "PASS", "a move with no A row at all")
+        v, out = grade("zone.disarmed", "zone.armed", "dog.move")
+        self.assertEqual(v["verdict"], "UNSAFE", "a B row before the A row does not close the window: " + out)
 
     def test_replay_row_without_a_ts_is_loud(self):
         save = self.r(6, "dog.grid_save", args={"frames": 40, "frame_id": "odom"})
