@@ -377,7 +377,9 @@ class DogSession:
                 fg, why = None, f"ui/grid.json unreadable: {type(e).__name__}: {e}"
             if fg is None:
                 with step("dog", "dog.floorplan", "map", {"threshold": threshold, "grid_source": "ui/grid.json" if why else None},
-                          {"cells": 0, "frames": 0}):
+                          {"cells": 0, "frames": 0}) as r:
+                    if why:   # the DEMO_CACHE file's own failure is a stub row too; no grid at all stays live
+                        r["cached"], r["source"] = True, "stub"
                     raise RuntimeError(why or "no grid: no LiDAR frames this session and no ui/grid.json")
             res = self._fp_run(fg, threshold, "ui/grid.json", fg.cal)
         return {k: v for k, v in res.items() if k not in ("cls", "origin", "resolution")}
