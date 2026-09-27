@@ -659,6 +659,7 @@ class DogSession:
                 if not await self._unstick(target, fs, what, why):
                     raise Stuck(f"{why}, and none of {2 * len(SWEEP_DEG)} headings brought me {STUCK_M} m closer")
                 best, t_best = math.inf, time.monotonic()
+                t_wp = t_best   # a recovery that made progress restarts the clock; each needs STUCK_M of real progress, so no endless loop
                 continue
             self._set_vel(ctl["x"], 0.0, ctl["z"])
             await asyncio.sleep(0.1)
