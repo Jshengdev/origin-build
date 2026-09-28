@@ -32,6 +32,8 @@ Heights (S13, the remote's 2.5D view). A classified cell's top is its highest la
 (z_ref + layer * resolution, the z FLOOR, GROUND and TALL are in: above the floor only where z = 0 is the floor,
 UNVERIFIED below); a segment's top is the highest over the cells it took. GET /dog/floorplan serves both rounded to
 0.05 (to_px). Measured layers only: a grid with no height profile (saved before item 15) serves none, never zeros.
+profile() and m05() are shared with GET /dog/grid's top_m (occupancy.response), so a cell's height on the grid and in
+class_top_m cannot disagree.
 
 Known limit, ours by design: a shelf or a cabinet standing against a wall is grounded and straight, so it is a wall
 here (the fixture's 2 m shelf is class 1 and the tests say so). Only goal 16's label may move such a run to grey; a
@@ -89,6 +91,24 @@ class NoWall(Exception):
 def _layer(z: float, grid: occupancy.Grid) -> int:
     """The first absolute layer at or above z metres, clamped to 0..64."""
     return min(max(math.ceil((z - grid.z_ref) / grid.resolution - 1e-6), 0), 64)
+
+
+def profile(grid: occupancy.Grid, iy: np.ndarray, ix: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Cells (iy, ix) of a grid with a height profile (z_ref set) -> (has, lowest, top, z) per cell: whether its mask
+    has a layer at or above FLOOR (below is floor clutter), the lowest and the highest such layer, and z, that highest
+    in metres (z_ref + layer * resolution, the z FLOOR, GROUND and TALL are in), NaN where it has none. _plan and GET
+    /dog/grid's top_m (occupancy.response) both read it."""
+    bits = ((grid.zmask[iy, ix][:, None] >> np.arange(64, dtype=np.uint64)) & np.uint64(1)).astype(bool)   # (cells, 64)
+    bits[:, :_layer(FLOOR, grid)] = False
+    has = bits.any(axis=1)
+    top = 63 - np.argmax(bits[:, ::-1], axis=1)
+    return has, np.argmax(bits, axis=1), top, np.where(has, grid.z_ref + top * grid.resolution, np.nan)
+
+
+def m05(a) -> list:
+    """Metres to 0.05 as served (segments_top_m, class_top_m, GET /dog/grid's top_m); NaN (no measured layer) is None,
+    never 0 and never NaN (which a browser's JSON.parse refuses)."""
+    return [None if math.isnan(v) else v for v in (np.rint(np.asarray(a, dtype=np.float64) * 20) / 20).tolist()]
 
 
 def _runs(ix: np.ndarray, iy: np.ndarray, res: float) -> tuple[list[tuple], np.ndarray, list[int], int, list[np.ndarray]]:
@@ -171,11 +191,7 @@ def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
     m = grid.zmask[iy, ix]
     if grid.z_ref is None or not m.any():
         return {**out, "why": "no wall found: no height profile in this grid (saved before item 15)"}
-    bits = ((m[:, None] >> np.arange(64, dtype=np.uint64)) & np.uint64(1)).astype(bool)   # (cells, 64)
-    bits[:, :_layer(FLOOR, grid)] = False
-    has = bits.any(axis=1)
-    lowest = np.argmax(bits, axis=1)
-    top = 63 - np.argmax(bits[:, ::-1], axis=1)
+    has, lowest, top, z = profile(grid, iy, ix)   # z: each cell's highest measured layer in metres
     grounded = has & (lowest < _layer(GROUND, grid))
     segs, on, dirs, peak, takes = _runs(ix[grounded], iy[grounded], grid.resolution)
     onrun = np.zeros(len(ix), dtype=bool)
@@ -187,7 +203,6 @@ def _plan(grid: occupancy.Grid, threshold: int, tall: float) -> dict[str, Any]:
                        for x0, y0, x1, y1, n in segs]
     out["runs"] = [np.column_stack([ix[grounded][t], iy[grounded][t]]) for t in takes]
     out["full"] = [bool(tallc[grounded][t].any()) for t in takes]
-    z = grid.z_ref + top * r   # each cell's highest measured layer in metres, the z FLOOR, GROUND and TALL are in
     out["top"] = np.full(cls.shape, np.nan, dtype=np.float32)   # float32: served rounded to 0.05
     out["top"][iy[has], ix[has]] = z[has]
     if not (cls == 1).any():
@@ -299,10 +314,9 @@ def to_px(res: dict[str, Any], cal: dict) -> dict[str, Any]:
            "class_px": {name: occupancy.to_map_px(np.argwhere(res["cls"] == v)[:, ::-1] * r + o, cal).tolist()
                         for v, name in CLASS_NAMES.items()}}
     if "top" in res:   # absent, never zeros, when the grid measured no heights (its why says so)
-        m = lambda a: (np.rint(np.asarray(a, dtype=np.float64) * 20) / 20).tolist()   # noqa: E731  (metres to 0.05)
-        out.update(segments_top_m=m([res["top"][c[:, 1], c[:, 0]].max() for c in res["runs"]]),   # runs[k]: [ix, iy] rows
+        out.update(segments_top_m=m05([res["top"][c[:, 1], c[:, 0]].max() for c in res["runs"]]),   # runs[k]: [ix, iy] rows
                    # a boolean mask reads in argwhere's order: parallel to class_px
-                   class_top_m={name: m(res["top"][res["cls"] == v]) for v, name in CLASS_NAMES.items()})
+                   class_top_m={name: m05(res["top"][res["cls"] == v]) for v, name in CLASS_NAMES.items()})
     return out
 
 

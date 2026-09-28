@@ -31,14 +31,17 @@ with z_ref the first frame's origin[2]. It is band-free (the floor, a table top 
 ORed per frame with np.unique + np.bitwise_or.at, even when the band is empty. A later frame with another origin[2]
 lands on the same lattice, because its points are absolute metres; update_frame counts it in z_rebased with a WARN.
 A layer outside 0..63 is a WARN and dropped, never wrapped (z_dropped). counts and walls(threshold) are exactly what
-they were before the mask. ui/grid.json keeps it as a fourth column; a 01-era file loads with an empty mask.
+they were before the mask. ui/grid.json keeps it as a fourth column with z_ref; a 01-era file loads with an empty mask
+and no z_ref. GET /dog/grid serves top_m from it (response): each drawn cell's highest layer at or above
+floorplan.FLOOR, the dense 2.5D view the page colours and extrudes; a grid with no z_ref serves top_why instead.
 
 UNVERIFIED on the real dog (the first live frame must confirm; lidar.py's docstring has the same list): the value of
 frame_id (expected "odom"; a frame with another frame_id than the grid's is refused); whether the window `origin`
 moves with the dog over a fixed world (the fixture assumes it does; if the points are body-relative the grid smears
 into a streak); where z = 0 sits (the Z_MIN/Z_MAX band; z_ref is the first frame's origin[2], the fixture guesses
 -0.3 m); whether origin[2] moves between frames (z_rebased must stay 0 live); what the four wire bytes 8-11 carry
-(the driver skips them). The grid is in the odometry frame and smears with drift; nothing here corrects it."""
+(the driver skips them); so top_m is metres above the floor only if z = 0 is the floor, and FLOOR is floorplan's
+UNVERIFIED constant. The grid is in the odometry frame and smears with drift; nothing here corrects it."""
 from __future__ import annotations
 import argparse
 import json
@@ -251,10 +254,13 @@ def to_map_px(xy, cal: dict) -> np.ndarray:
 
 
 def response(grid: Grid | None, cal: dict | None, threshold: int, source: str | None) -> dict[str, Any]:
-    """The GET /dog/grid JSON: {n, cells_px (cell corners, plain ints), hits, cell_px, threshold, resolution, frames,
-    frame_id, extent_m, source}; hits (S13, the heat toggle) is each served cell's count, the one threshold is applied
-    to, in cells_px's order; whenever n is 0 a `why` says which of no grid (hits absent) / not calibrated / no cell seen
-    often enough."""
+    """The GET /dog/grid JSON: {n, cells_px (cell corners, plain ints), hits, top_m | top_why, cell_px, threshold,
+    resolution, frames, frame_id, extent_m, source}; hits (S13, the heat toggle) is each served cell's count, the one
+    threshold is applied to, in cells_px's order; top_m (the dense 2.5D view), in the same order, is each served cell's
+    highest measured layer at or above floorplan.FLOOR in metres rounded to 0.05 (floorplan.profile and m05, the z and
+    the rounding of /dog/floorplan's class_top_m; null where it has none), absent with top_why from a grid with no
+    height profile; whenever n is 0 a `why` says which of no grid (hits absent) / not calibrated / no cell seen often
+    enough."""
     if grid is None:
         return {"n": 0, "cells_px": [], "cell_px": None, "threshold": threshold, "resolution": None, "frames": 0,
                 "frame_id": None, "extent_m": None, "source": None,
@@ -266,6 +272,11 @@ def response(grid: Grid | None, cal: dict | None, threshold: int, source: str | 
     w = grid.walls(threshold)
     out = {"n": int(len(w)), "cells_px": to_map_px(w, cal).tolist(),
            "hits": grid.counts[grid.counts >= threshold].tolist(), **base}   # a boolean mask reads in walls()' nonzero order
+    if grid.z_ref is None:   # absent, never zeros: nothing was measured
+        out["top_why"] = "no height profile in this grid (saved before item 15): top_m not served"
+    else:
+        from . import floorplan   # here, not at the top: floorplan imports this module
+        out["top_m"] = floorplan.m05(floorplan.profile(grid, *np.nonzero(grid.counts >= threshold))[3])   # walls()' order
     if len(w) == 0:
         out["why"] = f"0 cells seen {threshold}+ times in {grid.frames} frames"
     return out

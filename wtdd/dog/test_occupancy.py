@@ -23,7 +23,10 @@ The contract under test (the grid, in the odometry frame, metres):
   to_map_px(xy, cal)        vectorised nav.to_map: map pixels through the same calibration as the dots
   response(grid, cal, threshold, source)   the GET /dog/grid JSON: {n, cells_px, cell_px, threshold, resolution,
                             frames, extent_m, source, why?}; zero cells always says why; S13 (the heat toggle): hits, each
-                            served cell's count in cells_px's order; absent with no grid
+                            served cell's count in cells_px's order; absent with no grid. top_m (the dense 2.5D view):
+                            each served cell's highest measured layer at or above floorplan.FLOOR in metres, rounded to
+                            0.05, in cells_px's order (null where it has none, never 0); absent with top_why from a grid
+                            with no height profile (z_ref None: a ui/grid.json saved before item 15)
   DogSession.lidar()        S13 (the memory toggle): beside points_px (unchanged), known, True where the point's map-pixel
                             cell on the planner's lattice holds a wall of the SAVED map (ui/grid.json at THRESHOLD, through
                             the calibration it was saved under), False where it is new, never the live session grid;
@@ -433,6 +436,97 @@ class Heights(unittest.TestCase):
         r = self.serve(None, on=False)
         self.assertEqual(r["points_px"], [])
         self.assertNotIn("z_m", r, "no frame: no heights, and the page says so")
+
+
+class CellHeights(unittest.TestCase):
+    """Johnny, 2026-09-27 (the Loom walkthrough): "lets not make it sparse and actually just display the colored stuff and
+    show it in almost a proper 2.5d view". GET /dog/grid serves every accumulated cell (cells_px, hits); top_m, parallel
+    to them, is each served cell's highest measured layer at or above floorplan.FLOOR, in metres (z_ref + layer *
+    resolution, band-free: the same z as /dog/floorplan's class_top_m), rounded to 0.05. The expectations are the
+    heights written below, never the grid's own output. The page colours and extrudes by it; nothing is drawn from it."""
+
+    Z_REF = -0.3
+    # (x, y) metres -> the z of every point put there each frame, and the top_m it must serve (None: nothing at or above FLOOR)
+    WORLD = {(0.5, 1.0): ([0.41], 0.4),                  # a low box: layer rint(0.71 / 0.05) = 14 -> 0.4
+             (1.0, 1.0): ([0.2, 0.63], 0.65),            # one column: its top is 0.63 -> layer 19 -> 0.65
+             (1.5, 1.0): ([0.0, 0.3], 0.3),              # floor clutter under it is not its top
+             (2.0, 1.0): ([0.9, 1.5], 1.5),              # a wall seen above the band: the mask is band-free, 1.5 not 0.9
+             (2.5, 1.0): ([0.02], None)}                 # counted (a band set low below) but nothing at or above FLOOR
+    ONCE = (3.0, 1.0)                                    # seen in one frame only: filtered at threshold 2, no entry
+
+    def grid(self, z_ref=Z_REF) -> occupancy.Grid:
+        g = occupancy.Grid(fx.RES, (0.0, 0.0), fx.FRAME_ID, z_ref)
+        pts = [(x, y, z) for (x, y), (zs, _) in self.WORLD.items() for z in zs]
+        for k in range(3):
+            g.update(np.array(pts + ([(*self.ONCE, 0.5)] if k == 0 else [])), z_min=-0.5)
+        return g
+
+    def want(self, r, g) -> list:
+        """top_m as it must be, in cells_px's order (walls(2) through the calibration, asserted here too)."""
+        w = g.walls(2)
+        self.assertEqual(r["cells_px"], occupancy.to_map_px(w, CAL).tolist())
+        tops = {(round(x / fx.RES), round(y / fx.RES)): t for (x, y), (_, t) in self.WORLD.items()}
+        self.assertEqual(len(w), len(tops), "every world cell and only those are served at threshold 2")
+        return [tops[(round(x / fx.RES), round(y / fx.RES))] for x, y in w]
+
+    def test_each_served_cell_carries_its_measured_top_parallel_to_cells_px(self):
+        g = self.grid()
+        r = occupancy.response(g, CAL, threshold=2, source="session")
+        self.assertIn("top_m", r, r.get("top_why"))
+        self.assertEqual(len(r["top_m"]), len(r["cells_px"]), "top_m is parallel to cells_px")
+        self.assertEqual(len(r["top_m"]), len(r["hits"]))
+        self.assertEqual(r["top_m"], self.want(r, g))
+        self.assertNotIn("top_why", r)
+        self.assertEqual(json.loads(json.dumps(r))["top_m"], r["top_m"], "plain JSON: no NaN, None is null")
+
+    def test_a_threshold_filtered_cell_has_no_entry(self):
+        g = self.grid()
+        r1, r2 = (occupancy.response(g, CAL, threshold=t, source="session") for t in (1, 2))
+        once = occupancy.to_map_px([[self.ONCE[0], self.ONCE[1]]], CAL).tolist()[0]
+        self.assertIn(once, r1["cells_px"])
+        self.assertEqual(r1["top_m"][r1["cells_px"].index(once)], 0.5, "served at threshold 1: its own height")
+        self.assertNotIn(once, r2["cells_px"])
+        self.assertEqual(len(r2["top_m"]), len(r1["top_m"]) - 1, "filtered at threshold 2: its entry goes with it")
+
+    def test_a_grid_with_no_height_profile_serves_no_top_m_and_says_why(self):
+        g = self.grid(z_ref=None)   # a 01-era grid: no z_ref, no mask
+        r = occupancy.response(g, CAL, threshold=2, source="ui/grid.json")
+        self.assertEqual(r["n"], len(self.WORLD), "the cells are still drawn")
+        self.assertNotIn("top_m", r, "no heights measured: absent, never zeros")
+        self.assertIn("no height profile", r["top_why"])
+        d = self.grid().to_dict()   # a ui/grid.json from before item 15: [ix, iy, count] rows, no z_ref
+        d.pop("z_ref")
+        d["cells"] = [c[:3] for c in d["cells"]]
+        r = occupancy.response(occupancy.Grid.from_dict(d), CAL, threshold=2, source="ui/grid.json")
+        self.assertNotIn("top_m", r)
+        self.assertIn("no height profile", r["top_why"])
+
+    def test_save_and_load_keep_the_heights(self):
+        g = self.grid()
+        with tempfile.TemporaryDirectory() as tmp:
+            g2 = occupancy.Grid.load(g.save(Path(tmp) / "grid.json"))
+        self.assertEqual(g2.z_ref, g.z_ref)
+        np.testing.assert_array_equal(g2.zmask, g.zmask)
+        r = occupancy.response(g2, CAL, threshold=2, source="ui/grid.json")
+        self.assertEqual(r.get("top_m"), self.want(r, g2), "a grid saved today serves its heights after a restart")
+
+    def test_served_for_the_session_grid_and_for_ui_grid_json(self):
+        from .. import ledger
+        from . import session
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(session, "GRID_FILE", Path(tmp) / "grid.json"), \
+                mock.patch.object(ledger, "LEDGER", Path(tmp) / "ledger.jsonl"), redirect_stderr(io.StringIO()):
+            s = session.DogSession()
+            try:
+                s.grid, s.cal = self.grid(), dict(CAL)
+                live = s.grid_px(2)
+                s.grid_save()
+                s.grid_clear("test: restart")
+                saved = s.grid_px(2)
+            finally:
+                stop(s)
+        want = self.want(live, self.grid())
+        self.assertEqual((live["source"], live.get("top_m")), ("session", want))
+        self.assertEqual((saved["source"], saved.get("top_m")), ("ui/grid.json", want))
 
 
 class CalTie(unittest.TestCase):
