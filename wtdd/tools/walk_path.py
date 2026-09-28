@@ -15,7 +15,7 @@ ARGS = {"dry": {"type": "boolean", "default": False, "doc": "true = compute and 
 def run(dry=False, source="entity", act=True, avoid=True, follower=True):
     import json
     import time
-    from ..field import MAP, walk
+    from ..field import MAP, STOP, walk
     if source != "dog":
         return walk(dry=dry, source=source)
     from ..commands import _via_api
@@ -35,8 +35,8 @@ def run(dry=False, source="entity", act=True, avoid=True, follower=True):
         a = actions.get(str(i)) or {"look": "tilt", "say": True}
         from . import dog_look, dog_say
         try:
-            out = dog_say.run(look=a.get("look", "tilt"), trigger=f"round:{run_id}:{i}", stop=i) if a.get("say", True) else dog_look.run(look=a.get("look", "tilt"))
-            done.append({"stop": i, "look": a.get("look", "tilt"), "say": bool(a.get("say", True)), "ok": True, "text": out.get("text")})
+            out = dog_say.run(look=a.get("look", "tilt"), trigger=f"round:{run_id}:{i}", stop=i, cancel=STOP.exists) if a.get("say", True) else dog_look.run(look=a.get("look", "tilt"))
+            done.append({"stop": i, "look": a.get("look", "tilt"), "say": bool(a.get("say", True)), "ok": True, "text": out.get("text"), "stopped": out.get("stopped")})
         except Exception as e:  # noqa: BLE001  (recorded on the action's own rows; the walk goes on and the result names it)
             done.append({"stop": i, "look": a.get("look", "tilt"), "say": bool(a.get("say", True)), "ok": False, "error": f"{type(e).__name__}: {str(e)[:120]}"})
             log("field", f"action at stop {i} FAILED", err=str(e)[:120])
