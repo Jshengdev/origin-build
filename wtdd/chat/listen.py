@@ -90,7 +90,23 @@ Reset, between two takes (POST /chat/reset): the API drops pending.json, writes 
 The next poll(), or the hold in progress (await_verdict, every second), reads RESET (_reset): disarmed, any question still
 open dropped, the hold ended as reset (no verdict row, nothing posted), one line, the flag deleted; the next wake starts a
 fresh round. A reset pressed mid-walk ends the next stop's hold as it starts and never stops the walk (Stop does that).
-UNVERIFIED until the first live run: a press landing during a real hold at a stop."""
+UNVERIFIED until the first live run: a press landing during a real hold at a stop.
+The reset also closes a photo share's window (the API deletes SHARE; _reset drops the one read this poll).
+
+A shared photo's replies (POST /images/share, wtdd/images.py share). SHARE (<repo>/share.json {trigger, file, by, at,
+until}) is read once per poll() (_share: in a try, a missing file is none open, never exists-then-read; one that is not
+a window, window() raising BAD_SHARE, is none open and one WARN, never the listener's end); past its until it is
+closed, with one line per window. While it is open and no question is (pending.json), a group message from an
+allowed sender that the verdict, the correction, the chat turn and the wake did not take, and that is not a bare
+command (the whole message one) nor, while armed, a message match_command finds a command in ("stop please"), is ONE
+chat.reply row {share, file, from (the raw handle: GET /images and /ledger
+redact it), text, ts (chat.db's, UTC), rowid, guid} (share_reply). Nothing is posted and no model is called. The dog's
+own posts never reach it (allowed(): its confirmed guids, and "from the dog's round", the default caption, among
+OWN_OPENERS). A reply opening like a correction ("that's ...", "its ...", "not ...") within CORRECTION_WINDOW_S of the
+dog's last posted look (a share post is not one: it opens no correction window) is a correction and is acknowledged "noted: ...", never a reply. The
+window ends at until, at the next share (a new trigger), or at POST /chat/reset (SHARE deleted). UNVERIFIED until the
+first live share: that a real reply in THE CASTLE lands in the window and is read here, and that SHARE_WINDOW_S (600 s)
+is the right length."""
 from __future__ import annotations
 import json
 import re
@@ -111,6 +127,15 @@ STATE = config.ROOT / "state.json"
 PENDING = config.ROOT / "pending.json"   # the open question from intruder_alarm ("who dis?!"): the chat's next answer decides
 RESET = config.ROOT / "chat.reset"       # POST /chat/reset's flag (its time): the next poll() or the hold in progress disarms (_reset)
 HEARTBEAT = config.ROOT / "listen.json"  # the remote's "group chat" status (GET /chat): beat(), from its own thread in run()
+SHARE = config.ROOT / "share.json"       # POST /images/share's open window {trigger, file, by, at, until}: the group's replies are kept (share_reply)
+SHARE_WINDOW_S = 600                     # how long after a shared photo the group's messages are kept as its replies
+BAD_SHARE = (ValueError, TypeError, KeyError)   # what window() raises on a share.json that is not one (UnicodeDecodeError is a ValueError)
+
+
+def window(raw: str) -> dict[str, Any]:
+    """share.json's text as {..., trigger: str, file: str, until: float}; one of BAD_SHARE when it is not a window."""
+    s = json.loads(raw)
+    return {**s, "until": float(s["until"]), "trigger": str(s["trigger"]), "file": str(s["file"])}
 PENDING_WINDOW_S = 120
 ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
@@ -123,7 +148,7 @@ Poster = Callable[[str, str, str, str | None, str | None], Any]   # (guid, trigg
 OWN_OPENERS = ("the dog is doin", "dog doin", "dog done", "on it:", "couldn't", "here's what i see", "yo, we don't know", "noted:",
                "who dis", "stranger danger", "ok, standing down", "ok, done listening",
                "living room lights", "did:", "listening for", "not sure:",
-               "heads up:", "do you know them", "ok, closed")   # how the dog's own text posts begin
+               "heads up:", "do you know them", "ok, closed", "from the dog's round")   # how the dog's own text posts begin
 REASK = "do you know them? yes or no"   # the one re-ask when a reply is unclear or read below WTDD_REPLY_THRESHOLD
 
 
@@ -140,6 +165,9 @@ class Listener:
         self.round_end = 0                  # chat.db's MAX(ROWID) when the last round ended: a wake at or below it was typed during it
         self._warned = False
         self._unlisted: set[str] = set()    # senders not in HOUSEMATES already warned about (one WARN each)
+        self.share: dict[str, Any] | None = None   # the open photo share, read once per poll() (_share)
+        self._closed: str | None = None     # the share whose window closing was already logged (one line)
+        self._kept: dict[str, int] = {}     # replies this listener kept, by share trigger
         self.oncall_handle = config.maybe("WTDD_ON_CALL_HANDLE")
         self.oncall = config.maybe("WTDD_ON_CALL_GUID") or (oncall.guid(self.oncall_handle) if self.oncall_handle else None)   # the group (S10) or the 1:1 (03)
         self.group_oncall = self.oncall == guid   # S10: the group answers its own flags and keeps its wake words and commands
@@ -293,12 +321,14 @@ class Listener:
         """POST /chat/reset's flag (RESET), read at every poll() and every second of a hold: disarm, drop any question
         still open (one opened after the press, at a stop mid-walk, would answer the next take's first message), one
         line, delete the flag. No verdict row and nothing posted: the API's chat.reset row is the receipt. True if set."""
-        if not RESET.exists():
+        try:
+            at = RESET.read_text().strip()   # read once, never exists-then-read (#90): the API writes it from its own process
+        except FileNotFoundError:
             return False
         dropped = PENDING.exists()
-        log("chat", "RESET: disarmed" + (", hold ended" if holding else "") + ", nothing posted", at=RESET.read_text().strip(),
+        log("chat", "RESET: disarmed" + (", hold ended" if holding else "") + ", nothing posted", at=at,
             was_armed=self.armed, dropped=dropped)
-        self.armed_until, self.armed_by = 0.0, None
+        self.armed_until, self.armed_by, self.share = 0.0, None, None   # the API deleted share.json: this poll keeps no reply
         PENDING.unlink(missing_ok=True)
         RESET.unlink(missing_ok=True)
         return True
@@ -412,7 +442,7 @@ class Listener:
             return False
         chat = m.get("chat") or self.guid   # a chat corrects the last photo it was shown (a row without a guid predates 03)
         looks = [r for r in ledger_rows() if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("file")
-                 and (r["args"].get("guid") or chat) == chat]
+                 and (r["args"].get("guid") or chat) == chat and r["args"].get("kind") != "share"]   # a share re-posts a photo: not the dog's look
         if not looks:
             return False
         last = looks[-1]
@@ -556,6 +586,8 @@ class Listener:
             self.chat(m)
             return
         wake = is_wake(text)
+        if not wake and not (self.armed and match_command(text)) and self.share_reply(m):   # armed, a command anywhere in it is the dog's (Stop too), as on main
+            return
         if not self.armed or (wake and self.round_end > 0):   # after a round a wake is judged by its ROWID, armed or not (a short round leaves it armed)
             if not wake:
                 return
@@ -610,6 +642,45 @@ class Listener:
         else:
             self.say(f"res:{m['guid']}", str(out)[:300])
 
+    def _share(self) -> dict[str, Any] | None:
+        """share.json, read once per poll() (a missing file is none open; POST /chat/reset deletes it from its own process).
+        Past its until: None, and one line the first time this listener sees that window closed. Not a window (bad JSON,
+        not an object, no until, trigger or file): None and one WARN per distinct error."""
+        try:
+            s = window(SHARE.read_text())
+        except FileNotFoundError:
+            return None
+        except BAD_SHARE as e:   # a corrupt window is a WARN and no reply kept, never the listener's end (run() has no restart)
+            if self._closed != f"bad:{e}":
+                self._closed = f"bad:{e}"
+                log("chat", "WARN share.json unreadable: no replies kept until the next share or Reset chat", err=f"{type(e).__name__}: {str(e)[:80]}")
+            return None
+        if time.time() < s["until"]:
+            return s
+        if self._closed != s["trigger"]:
+            self._closed = s["trigger"]
+            log("chat", "share window closed", share=s["trigger"], kept=self._kept.get(s["trigger"], 0), window_s=SHARE_WINDOW_S)
+        return None
+
+    def share_reply(self, m: dict[str, Any]) -> bool:
+        """A group message while a shared photo's window is open (self.share, before its until) and no question is open
+        (pending.json: the who-dis answer wins): one chat.reply row naming the share, and True. Nothing is posted and no
+        model is called. handle() asks only after the verdict, the correction, the chat turn and the wake have passed it
+        by; a bare command (the whole message is one) is the dog's, never a reply. The dog's own posts never reach here
+        (allowed())."""
+        s = self.share
+        if (not s or time.time() >= s["until"] or PENDING.exists() or (m.get("chat") or self.guid) != self.guid
+                or normalize(m["text"]) in command_list()):
+            return False
+        self._kept[s["trigger"]] = n = self._kept.get(s["trigger"], 0) + 1
+        append({"step": "chat.reply", "agent": "central", "tool": "chat.reply", "app": "imessage", "ok": True,
+                "args": {"share": s["trigger"], "file": s["file"], "from": m["sender"], "text": (m["text"] or "")[:1000],
+                         "ts": m.get("ts_utc"), "rowid": m.get("rowid"), "guid": m["guid"]},
+                "state_before": {"share": s["trigger"], "until": s["until"]}, "state_after": {"kept": n},
+                "response_or_error": None, "latency_ms": 0})
+        log("chat", "SHARE REPLY kept", by=HOUSEMATES.get(m["sender"]) or "a member", share=s["trigger"], chars=len(m["text"] or ""), kept=n)
+        return True
+
     def beat(self) -> None:
         """listen.json, whole or not at all (a temp file replaced): GET /chat never reads a half-written beat."""
         hb, by = HEARTBEAT, self.armed_by
@@ -633,6 +704,7 @@ class Listener:
             pass
         else:   # outside the try: a FileNotFoundError from _expired's own work is never swallowed here
             self._expired(pend)
+        self.share = self._share()
         msgs = self.read()
         for m in msgs:
             self.handle(m)

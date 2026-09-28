@@ -39,6 +39,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
   - POST `/map`'s 400 and 409 (`not saved: ...`);
   - POST `/dog/scout`'s 400, 404 and 409;
   - POST `/routines`'s 400, 404 and 409;
+  - POST `/images/share`'s 400, 404 and 409;
   - GET `/record`'s 404 (`no shift <id>: no row is stamped with it; shifts: ...`), and GET `/images`'s 404 (the same words) and 400 (`no kind '<k>': one of look, ask, scout, blob`);
   - every 404 for an unknown path or picture.
 - An unknown path is 404: `{error: "no <path>"}` on GET (the static fallback), `{error: "not found"}` on POST.
@@ -77,6 +78,13 @@ their inconsistencies: a client builds against these, and a change to one is a c
 - **POST /chat/reset needs no listener running.** It drops `pending.json` and writes the flag `chat.reset`; the listener
   acts on the flag at its next poll, or inside the hold it is in (disarmed, the hold ended, nothing posted), so GET
   `/chat` reads `armed: false` within a beat (2 s) of that. The row's `state_before.armed` is the last beat's, `null` with none.
+  It also deletes `share.json`, closing a photo share's replies window: `state_before.share` is its trigger or `null`,
+  `state_after.share` is `null`.
+- **POST /images/share keeps replies, it never answers them.** For `SHARE_WINDOW_S` (600 s) after a confirmed share, while
+  no question is open, each group message from an allowed sender that is not a wake word, a chat turn, a bare command, a
+  correction, a who-dis answer or the dog's own post is one `chat.reply` row `{args: {share, file, from, text, ts, rowid,
+  guid}, state_before: {share, until}, state_after: {kept}}` written by the listener (`from` is the raw handle; `ts` is
+  chat.db's, UTC). Nothing is posted. A second share in the same second is the same claim, refused (500).
 - `_version` is `int(mtime)` of `ui/map.json`. Send it back on POST `/map` and `/dog/scout`, or the write is a 409.
 
 ## GET
@@ -144,7 +152,11 @@ What the keys hold:
   - `signed` is null or `{by, at}`.
 - **`/record/shifts`**: `shifts` is newest first; `current` is the run in force.
 - **`/images`**: the photos the run's rows name (`wtdd/images.py`), never a folder listing; the run's rows are `/record`'s.
-  - `images[]` is `{file, url, ts, kind, stop, trigger, caption, shift_id, ok, missing, replaced}`, in time order.
+  - `images[]` is `{file, url, ts, kind, stop, trigger, caption, shift_id, ok, missing, replaced, shared, replies}`, in time order.
+  - `shared` is null, or the file's newest POST `/images/share` `{trigger, at, by, ok}` (`at`: the `chat.post` row's `ts`;
+    `ok` false when the post failed). `replies` is `[{by, text, ts}]` from the `chat.reply` rows of every share of that file,
+    in time order (`[]` with none); `by` is the housemate's first name, else `a member`; `ts` is the row's. Read from every
+    row: a photo of one run may be shared during another. A share post is never listed as a photo of its own.
   - `file` is a basename and `url` is `/pictures/<file>`: this route serves no bytes.
   - `kind`: `look` (a posted look photo, a `dog.look` frame), `ask` (a flag's or a "not sure" question's photo), `scout`
     (an auto zone's photo). `blob` lists nothing today: a `blob.labelled` row records no crop path.
@@ -200,7 +212,8 @@ What the keys hold:
 | POST | `/map/restore` | | `{ok, path_pts, stops}` | 500 | none (`map.prev.json` kept) |
 | POST | `/routines` | `{action: save \| load \| delete, name}` | `{ok, routines, loaded, _version, map}` (GET `/routines`'s body, the map's `_version`, and `map`: GET `/map`'s body, which the page holds after a load) | 400 a name not 1 to 40 characters, an empty path (save), an unknown action (no row); 404 a name not saved (the routines that exist named); 409 a load while a walk runs; 500 | `routine.saved` / `routine.loaded` / `routine.deleted`, ok or not; load writes `ui/map.json` (`map.prev.json` kept) |
 | POST | `/intruder` | `{on}` (default true) | `{ok, intruder}` | 500 | none (`intruder.on`) |
-| POST | `/chat/reset` | `{by}` | `{ok, dropped, pending_was}` (`pending_was`: the dropped question's `{trigger, kind}`, or `null`) | 500 (an unreadable `pending.json` or `listen.json`: nothing dropped) | `chat.reset`, ok or not (and the flag `chat.reset`; nothing is posted) |
+| POST | `/chat/reset` | `{by}` | `{ok, dropped, pending_was}` (`pending_was`: the dropped question's `{trigger, kind}`, or `null`) | 500 (an unreadable `pending.json`, `listen.json` or `share.json`: nothing dropped) | `chat.reset`, ok or not (and the flag `chat.reset`; `share.json` deleted; nothing is posted) |
+| POST | `/images/share` | `{file, caption?, by}` (`file`: a basename GET `/images` lists; a path is cut to its basename) | `{ok, trigger, until}` (`trigger`: `share:<file>:<epoch s>`; `until`: epoch s, 600 s on) | 400 no `by` or no `file`; 404 a file no run lists, or gone from `~/Pictures/wtdd`; 409 a question open in `pending.json`; each a plain sentence with one `chat.share.refused` row, nothing posted. 500 a failed post (gate, claim or send: `<Type>: <msg>`), no window | `chat.gate`, `chat.claim`, one `chat.post` (`kind: share`, `by`), ok or not; writes `share.json` on a confirmed post; the listener's `chat.reply` rows follow |
 | POST | `/shift` | `{name: morning \| night}` | `{ok, shift_id, started}` | 400 bad name; 500 | `shift.started`, ok or not |
 | POST | `/map` | the map, plus `_version` | `{ok, _version}` | 409 stale `_version`; 400 unrunnable path (points named); 500 | none (`map.prev.json` kept) |
 | POST | `/dog/drive` | `{x, y, z}` | `{ok, vel, hold_s}` | 500 | none; **connects** |

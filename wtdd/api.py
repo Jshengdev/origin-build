@@ -11,13 +11,16 @@
   GET  /evals                     <repo>/evals.json, every scenario's newest trials (python -m wtdd.evals --write)
   GET  /watch                     <repo>/watch.json, the detector's newest counts and boxes plus age_ms and the intruder flag
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)
-  POST /chat/reset {by}           between two takes: drops pending.json (an open "who dis?!"), writes <repo>/chat.reset (the listener disarms, ends its hold); one chat.reset row, nothing posted; {ok, dropped, pending_was}
+  POST /chat/reset {by}           between two takes: drops pending.json (an open "who dis?!") and share.json (a photo share's replies window), writes <repo>/chat.reset (the listener disarms, ends its hold); one chat.reset row, nothing posted; {ok, dropped, pending_was}
   GET  /shift                     the run in force {shift_id, source: file | WTDD_SHIFT | date} (a read, no row; wtdd/shift.py)
   POST /shift {name}              start a "morning" or "night" run: <repo>/shift.json, one shift.started row; any other name is a 400
   GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
                                   force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
-  GET  /images?shift=<id>&trigger=<t>&kind=<k>   the photos a run's rows name {shift, images: [{file, url, ts, kind, stop, ...}], n, why?} (wtdd/images.py; /record's default and 404; no bytes; a read, no row)
+  GET  /images?shift=<id>&trigger=<t>&kind=<k>   the photos a run's rows name {shift, images: [{file, url, ts, kind, stop, ..., shared, replies}], n, why?} (wtdd/images.py; /record's default and 404; no bytes; a read, no row)
+  POST /images/share {file, caption?, by}   one photo GET /images lists to the group (gated, one chat.post kind share), then <repo>/share.json: the listener keeps the group's
+                                  messages for SHARE_WINDOW_S (600 s) as chat.reply rows, shown as the photo's replies; {ok, trigger, until}; 400 no by or file, 404 a file no run lists
+                                  or gone, 409 a question open, 500 a failed post (no window), each with its row
   GET  /sessions                  [{shift_id, start, end, rows, stops, flags, signed, signed_by, stub_rows, in_force}] newest first: record.sessions(), build()'s numbers (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   GET  /routines | POST /routines {action: save | load | delete, name}   named routes: the map's path, stops and actions kept by name and loaded back (wtdd/routines.py)
@@ -315,6 +318,9 @@ class H(BaseHTTPRequestHandler):
                 f.unlink(missing_ok=True)
             log("api", "intruder watch " + ("armed" if on else "disarmed"))
             return self._json(200, {"ok": True, "intruder": on})
+        if u.path == "/images/share":   # {file, caption?, by}: one listed photo to the group, then its replies window (wtdd/images.py)
+            from . import images
+            return self._json(*images.share(self._body(), PICTURES))
         if u.path == "/chat/reset":   # {by}: a clean slate between takes; one chat.reset row, ok or not; nothing is posted
             from .chat import listen
             by = self._body().get("by")
@@ -328,10 +334,17 @@ class H(BaseHTTPRequestHandler):
                     armed = json.loads(listen.HEARTBEAT.read_text()).get("armed")
                 except FileNotFoundError:
                     armed = None   # no listener has ever beaten here: unknown, not false
-                r["state_before"] = {"pending": was, "armed": armed}
+                try:
+                    share = listen.window(listen.SHARE.read_text())["trigger"]
+                except FileNotFoundError:
+                    share = None   # no photo share open
+                except listen.BAD_SHARE as e:   # a corrupt window never blocks the reset: it is deleted below
+                    share = f"unreadable: {type(e).__name__}"
+                r["state_before"] = {"pending": was, "armed": armed, "share": share}
                 listen.PENDING.unlink(missing_ok=True)
+                listen.SHARE.unlink(missing_ok=True)   # the photo share's replies window closes with the take
                 listen.RESET.write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")   # the listener's next poll() or hold acts on it
-                r["state_after"] = {"dropped": was is not None}
+                r["state_after"] = {"dropped": was is not None, "share": None}
             return self._json(200, {"ok": True, "dropped": was is not None, "pending_was": was})
         if u.path == "/shift":   # {name: morning | night}: one shift.started row, ok or not; a bad name is the caller's 400
             try:

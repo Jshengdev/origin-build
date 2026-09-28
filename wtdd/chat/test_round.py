@@ -31,6 +31,7 @@ import requests  # noqa: E402
 from wtdd import config, field, ledger  # noqa: E402
 from wtdd.chat import listen as L  # noqa: E402
 L.RESET = _TMP / "chat.reset"   # POST /chat/reset writes <repo>/chat.reset: no listener here reads or deletes the checkout's flag
+L.SHARE = _TMP / "share.json"   # POST /images/share writes <repo>/share.json: no poll() here reads the checkout's window
 
 MAP = _TMP / "map.json"
 _m = json.loads((Path(field.__file__).parent / "fixtures" / "map_route.json").read_text())

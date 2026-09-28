@@ -46,6 +46,8 @@ morning with WTDD_SHIFT still set: the post joins, being stamped, while its unst
 signature closed) is never a stop, never a stop's ping and never a flag, so a signed page's stops, pinged cells and
 flags do not change on re-render; it is listed under after_signature, with its trigger, rowid and ts, in one red line
 on the page. The header's rows, posts and window still count it: they count what the page read, not the record. A
+share (POST /images/share, a chat.post of kind share) re-posts a photo on a press: never listed after the signature,
+never a flag or a ping, whatever its caption says. A
 refusal is an ok=false row whose error is a PermissionError or whose tool ends in .refused; every other ok=false row
 is a failure. Both are listed, never hidden.
 
@@ -139,10 +141,10 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
     cur = None
 
     def late(r: dict) -> bool:   # dog_say or intruder_alarm fired after signing with WTDD_SHIFT still set: its look is outside the window
-        return sig is not None and ok(r, "chat.post") and r["ts"] > sig["ts"]
+        return sig is not None and ok(r, "chat.post") and r["ts"] > sig["ts"] and (r.get("args") or {}).get("kind") != "share"   # POST /images/share re-posts a photo on a press
 
     def asks(a: dict) -> bool:   # a person asked: an escalate post ("who dis?!", a heads up) or the stop's "not sure:" (decide.ask_line)
-        return a.get("kind") == "escalate" or str(a.get("text") or "").startswith("not sure:")
+        return a.get("kind") == "escalate" or (a.get("kind") != "share" and str(a.get("text") or "").startswith("not sure:"))   # a share's caption asks nothing
 
     def stop(r: dict, **kv: Any) -> dict:
         stops.append({"n": len(stops) + 1, "index": None, "ts": r["ts"], "kind": None, "ok": False, "fired": None, "pitch_deg": None, "error": None,
