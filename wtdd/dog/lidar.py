@@ -52,11 +52,19 @@ voxel of them (floor and above the band too, so zmask's heights are the kept col
 and its window-cut edges are dropped and never counted, so top_m can never be raised by one; a wall's room side and
 a table (the floor is seen under its top up to FREE_Z_MAX, so its top and legs border free columns) are kept. A
 window with no free column cannot say what a surface is: nothing is kept (Body logs the WARN with the counts),
-never the unfiltered fill. WTDD_SURFACES=0 passes every window through (the old behaviour), served as "surfaces":
+never the unfiltered fill, and the follower has no live view for it (session._live_px None: it goes unchecked, never
+reads the empty window as clear). WTDD_SURFACES=0 passes every window through (the old behaviour), served as "surfaces":
 "off". UNVERIFIED on the real dog: FLOOR_LO and FREE_Z_MAX (the floor band read off one live log; a wrong band shows
 as no_floor windows and a WARN); that the fill never has a floor voxel with an empty 0.10-0.30 m under it (a filled
 column open below would be kept as free floor's neighbour); how thin the kept wall is when the dog stands in a
-doorway (only the column facing the free side is kept).
+doorway (only the column facing the free side is kept). Known to be kept and drawn as wall lines (test_surfaces pins
+both): the sides of a free stripe seen through a doorway (the fill's shadow edges border free floor: expect straight
+lines from each door jamb away from the dog to the window edge; count them on the first live run), and a filled
+block's edge that borders seen floor (a doorway's line-of-sight stripe, a floor gap before the window edge); on the
+live 19:13 window rebuilt offline that is roughly 1,700 to 2,550 kept of 6,400 cells and 15 to 35 floor-plan segments
+rather than 73. Known to be lost: a wall with no free column beside it in the same window (seen across the fill, or
+behind floor-height rings in 0.10-0.30 m) is not counted until the dog stands on clear floor next to it; on tonight's
+first window 50% to 67% of columns taller than 0.8 m were dropped.
 """
 from __future__ import annotations
 import asyncio
