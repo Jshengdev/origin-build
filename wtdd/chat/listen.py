@@ -338,10 +338,11 @@ class Listener:
         that fails (or a Ctrl-C of the listener) first halts the follower (halt(), POST /dog/stop), so the dog is never
         driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look. Stop on
         either dashboard during this round (field.stop written since the wake, or the follow ended "stopped") is no
-        end look and "dog done (stopped)"."""
+        end look and "dog done (stopped)"; written before the walk began (the picture, "dog doin"), no follow starts."""
         from .. import tools
         from ..field import STOP, walk
         t_wake = time.time()
+        pressed = lambda: STOP.exists() and STOP.stat().st_mtime >= t_wake   # noqa: E731  Stop on a dashboard since this wake
         try:
             pic = tools.call("dog_on_fire")
             self.say(f"fire:{m['guid']}", None, pic["file"])
@@ -352,6 +353,8 @@ class Listener:
         stops: list[int] = []
         source = "dog" if (config.maybe("WTDD_ROUND") or "entity") == "dog" else "entity"
         try:
+            if pressed():         # Stop during the picture or "dog doin": walk() would clear it and the follower would start
+                raise RuntimeError("stopped before the walk began")
             if source == "dog":   # the real dog walks the round: the API's follower drives it, the field follows its pose
                 import requests
                 avoid = (config.maybe("WTDD_ROUND_AVOID") or "1") not in ("0", "false", "no")   # 0 = follow without the dog's avoidance, by explicit choice
@@ -369,7 +372,7 @@ class Listener:
             if not isinstance(e, Exception):
                 raise
             walked = f"couldn't walk the path: {type(e).__name__}: {str(e)[:100]}"
-        stopped = (STOP.exists() and STOP.stat().st_mtime >= t_wake) or "follow ended with: stopped" in (walked or "")
+        stopped = pressed() or "follow ended with: stopped" in (walked or "")
         if not stops and not stopped:      # no stop reached: the look point is wherever the dog is now
             self.look_and_say(m)
         self.say(f"done:{m['guid']}", "dog done" + (" (stopped)" if stopped else "") + (f" ({walked})" if walked else ""))
