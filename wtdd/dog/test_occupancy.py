@@ -382,6 +382,59 @@ class Known(unittest.TestCase):
         self.assertEqual(self.s.lidar().get("known"), [True] * 10 + [False] * 26, "a new save is read (its mtime changed)")
 
 
+class Heights(unittest.TestCase):
+    """Johnny, live 2026-09-27 17:3x: "apply the lidar colorscheme on it and for the depth to be color calculated as
+    well". GET /dog/lidar serves z_m parallel to points_px: each drawn point's measured height, the highest z of its
+    (x, y) column inside the band, in the voxel frame's z (the same z the band, FLOOR and 15's class_top_m are in),
+    rounded to 0.05 m. Points outside the band are neither drawn nor given a height; thinning keeps the two parallel;
+    no frame means no z_m (the page says heights are not served). The page colours by it; nothing is drawn from it."""
+
+    def setUp(self):
+        from .. import ledger
+        from . import session
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for mod, name in ((ledger, "LEDGER"), (session, "CAL_FILE"), (session, "GRID_FILE")):
+            self.enterContext(mock.patch.object(mod, name, tmp / name.lower()))
+        self.enterContext(redirect_stderr(io.StringIO()))
+        self.s = session.DogSession()
+        self.addCleanup(stop, self.s)
+        self.s.cal, self.s.grid = dict(CAL), occupancy.Grid(fx.RES, (0.0, 0.0), fx.FRAME_ID, -0.3)
+        self.session = session
+
+    def serve(self, pts, on=True):
+        self.s.body = mock.Mock(**{"lidar_points.return_value": {"on": on, "n": 1, "errors": 0, "cb_errors": 0, "age_ms": 5,
+                                                                 "frame": {"id": fx.FRAME_ID}, "utlidar_pose": None,
+                                                                 "points": None if pts is None else np.array(pts)},
+                                   "state.return_value": {"position": [0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0]}})
+        return self.s.lidar()
+
+    def test_each_drawn_point_carries_its_columns_top_height_inside_the_band(self):
+        lo, hi = lidar.Z_MIN, lidar.Z_MAX
+        pts = [(0.0, 1.0, 0.2), (0.0, 1.0, 0.63),          # one column: its top in band is 0.63 -> 0.65
+               (0.5, 1.0, 0.41),                            # a low box: 0.41 -> 0.4
+               (1.0, 1.0, hi + 0.5),                         # above the band: not drawn, no height
+               (1.5, 1.0, lo - 0.05),                        # floor clutter: not drawn, no height
+               (2.0, 1.0, 0.9), (2.0, 1.0, hi + 0.3)]        # a wall whose top is above the band: 0.9 inside it
+        r = self.serve(pts)
+        self.assertIn("z_m", r, r.get("why"))
+        self.assertEqual(len(r["z_m"]), len(r["points_px"]), "z_m is parallel to points_px")
+        self.assertEqual(len(r["points_px"]), 3, "the band's three columns are drawn")
+        self.assertEqual(r["z_m"], [0.65, 0.4, 0.9], "each column's highest z inside the band, top_down's order (by x)")
+
+    def test_thinning_keeps_z_m_parallel_to_the_drawn_points(self):
+        n = lidar.MAX_POINTS * 2 + 7
+        pts = [(i * 0.01, 1.0, 0.1 + (i % 10) * 0.05) for i in range(n)]
+        r = self.serve(pts)
+        self.assertEqual(len(r["z_m"]), len(r["points_px"]), "thinned the same way")
+        want = [round(round(p[2] / 0.05) * 0.05, 2) for p in pts][::-(-n // lidar.MAX_POINTS)]
+        self.assertEqual(r["z_m"], want)
+
+    def test_no_frame_serves_no_heights(self):
+        r = self.serve(None, on=False)
+        self.assertEqual(r["points_px"], [])
+        self.assertNotIn("z_m", r, "no frame: no heights, and the page says so")
+
+
 class Replay(unittest.TestCase):
     def test_replay_cli_writes_a_png_with_the_walls(self):
         from PIL import Image
