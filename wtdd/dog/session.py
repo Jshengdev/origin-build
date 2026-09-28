@@ -40,13 +40,15 @@ is reported in skipped_stops, never waited on. UNVERIFIED on the dog: exercised 
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
-  tilt:  BalanceStand, Pose on, Euler y=+0.3 (nose down, +15 deg at 0.7 s): frame look-down.jpg (the floor) at 0.7 s,
-         1.6 s total, Euler y=-0.3 (nose up, -15 deg from 0.36 s to 0.79 s): frame look-tilt.jpg (the room) at 0.6 s,
+  tilt:  BalanceStand, Pose on, Euler y=+0.3 (nose down, +15 deg at 0.7 s): frame look-down (the floor) at 0.7 s,
+         1.6 s total, Euler y=-0.3 (nose up, -15 deg from 0.36 s to 0.79 s): frame look-tilt (the room) at 0.6 s,
          Euler 0, Pose off. Two frames per nod, both with the IMU pitch; the vision model picks the one to send. The
          pose is a nod, not a hold, and only fires as this down-then-up pair: a single cold Euler does nothing and
          re-sending it every 2 s does nothing.
   sit:   Sit, 1.8 s, frame at 48 deg up, RiseSit.
-Frames land in ~/Pictures/wtdd/look-<kind>.jpg (the API serves them at /pictures/<name>). snapshot() is the
+Frames land in ~/Pictures/wtdd/look-<kind>-<YYYYmmddTHHMMSS>-<6 hex>.jpg, a tilt's floor frame in look-down-<the same
+stamp>.jpg, named on the dog.look row (file, file_down); every consumer (the detector's -boxed copy, the chat post, the
+page) follows the row, so no look overwrites another (the API serves them at /pictures/<name>). snapshot() is the
 un-receipted newest frame behind GET /dog/frame.jpg, the remote's live view at a few frames per second. lidar(on) is
 the dog's own LiDAR band on the map behind GET/POST /dog/lidar (wtdd/dog/lidar.py), also un-receipted; every decoded
 frame also lands in the session's occupancy grid (wtdd/dog/occupancy.py) behind GET/POST /dog/grid; save and clear
@@ -88,6 +90,7 @@ import copy
 import io
 import json
 import math
+import os
 import threading
 import time
 from pathlib import Path
@@ -1297,8 +1300,9 @@ class DogSession:
         RiseSit, once. The returned pitch_deg is what the IMU measured; a miss is reported as fired=False, never hidden.
         B3: no IMU reading is pitch_deg None and, on a tilt, fired None (unverified, not retried), never a level 0.
         `tag` joins the row's args (the follower's look: by="follow")."""
-        out = PICTURES / f"look-{kind}.jpg"
-        out_down = PICTURES / "look-down.jpg"
+        stamp = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.urandom(3).hex()}"   # this look's own files: a later stop never overwrites them
+        out = PICTURES / f"look-{kind}-{stamp}.jpg"
+        out_down = PICTURES / f"look-down-{stamp}.jpg"
         with step("dog", "dog.look", "unitree", {"kind": kind, **tag}, b.state()) as r:
             attempts, pitch, pitch_down = 0, 0.0, None
             if kind == "level":

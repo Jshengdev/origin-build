@@ -4,6 +4,7 @@
   python -m wtdd.record --shift <id>                            the same record as JSON on stdout
   WTDD_LEDGER=wtdd/fixtures/ledger_shift.jsonl python -m wtdd.record --shift 2026-09-26 --html /tmp/record.html
   GET /record?shift=<id>, GET /record/shifts (wtdd/api.py)     the same JSON over HTTP; shifts() newest first, the run in force
+  GET /sessions (wtdd/api.py)                                 sessions(): one line per shift, build()'s numbers, newest first
 
 On the page: the stops (each look, what the detector and the model said, whether a person was pinged, the post that
 confirmed it, the correction that fixes it), the flags (every escalate post and every stop's "not sure: ..." question,
@@ -207,6 +208,18 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         "site": {k: site.get(k) or v for k, v in SITE.items()},
         "stub_rows": sum(r.get("cached") is True for r in members),
     }
+
+
+def sessions(rows: list[dict], current: str) -> list[dict[str, Any]]:
+    """One line per shift, newest first (shifts()), every number build()'s, so the table and each record agree; the map
+    is not read (SITE). in_force: the shift is `current` (the run in force); stub_rows: how many of its rows are stand-ins."""
+    out = []
+    for sid in shifts(rows):
+        rec = build(sid, rows, SITE)
+        out.append({"shift_id": sid, "start": rec["window"]["from"], "end": rec["window"]["to"], "rows": rec["rows"],
+                    "stops": len(rec["stops"]), "flags": len(rec["flags"]), "signed": rec["signed"] is not None,
+                    "signed_by": (rec["signed"] or {}).get("by"), "stub_rows": rec["stub_rows"], "in_force": sid == current})
+    return out
 
 
 def _e(x: Any) -> str:

@@ -1,0 +1,40 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": {
+  "shift": "2026-09-26 night",
+  "banner": "all rows are cached/stub: a fixture, not a night",
+  "stops": [
+   {
+    "stop": "s1",
+    "result": "flag: person",
+    "resolvedBy": "oncall",
+    "ackedMs": 12000
+   },
+   {
+    "stop": "s2",
+    "result": "out of place: socks",
+    "resolvedBy": null
+   },
+   {
+    "stop": "s3",
+    "result": "clear"
+   },
+   {
+    "stop": "s4",
+    "result": "missed: follower timeout"
+   }
+  ],
+  "refusals": [
+   {
+    "route": "refused-1",
+    "why": "zone nogo-1"
+   }
+  ],
+  "signature": {
+   "status": "unsigned"
+  },
+  "secondSignature": "refused as a row",
+  "honest": "A robot cannot be the OSHA competent person. No superintendent has signed one of our records yet."
+ }
+}

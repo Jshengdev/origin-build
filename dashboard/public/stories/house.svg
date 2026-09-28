@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 1540" font-family="'IBM Plex Mono', ui-monospace, monospace">
+  <!-- The Castle, first floor. Drawn from the listing plan: rooms as simple rectangles, proportions kept, no furniture.
+       Coordinates are the shared map space for map.json (path, lights, rooms) and the dot; hit-testing uses map.json rooms, this file is decoration. -->
+  <defs>
+    <style>
+      .room { fill: #f6f3ec; stroke: #262323; stroke-width: 4; stroke-linejoin: miter; }
+      .wet  { fill: #eef2f3; stroke: #262323; stroke-width: 4; }
+      .out  { fill: #f0ece2; stroke: #262323; stroke-width: 4; stroke-dasharray: 10 8; }
+      .fix  { fill: none; stroke: #262323; stroke-opacity: .35; stroke-width: 3; }
+      .lbl  { fill: #262323; font-size: 26px; letter-spacing: .06em; text-anchor: middle; }
+      .sm   { fill: #262323; fill-opacity: .55; font-size: 18px; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect x="0" y="0" width="1060" height="1540" fill="#fbfaf7"/>
+  <!-- top row -->
+  <rect class="wet"  x="30"  y="50"  width="225" height="150"/>
+  <rect class="room" x="30"  y="200" width="225" height="345"/>
+  <rect class="room" x="255" y="50"  width="345" height="495"/>
+  <rect class="fix"  x="290" y="50"  width="275" height="22"/>
+  <rect class="room" x="600" y="50"  width="270" height="270"/>
+  <rect class="room" x="600" y="320" width="110" height="75"/>
+  <rect class="wet"  x="600" y="395" width="120" height="225"/>
+  <rect class="wet"  x="720" y="395" width="150" height="225"/>
+  <rect class="room" x="870" y="50"  width="160" height="570"/>
+  <rect class="fix"  x="950" y="210" width="70"  height="60"/>
+  <rect class="fix"  x="950" y="275" width="70"  height="60"/>
+  <!-- middle row -->
+  <rect class="room" x="30"  y="545" width="225" height="495"/>
+  <rect class="room" x="255" y="545" width="365" height="495"/>
+  <rect class="fix"  x="580" y="740" width="40"  height="190"/>
+  <rect class="room" x="620" y="620" width="340" height="320"/>
+  <rect class="fix"  x="700" y="880" width="260" height="60"/>
+  <rect class="room" x="620" y="940" width="80"  height="100"/>
+  <rect class="room" x="700" y="940" width="260" height="190"/>
+  <g class="fix"><line x1="720" y1="960" x2="940" y2="960"/><line x1="720" y1="990" x2="940" y2="990"/><line x1="720" y1="1020" x2="940" y2="1020"/><line x1="720" y1="1050" x2="940" y2="1050"/><line x1="720" y1="1080" x2="940" y2="1080"/></g>
+  <!-- bottom row -->
+  <polygon class="room" points="255,1040 700,1040 700,1440 430,1440 400,1470 300,1470 255,1400"/>
+  <rect class="out"  x="700" y="1240" width="260" height="160"/>
+  <!-- labels -->
+  <text class="sm"  x="142" y="130">BATH</text>
+  <text class="lbl" x="142" y="380" transform="rotate(-90 142 380)">BEDROOM 1</text>
+  <text class="lbl" x="427" y="310">BEDROOM 2</text>
+  <text class="sm"  x="427" y="88">FIREPLACE</text>
+  <text class="lbl" x="735" y="190" transform="rotate(-90 735 190)">BEDROOM 3</text>
+  <text class="sm"  x="655" y="365">CLOSET</text>
+  <text class="sm"  x="660" y="515">BATH</text>
+  <text class="sm"  x="795" y="515">BATH</text>
+  <text class="sm"  x="950" y="450">LAUNDRY</text>
+  <text class="sm"  x="985" y="248">W</text><text class="sm" x="985" y="313">D</text>
+  <text class="lbl" x="142" y="800" transform="rotate(-90 142 800)">LIVING ROOM</text>
+  <text class="lbl" x="437" y="800">DINING ROOM</text>
+  <text class="sm"  x="600" y="840" transform="rotate(-90 600 840)">FIREPLACE</text>
+  <text class="lbl" x="790" y="760">KITCHEN</text>
+  <text class="sm"  x="660" y="995">STOR</text>
+  <text class="sm"  x="830" y="1110">UP</text>
+  <text class="lbl" x="470" y="1200">LIVING ROOM</text>
+  <text class="lbl" x="830" y="1330">ENTRY PORCH</text>
+  <text class="sm"  x="530" y="1520">the castle · first floor</text>
+</svg>

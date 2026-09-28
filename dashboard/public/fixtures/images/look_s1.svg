@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" width="640" height="400">
+<!-- DRY FIXTURE placeholder, not a photo. Replace with a real look from the ledger. -->
+<rect width="640" height="400" fill="#E9E9E3"/><rect y="290" width="640" height="110" fill="#D2D2CA"/>
+<rect x="60" y="120" width="180" height="170" rx="6" fill="#C9C9C0"/><rect x="380" y="160" width="200" height="130" rx="6" fill="#B8B8AE"/>
+<text x="20" y="36" font-family="IBM Plex Mono, monospace" font-size="14" fill="#A5342A">stub · fixture, not a photo</text>
+<text x="20" y="380" font-family="IBM Plex Mono, monospace" font-size="14" fill="#5C5D58">S1 front door, level look</text></svg>

@@ -1,0 +1,30 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": {
+  "label": "fixture grades, never site reliability",
+  "grades": [
+   {
+    "scenario": "decide",
+    "result": "pass"
+   },
+   {
+    "scenario": "escalate",
+    "result": "pass"
+   },
+   {
+    "scenario": "refuse",
+    "result": "pass"
+   },
+   {
+    "scenario": "correct",
+    "result": "pass"
+   },
+   {
+    "scenario": "escalate (mutated ledger)",
+    "result": "fail",
+    "why": "no reply to flag"
+   }
+  ]
+ }
+}
