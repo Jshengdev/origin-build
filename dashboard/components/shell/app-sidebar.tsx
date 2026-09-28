@@ -22,6 +22,7 @@ function NavItem({ entry, active, dot, count, failed }: { entry: NavEntry; activ
         className={cn(
           "h-8 text-[13px] font-medium text-muted-foreground border border-transparent",
           "data-[active=true]:border-border data-[active=true]:text-foreground",
+          entry.faded && "opacity-50",
         )}
       >
         <Link href={entry.href}>

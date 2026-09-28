@@ -41,6 +41,12 @@ export interface FloorPlanPx {
 export interface LidarPx { on: boolean; n: number; age_ms?: number | null; frame?: { id?: string } | null; points_px: XY[]; why?: string; error?: string; known?: boolean[]; z_m?: Array<number | null> }
 /** GET /routines (#71): the named routes, and the one whose path, stops and actions are the map's now (else null). */
 export interface RoutinesJson { routines: Array<{ name: string; dots: number; stops: number[]; saved_at: string }>; loaded: string | null }
+/** GET /people (#72): the group's name (WTDD_CHAT_NAME, else null with group_why) and the housemates' first names; never a handle. */
+export interface PeopleJson { group: string | null; group_why?: string; people: Array<{ name: string }>; why?: string }
+/** GET /integrations (#72): one entry each for unitree, lidar, hue, tuya, imessage, jev, openrouter and ledger. `ok` null is
+ *  unknown (never connected, switched off, no row, a stub row); `as_of` is when the evidence is from; `key_set` (jev and
+ *  openrouter only) says a key is set, never the key. Neither route connects the dog or calls the network. */
+export interface IntegrationsJson { checked_at: string; integrations: Array<{ name: string; ok: boolean | null; detail: string; as_of: string | null; key_set?: boolean }> }
 /** GET /dog/objects. */
 export interface ObjectsPx {
   n: number; windows?: number; fov_deg?: number; source?: string; why?: string; error?: string;
