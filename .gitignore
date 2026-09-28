@@ -37,6 +37,7 @@ dog_cal.json
 .claude/worktrees/
 ui/map.prev.json
 ui/grid.json
+ui/routines.json
 state.json
 intruder.on
 listen.json

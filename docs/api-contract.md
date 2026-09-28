@@ -38,6 +38,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 - Some errors are a plain sentence with no `<Type>: ` prefix:
   - POST `/map`'s 400 and 409 (`not saved: ...`);
   - POST `/dog/scout`'s 400, 404 and 409;
+  - POST `/routines`'s 400, 404 and 409;
   - GET `/record`'s 404 (`no shift <id>: no row is stamped with it; shifts: ...`);
   - every 404 for an unknown path or picture.
 - An unknown path is 404: `{error: "no <path>"}` on GET (the static fallback), `{error: "not found"}` on POST.
@@ -89,6 +90,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/shift` | | `{shift_id, source}` | 500 `{error}` |
 | GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift (a plain sentence); 500 `{error}` |
 | GET | `/record/shifts` | | `{shifts, current}` | 500 `{error}` |
+| GET | `/routines` | | `{routines: [{name, dots, stops, saved_at}], loaded}` | 500 `{error}` (a malformed `ui/routines.json`, named) |
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, cal, follow, avoid, recheck, corr, rec}` (`cal`: the calibration tie `{map, heading_deg, at}` every projection scales about, or `null` when the dog was never placed) | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
@@ -104,7 +106,16 @@ their inconsistencies: a client builds against these, and a change to one is a c
 
 What the keys hold:
 - **`/map`**: `ui/map.json` as saved, plus `_version`. The committed map also has `actions`, `zones`, `lights`, `labels`,
-  `policy`, `entity` and `note`; the page's save decides which keys exist.
+  `policy`, `entity` and `note`; the page's save decides which keys exist. `_version` only goes up: every write through
+  POST `/map` or a routine's load moves it at least 1 past the last, even within one second.
+- **`/routines`**: a named routine is the map's `path`, `stops` and `actions`, kept in `ui/routines.json` (beside the
+  map, created by the first save, gitignored). `dots` is the path's point count, `stops` the stop indices. `loaded` is
+  the first routine whose route is the map's now, or null. `{routines: [], loaded: null}` before any save. A load
+  rewrites only the route in `ui/map.json` and advances `_version` (a stale POST `/map` is a 409); follow and the chat
+  round read the map, so they walk it. POST's `map` is GET `/map`'s body after the action: after a load the page
+  replaces its map with `map` (`setSaved(r.map)`) and never adopts `_version` alone, which would keep the old route
+  drawn and let its next save write the old route back. A load is refused (409) while a walk runs (`field.json`
+  younger than 2 s): POST `/field/stop` or let it finish.
 - **`/field`** while a walk runs: `{p: [x, y], here, levels, s, total, dry, stop, source, follower}`.
 - **`/chat`**: `alive` means `age_s` < 10. `armed_by` is a name. `pending` is a bool (a question is open). `group` is
   `WTDD_CHAT_NAME` (default `wtdd test`). Every value is null with no `listen.json`, except `alive` (false) and `group`.
@@ -157,6 +168,7 @@ What the keys hold:
 | POST | `/tools/<name>` | the tool's args | `{ok, tool, args, result}` | 500 `{ok: false, tool, args, error}` | the tool's own |
 | POST | `/field/stop` | | `{ok}` | 500 | none (touches `field.stop`) |
 | POST | `/map/restore` | | `{ok, path_pts, stops}` | 500 | none (`map.prev.json` kept) |
+| POST | `/routines` | `{action: save \| load \| delete, name}` | `{ok, routines, loaded, _version, map}` (GET `/routines`'s body, the map's `_version`, and `map`: GET `/map`'s body, which the page holds after a load) | 400 a name not 1 to 40 characters, an empty path (save), an unknown action (no row); 404 a name not saved (the routines that exist named); 409 a load while a walk runs; 500 | `routine.saved` / `routine.loaded` / `routine.deleted`, ok or not; load writes `ui/map.json` (`map.prev.json` kept) |
 | POST | `/intruder` | `{on}` (default true) | `{ok, intruder}` | 500 | none (`intruder.on`) |
 | POST | `/shift` | `{name: morning \| night}` | `{ok, shift_id, started}` | 400 bad name; 500 | `shift.started`, ok or not |
 | POST | `/map` | the map, plus `_version` | `{ok, _version}` | 409 stale `_version`; 400 unrunnable path (points named); 500 | none (`map.prev.json` kept) |
