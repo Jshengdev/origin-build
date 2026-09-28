@@ -250,7 +250,7 @@ export function PathsLive() {
               </label>
             )}
             {scout.error && <p role="alert" className="mt-2 font-mono text-[12px] text-signal-alert">scout · FAILED {scout.error}</p>}
-            {scout.data?.auto_zones?.startsWith("off") && <p className="mt-2 font-mono text-[12px] text-muted-foreground">scout · auto zones {scout.data.auto_zones}</p>}
+            {scout.data?.auto_zones && scout.data.auto_zones !== "on" && <p className="mt-2 font-mono text-[12px] text-muted-foreground">scout · auto zones {scout.data.auto_zones}</p>}
             {scout.data?.failed?.map((f, i) => (
               <p key={i} role="alert" className="mt-2 font-mono text-[12px] text-signal-alert">
                 scout · {f.stage ? `${f.stage} failed` : "model call failed"}: {redact(f.error)}{f.kind ? ` · ${f.kind}` : ""}

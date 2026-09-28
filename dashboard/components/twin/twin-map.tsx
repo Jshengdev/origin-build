@@ -72,6 +72,8 @@ export interface LiveLayers {
   status?: React.ReactNode;
   /** GET /field while a lights walk runs: the field's point, its radius in map px, and each light's served level (0-100). */
   field?: { p: XY; radius: number; levels: Record<string, number> };
+  /** GET /dog/scout's person zones (feat/person-zones): temporary, yellow, the scout's photo in the hover card. */
+  personZones?: Array<{ id: string; poly: XY[]; photo?: { file: string; url: string }; expiresAt?: string }>;
   /** Each no-go zone's words and, for an auto zone, the scout's photo of it (by zone id): shown only in the hover card,
    *  never on the map (Johnny: "when you hover over it it shows an image of what it sees ... it doesn't show on the map"). */
   zoneInfo?: Record<string, { what: string; photo?: RunImage }>;
@@ -405,6 +407,14 @@ export function TwinMap({
             <polygon key={z.id} points={pts(z.polygon)} fill="var(--highlight)" fillOpacity={0.12} stroke="var(--highlight)" strokeWidth={1.5} strokeDasharray="5 4" />
           ))}
 
+          {/* a person: soft yellow, dashed, no words on the map (Johnny, 20:23: "not supposed to be that bad"); the photo on hover */}
+          {live && layers.zones && live.personZones?.map((z) => (
+            <polygon key={z.id} points={pts(z.poly)} fill="var(--highlight)" fillOpacity={0.18} stroke="var(--highlight)" strokeWidth={1.5} strokeDasharray="5 4"
+              style={{ pointerEvents: "visiblePainted", cursor: "help" }}
+              onMouseMove={(e) => { const r = wrapRef.current?.getBoundingClientRect(); if (r) setHoverZone({ id: z.id, x: e.clientX - r.left, y: e.clientY - r.top }); }}
+              onMouseLeave={() => setHoverZone(null)} />
+          ))}
+
           {layers.route && routes.map((r) => {
             const refused = r.status === "refused";
             const draw = drawRouteId === r.id;
@@ -612,6 +622,14 @@ export function TwinMap({
           })}
 
           {hoverZone && layers.zones && (() => {
+            const person = live?.personZones?.find((q) => q.id === hoverZone.id);
+            if (person) return (
+              <div data-map-ui className="pointer-events-none absolute z-10 flex w-64 flex-col gap-2 rounded-md border border-border bg-card p-2.5 text-foreground shadow-[0_8px_24px_rgb(0_0_0/0.4)]"
+                style={{ left: Math.min(hoverZone.x + 14, size.w - 270), top: Math.min(hoverZone.y + 14, size.h - 250) }}>
+                <span className="text-[13px] font-medium">person · temporary · clears ~20 s after they leave</span>
+                {person.photo ? <ZonePhoto url={person.photo.url} file={person.photo.file} /> : <span className="font-mono text-[12px] text-muted-foreground">no photo served for this zone</span>}
+              </div>
+            );
             const z = zones.find((q) => q.id === hoverZone.id), info = live?.zoneInfo?.[hoverZone.id];
             if (!z) return null;
             return (
@@ -846,6 +864,12 @@ const RELIEF = 0.3;
 /** The relief is drawn when the 2.5D switch is on and at least one memory cell has a served top at a served scale. */
 function reliefOn(live: LiveLayers | undefined, layers: Record<LayerKey, boolean>, depth: [number, number] | null) {
   return !!(live && layers.heights && layers.grid && live.pxPerM && depth && live.cells?.tops?.some((t) => t != null));
+}
+/** A person zone's photo as served; a picture that does not load says FAILED, never a broken image. */
+function ZonePhoto({ url, file }: { url: string; file: string }) {
+  const [failed, setFailed] = useState(false);
+  // eslint-disable-next-line @next/next/no-img-element
+  return failed ? <span className="font-mono text-[12px] text-signal-alert">FAILED to load {file}</span> : <img src={`/api${url}`} alt="the scout's photo of the person" onError={() => setFailed(true)} className="aspect-video w-full rounded-md object-cover" />;
 }
 /** "Scale by a wall": how much farther from the pivot the hand put the grabbed point; null for a grab on the pivot itself. */
 function stretchOf(g: { from: XY; to: XY }, pivot?: XY) {
