@@ -57,6 +57,7 @@ os.environ["WTDD_ON_CALL_HANDLE"] = "+15550002222"
 os.environ["WTDD_WAKE_SHOW"] = "0"
 
 from wtdd import evals, field  # noqa: E402
+from wtdd.chat.housemates import PRIVATE  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "evals"
 SNAPSHOT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "trials-2026-09-13.json"
@@ -683,6 +684,35 @@ class Dry(unittest.TestCase):
         self.assertEqual([r["scenario"] for r in out[:2]], ["twice", "twice"])
         self.assertEqual(out[-1]["scenario"], "correct")
         self.assertEqual(written, out)
+
+
+class NoHandles(unittest.TestCase):
+    """The repo goes public: the evals never print or write a handle. A grader's detail and why (the replier's handle,
+    the 1:1 guid any;-;<handle>) read the HOUSEMATES name or "a member", the API's redaction (housemates.PRIVATE)."""
+
+    def test_the_dry_escalate_and_correct_name_no_handle(self):
+        for s in ("escalate", "correct"):
+            with self.subTest(s):
+                rc, out = run_main(["--scenario", s])
+                self.assertEqual(rc, 0, out)
+                self.assertIsNone(PRIVATE.search(out), out)
+                self.assertIn("a member", next(l for l in out.splitlines() if l.startswith(f"| {s} | 1 |")))
+
+    def test_write_from_a_live_ledger_writes_no_handle(self):
+        rs = rows("escalate")
+        for r in rs:
+            r.update(cached=False, source="live")
+        rs[at(rs, "intruder.verdict")]["args"]["chat"] = "any;-;+15550004444"   # a reply from another 1:1: its guid lands in why
+        p, readme, ev = _TMP / "live-escalate.jsonl", _TMP / "README-private.md", _TMP / "evals-private.json"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rs))
+        shutil.copy(evals.README, readme)
+        with mock.patch.object(evals, "README", readme), mock.patch.object(evals, "EVALS", ev):
+            rc, out = run_main(["--scenario", "escalate", "--ledger", str(p), "--write"])
+        self.assertEqual(rc, 1, out)   # graded fail: the reply came from another chat
+        self.assertIsNone(PRIVATE.search(out), out)
+        for f in (readme, ev):
+            self.assertIsNone(PRIVATE.search(f.read_text()), f)
+        self.assertIn("reply came from any;-;a member", readme.read_text())
 
 
 class Unknown(unittest.TestCase):
