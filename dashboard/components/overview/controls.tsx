@@ -19,7 +19,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { ActionButton } from "@/components/wtdd";
-import { post, type LidarPx, type Scale } from "@/lib/data/api";
+import { post, type FieldJson, type LidarPx, type Scale } from "@/lib/data/api";
 import type { Result } from "@/components/live/stop";
 
 const VEL: Record<string, [number, number, number]> = { w: [0.3, 0, 0], s: [-0.3, 0, 0], a: [0, 0.3, 0], d: [0, -0.3, 0], q: [0, 0, 0.5], e: [0, 0, -0.5] };
@@ -137,5 +137,38 @@ export function ScaleSlider({ scale, busy, onCommit }: { scale: { data?: Scale; 
         onChange={(e) => setDraft(+e.target.value)} className="w-32 accent-foreground" />
       <span className="text-foreground">{s.px_per_m} px/m</span>· {s.source}{draft != null && draft !== s.px_per_m && <span className="text-foreground">→ {draft}</span>}
     </label>
+  );
+}
+
+/** Lights follow the dog (Johnny: "lights on should just be a toggle"). On starts the proximity field on the dog's believed
+ *  position, the old remote's "lights follow the dog" (POST /tools/walk_path {source: "dog", follower: false, act: false}):
+ *  wherever the dog goes, walked or driven, the lights near it come up and the ones it leaves go dark. Off is POST
+ *  /field/stop, which ends it dark. The switch shows GET /field, never an optimistic state. The on call stays open as long
+ *  as the lights follow (the tool answers when the field ends), so its answer is the result line. Needs the dog located. */
+export function LightsSwitch({ field, connected, calibrated, onResult }: { field?: FieldJson; connected: boolean; calibrated: boolean; onResult: (r: Result) => void }) {
+  const [busy, setBusy] = useState(false);
+  const on = !!field?.p;
+  const flip = async () => {
+    setBusy(true);
+    if (on) {
+      const r = await post("/field/stop", {});
+      setBusy(false);
+      if (!r.ok) onResult({ what: "Lights off", ok: false, error: r.error });
+      return;
+    }
+    const running = post("/tools/walk_path", { source: "dog", follower: false, act: false }, 6 * 3600 * 1000);   // open until the field ends
+    setTimeout(() => setBusy(false), 1500);   // then the switch follows GET /field
+    const r = await running;
+    setBusy(false);
+    const out = (r.result ?? {}) as { seconds?: number; writes?: number; errors?: number };
+    const said = [out.seconds != null && `${out.seconds} s`, out.writes != null && `${out.writes} writes`, out.errors != null && `${out.errors} errors`].filter(Boolean).join(" · ");
+    onResult(r.ok ? { what: `Lights followed the dog${said ? ` · ${said}` : ""}`, ok: true } : { what: "Lights on", ok: false, error: r.error });
+  };
+  const why = !connected ? "The dog is not connected" : !calibrated ? "Calibrate first: the lights follow where the dog is believed to be" : undefined;
+  return (
+    <ActionButton intent="secondary" size="sm" aria-pressed={on} disabled={busy || (!on && !!why)}
+      title={on ? "POST /field/stop: the lights go dark" : why ?? "POST /tools/walk_path: the lights follow the dog, walked or driven"} onClick={flip}>
+      {on ? "Lights on" : "Lights off"}
+    </ActionButton>
   );
 }

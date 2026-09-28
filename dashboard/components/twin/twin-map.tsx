@@ -70,6 +70,8 @@ export interface LiveLayers {
   /** The map's own key lines beside its legend (the route's key while walking). Each layer's served status and FAILED are
    *  the page's to show, outside the map (useLiveMap's `notes`). */
   status?: React.ReactNode;
+  /** GET /field while a lights walk runs: the field's point, its radius in map px, and each light's served level (0-100). */
+  field?: { p: XY; radius: number; levels: Record<string, number> };
   /** Each no-go zone's words and, for an auto zone, the scout's photo of it (by zone id): shown only in the hover card,
    *  never on the map (Johnny: "when you hover over it it shows an image of what it sees ... it doesn't show on the map"). */
   zoneInfo?: Record<string, { what: string; photo?: RunImage }>;
@@ -419,6 +421,24 @@ export function TwinMap({
           {live && layers.scan && !layers.memory && (live.scan?.length ?? 0) > 0 && (
             <path d={live.scan!.map((p) => { const [x, y] = P(p); return `M${x} ${y}h0`; }).join("")} stroke={MAP_INK} strokeOpacity={0.7} strokeWidth={3} strokeLinecap="round" />
           )}
+          {/* The lights as the field drives them (Johnny: "see it turn the lights on or off"): each light glows by its served level,
+              and the field's reach is a faint ring around where the dog is believed to be. Nothing drawn when no walk runs. */}
+          {live?.field && layers.lights && (() => {
+            const [fx, fy] = P(live.field.p), lv = live.field.levels;
+            return (
+              <g>
+                <defs><radialGradient id={`${hatchId}-glow`}><stop offset="0" style={{ stopColor: "var(--heat-peak)", stopOpacity: 0.95 }} /><stop offset="1" style={{ stopColor: "var(--heat-peak)", stopOpacity: 0 }} /></radialGradient></defs>
+                <circle cx={fx} cy={fy} r={live.field.radius * (view?.s ?? 1)} fill="none" stroke={MAP_INK} strokeOpacity={0.3} strokeWidth={1} strokeDasharray="4 5" />
+                {live.lamps?.map((l) => {
+                  const level = lv[l.id];
+                  if (!level) return null;   // off, or not served: no glow
+                  if (l.kind === "line" && l.pts.length === 2) { const [a, b] = P(l.pts[0]), [c, d] = P(l.pts[1]); return <line key={`glow-${l.id}`} x1={a} y1={b} x2={c} y2={d} style={{ stroke: "var(--heat-peak)" }} strokeOpacity={(level / 100) * 0.7} strokeWidth={16} strokeLinecap="round" />; }
+                  const [x, y] = P(l.pts[0]);
+                  return <circle key={`glow-${l.id}`} cx={x} cy={y} r={34} fill={`url(#${hatchId}-glow)`} opacity={level / 100} />;
+                })}
+              </g>
+            );
+          })()}
           {live && layers.lights && live.lamps?.filter((l) => l.kind === "line" && l.pts.length === 2).map((l) => {
             const [a, b] = P(l.pts[0]), [c, d] = P(l.pts[1]);
             return <line key={l.id} x1={a} y1={b} x2={c} y2={d} stroke={MAP_INK} strokeWidth={4} strokeLinecap="round" />;
@@ -540,11 +560,11 @@ export function TwinMap({
           ))}
 
           {live && layers.lights && live.lamps?.map((l) => l.kind === "dot" ? (
-            <MapPin key={l.id} at={P(l.pts[0])} size={20} label={l.label} tip={<div className="font-medium">{l.label} · placed by hand</div>}>
+            <MapPin key={l.id} at={P(l.pts[0])} size={20} label={live.field?.levels[l.id] != null ? `${l.label} · ${live.field.levels[l.id]}%` : l.label} tip={<div className="font-medium">{l.label} · placed by hand</div>}>
               <Lightbulb className="size-3" strokeWidth={1.5} />
             </MapPin>
           ) : l.pts.length === 2 && (
-            <span key={l.id} className="pointer-events-none absolute whitespace-nowrap font-mono text-[11px] leading-4" style={{ left: P(l.pts[0])[0] + 8, top: P(l.pts[0])[1] - 20, color: MAP_INK }}>{l.label}</span>
+            <span key={l.id} className="pointer-events-none absolute whitespace-nowrap font-mono text-[11px] leading-4" style={{ left: P(l.pts[0])[0] + 8, top: P(l.pts[0])[1] - 20, color: MAP_INK }}>{live.field?.levels[l.id] != null ? `${l.label} · ${live.field.levels[l.id]}%` : l.label}</span>
           ))}
 
           {live && layers.pins && live.jev?.map((j) => (

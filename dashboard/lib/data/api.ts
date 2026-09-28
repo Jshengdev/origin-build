@@ -57,6 +57,9 @@ export type Sessions = Array<{ shift_id: string; start: string | null; end: stri
  *  are not this row's. `why` counts both, or says why the list is empty. */
 export interface RunImage { file: string; url: string; ts: string; kind: "look" | "ask" | "scout" | "blob"; stop: number | null; trigger: string | null; caption: string | null; shift_id: string; ok: boolean; missing: boolean; replaced: boolean }
 export interface ImagesJson { shift: string; images: RunImage[]; n: number; why?: string }
+/** GET /field: the running lights walk's entity (wtdd/field.py), {} when none: its map point, room, each light's level
+ *  (0-100, by light id), the stop it is at, and whether it follows the dog. */
+export interface FieldJson { p?: XY; here?: string | null; levels?: Record<string, number>; stop?: number | null; source?: string; follower?: boolean; dry?: boolean }
 /** GET /dog/objects. */
 export interface ObjectsPx {
   n: number; windows?: number; fov_deg?: number; source?: string; why?: string; error?: string;
@@ -77,6 +80,7 @@ export interface MapJson {
   rooms?: Array<{ name: string; poly: XY[] }>;
   lights?: Array<{ id: string; kind: "dot" | "line"; pts: XY[]; label?: string; name?: string }>;
   /** 04's drawn zones; 19's scout zones add source "scout", `by` ("auto" or a person's name), and for an auto zone its label and p. */
+  entity?: { radius_px?: number };   // the lights walk's field radius (wtdd/field.py; 220 when unset)
   zones?: Array<{ name: string; label?: string; poly: XY[]; nogo?: boolean; source?: string; by?: string; p?: number; app?: string; proposal?: string }>;
 }
 /** GET /dog/scout (19): the scout's auto zones and proposals, the map version they were served from, failed model calls. */

@@ -16,7 +16,7 @@ import { Receipts } from "@/components/live/receipts";
 import { groupRepeats, type ReceiptRow } from "@/components/live/ledger";
 import { Camera } from "@/components/overview/camera";
 import { useAsks } from "@/components/waiting/waiting-live";
-import { LidarSwitch, ScaleSlider, useDrive } from "@/components/overview/controls";
+import { LidarSwitch, LightsSwitch, ScaleSlider, useDrive } from "@/components/overview/controls";
 import { Results, useStop, type Result } from "@/components/live/stop";
 import { age } from "@/lib/format";
 import { post, redact, redactDeep, usePoll, type ApiRow, type Chat, type DogState, type LidarPx, type Shift } from "@/lib/data/api";
@@ -28,7 +28,7 @@ const RECEIPTS = 25;
 
 
 export function OverviewLive() {
-  const { dog, lidar, scale, fresh, walking, follow, props, notes, refresh } = useLiveMap();
+  const { dog, lidar, scale, fresh, walking, follow, props, notes, field, refresh } = useLiveMap();
   const d = dog.data;
   const chat = usePoll<Chat>("/chat", 3000);
   const shift = usePoll<Shift>("/shift", 5000);
@@ -91,6 +91,7 @@ export function OverviewLive() {
         {walking && <SignalChip tone="good" mark={<LiveMark />}>Walking · waypoint {follow.i} of {follow.n}</SignalChip>}
         <span className="ml-auto flex items-center gap-2">
           <LidarSwitch lidar={lidar.data} connected={!!d?.connected} onResult={setResult} />
+          <LightsSwitch field={field.data} connected={!!d?.connected} calibrated={!!d?.calibrated} onResult={setResult} />
           {drive.button}
           {follow.stopped_at != null && (
             <ActionButton intent="secondary" disabled={busy} onClick={() => act("Resume", [["/dog/resume", {}]])}>Resume</ActionButton>
@@ -128,7 +129,13 @@ export function OverviewLive() {
               <ActionButton intent="secondary" size="sm" className="ml-auto" disabled={busy} title="POST /dog/floorplan: one run, one row"
                 onClick={() => act("Floor plan", [["/dog/floorplan", { threshold: 3 }]])}>Floor plan</ActionButton>
             </div>
-            <div className="flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground empty:hidden">{notes}</div>
+            <div className="flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground empty:hidden">
+              {field.data?.p && (   // the lights as the field drives them, while it runs
+                <span className="text-foreground">lights · {(props.live?.lamps ?? []).map((l) => `${l.label} ${field.data?.levels?.[l.id] ?? "not served"}${field.data?.levels?.[l.id] != null ? "%" : ""}`).join(" · ")}{field.data.here ? ` · in ${field.data.here}` : ""}</span>
+              )}
+              {field.error && <span className="text-signal-alert">lights · FAILED GET /field · {field.error}</span>}
+              {notes}
+            </div>
           </div>
           <Module title="Site map" meta="the house, a stand-in for a site" size="auto"
             className="[&>[data-slot=card-content]]:flex [&>[data-slot=card-content]]:flex-1">
