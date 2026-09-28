@@ -435,6 +435,34 @@ class Heights(unittest.TestCase):
         self.assertNotIn("z_m", r, "no frame: no heights, and the page says so")
 
 
+class CalTie(unittest.TestCase):
+    """Live 2026-09-27 (the scale slider): the API scales every projection about the calibration's map point (nav.to_map:
+    cal["map"] + PX_PER_M * ...). The page counter-zooms about that same point so the scan holds still while the plan
+    resizes, which is exact only if the point is served. GET /dog/state serves cal {map, heading_deg, at}, or None
+    when the dog was never placed."""
+
+    def setUp(self):
+        from .. import ledger
+        from . import session
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for mod, name in ((ledger, "LEDGER"), (session, "CAL_FILE"), (session, "GRID_FILE")):
+            self.enterContext(mock.patch.object(mod, name, tmp / name.lower()))
+        self.enterContext(redirect_stderr(io.StringIO()))
+        self.s = session.DogSession()
+        self.addCleanup(stop, self.s)
+
+    def test_state_serves_the_calibration_tie(self):
+        self.s.cal = {**CAL, "at": "2026-09-27T17:40:00"}
+        c = self.s.state()["cal"]
+        self.assertEqual(c["map"], [float(v) for v in CAL["map"]], "the point every projection scales about")
+        self.assertAlmostEqual(c["heading_deg"], round(__import__("math").degrees(CAL["heading"]), 1))
+        self.assertEqual(c["at"], "2026-09-27T17:40:00")
+
+    def test_an_unplaced_dog_serves_no_tie(self):
+        self.s.cal = None
+        self.assertIsNone(self.s.state()["cal"])
+
+
 class Replay(unittest.TestCase):
     def test_replay_cli_writes_a_png_with_the_walls(self):
         from PIL import Image
