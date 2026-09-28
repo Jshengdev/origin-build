@@ -24,7 +24,16 @@ first halts the dog, before the dark: halt(), POST /dog/stop, one dog.stop row (
 alike; the error carries dog_halted so the chat does not halt twice). While it runs, <repo>/field.json
 holds the entity's position, room, levels and current stop (atomic writes at HZ, removed at the end); the API serves it
 at GET /field and the remote draws the dot from it, whichever process runs the walk; a field.json younger than BUSY_S
-means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved. Stops: map.json `stops` is a list
+means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved.
+One exception: a dog walk with the follower (the chat's round, the dashboard's dog walk) that finds the dashboard's Lights
+follow (source="dog", follower=False) live touches <repo>/field.yield (never field.stop, which the round reads as Stop
+pressed) and waits up to YIELD_S for its field.json to be removed (not merely older than BUSY_S): the lights walk ends at
+its next tick with "yielded to the round" and yielded=true in its row, drains its in-flight writes, removes field.json and
+skips its end dark (the taker's dark start follows at once), then the taker runs. Still live after YIELD_S (an API process
+on older code): refused as before. Still there but stale after YIELD_S (a killed process's leftover, or a light write
+slower than YIELD_S, which can then land after the taker's dark start): a WARN, and the taker runs. UNVERIFIED on the
+real dog and lights: the hand-off with the lights walk in the API process and the round in the listener. Lights pressed
+during a round is still refused. Stops: map.json `stops` is a list
 of path point indices (double-click a path point on the remote); at each one the walk pauses and calls on_stop(index,
 point, room), the lights hold, then it resumes. The chat's wake sequence passes its look-and-say as on_stop; with no
 stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=dog in the chat): the entity is the
@@ -55,6 +64,8 @@ HZ = 10.0
 FIELD = ROOT / "field.json"   # the running walk: p, here, levels, s, total, stop; written at HZ, removed at the end (GET /field)
 STOP = ROOT / "field.stop"    # POST /field/stop touches it: the running walk ends at its next tick (lights off, row written)
 BUSY_S = 2.0                  # a field.json younger than this means a walk is live somewhere (the remote or the chat): refuse a second
+YIELD = ROOT / "field.yield"  # a round's walk touches it: a running lights-only walk (follower=False) ends at its next tick, lit
+YIELD_S = 5.0                 # how long that round waits for the lights walk's field.json to be removed; still live after it: refused as busy
 
 
 def inside(p, poly) -> bool:
@@ -154,6 +165,15 @@ def _dog() -> dict[str, Any]:
     return d
 
 
+def _live() -> dict[str, Any] | None:
+    """The running walk's field.json plus its age, None when no walk is live (no file, or one older than BUSY_S)."""
+    try:
+        age = time.time() - FIELD.stat().st_mtime
+        return {**json.loads(FIELD.read_text()), "age": age} if age < BUSY_S else None
+    except FileNotFoundError:   # no walk, or it ended between the two reads
+        return None
+
+
 def halt(why: str, agent: str = "field") -> None:
     """POST /dog/stop when a dog walk is gone (it raised, or never began): the API cancels the follower and halts the
     dog, walking or held at a stop. One dog.stop row; a stop that fails is that row FAILED and a WARN, never raised."""
@@ -178,7 +198,8 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     POST /dog/resume), and the walk ends when the follower is done or failed (the error is in the row); a walk that
     raises in its loop halts the dog (halt()) before it goes dark.
     source="dog", follower=False: the lights simply follow the dog wherever it is driven (the controller, the keys),
-    no route and no stops, until POST /field/stop (or STOP appears); the row says how long and how many writes."""
+    no route and no stops, until POST /field/stop (or STOP appears), or until a dog walk with the follower asks it to
+    yield (YIELD appears: it ends lit, the taker's dark start is next); the row says how long, how many writes, yielded."""
     if source not in ("entity", "dog"):
         raise ValueError(f"source must be entity or dog, got {source!r}")
     m = json.loads(MAP.read_text())
@@ -189,9 +210,22 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     from .nogo import refuse                       # lazy: nogo imports this module
     refuse(pts, "field", m, dots_only=True)        # a dot inside a drawn no-go zone (S12: a line crossing one is routed around): one route.refused row, then ValueError; nothing moves, nothing published
     stops = sorted({int(i) for i in m.get("stops", []) if 0 <= int(i) < len(pts)})
-    if FIELD.exists() and time.time() - FIELD.stat().st_mtime < BUSY_S:   # another process's walk is live: refuse, never interleave
-        raise RuntimeError(f"a walk is already running ({FIELD.name} written {round(time.time() - FIELD.stat().st_mtime, 1)} s ago)")
+    live = _live()
+    if live and live.get("follower") is False and source == "dog" and follower and not dry:   # Lights on, a round's walk: it takes over
+        YIELD.write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")   # never STOP: the chat's round reads a STOP since its wake as Stop pressed
+        t_y = time.monotonic()
+        try:
+            while FIELD.exists() and time.monotonic() - t_y < YIELD_S:   # gone, not merely stale: its last writes are drained
+                time.sleep(0.05)
+        finally:
+            YIELD.unlink(missing_ok=True)
+        gone, live = not FIELD.exists(), _live()   # still there but stale after YIELD_S: a killed process's leftover, or a write slower than YIELD_S
+        log("field", "the lights walk yielded" if gone else "WARN the lights walk did not yield" if live else
+            "WARN the lights walk's field.json outlived YIELD_S, going ahead", waited_s=round(time.monotonic() - t_y, 2))
+    if live:   # another process's walk is live: refuse, never interleave
+        raise RuntimeError(f"a walk is already running ({FIELD.name} written {round(live['age'], 1)} s ago)")
     STOP.unlink(missing_ok=True)
+    YIELD.unlink(missing_ok=True)
     for L in lights:
         (ax, ay), (bx, by) = L["pts"][0], L["pts"][-1]     # a dot's midpoint is the dot itself
         L["room"] = room_of(((ax + bx) / 2, (ay + by) / 2), rooms)
@@ -242,6 +276,7 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
         stops_done: list[int] = []
         pending_stops = list(stops)
         follow_error: str | None = None
+        yielded = False
         try:
           while True:
             if source == "dog":
@@ -295,6 +330,10 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
             if STOP.exists():
                 log("field", "stopped by request", after_s=round(time.monotonic() - t0, 1))
                 break
+            if not follower and YIELD.exists():          # a round's walk is taking over: end now, lit; its dark start is next
+                log("field", "yielded to the round", after_s=round(time.monotonic() - t0, 1))
+                yielded = True
+                break
             if source == "dog" and follower:
                 if not f.get("active"):
                     follow_error = f.get("error")
@@ -308,11 +347,11 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
               e.dog_halted = True                        # the caller (the chat's round) does not halt it again
           raise
         finally:                                         # a failed read or a Ctrl-C too: never leave a light lit
+          for lid in list(inflight):                     # drained before field.json goes: a walk taking over never meets a late write
+              settle(inflight.pop(lid), lid)
           _publish(None)
-          for lid, fut in list(inflight.items()):
-              settle(fut, lid)
-          for L in lights:                               # ends dark, and wait for it
-              if not dry:
+          for L in lights:                               # ends dark, and wait for it (yielded: the round's dark start does it)
+              if not dry and not yielded:
                   writes += 1
                   inflight[L["id"]] = pool.submit(_write, L, 0)
           for lid, fut in inflight.items():
@@ -321,7 +360,7 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
         latency = {_label(L): round(1000 * sum(lat[L["id"]]) / len(lat[L["id"]])) if lat[L["id"]] else None for L in lights}
         out = {"seconds": round(time.monotonic() - t0, 1), "dark_ms": dark_ms, "writes": writes, "errors": errors,
                "rooms": rooms_seen, "stops": stops_done, "latency_ms": latency, "lights": [_label(L) for L in lights],
-               "source": source, "follower": follower, "follow_error": follow_error}
+               "source": source, "follower": follower, "follow_error": follow_error, "yielded": yielded}
         r["state_after"] = out
         if follow_error:
             raise RuntimeError(f"the dog's follow ended with: {follow_error} (lights walked {out['seconds']} s, {writes} writes)")

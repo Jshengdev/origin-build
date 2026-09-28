@@ -43,6 +43,7 @@ intruder.on
 listen.json
 pending.json
 field.stop
+field.yield
 chat.reset
 shift.json
 
