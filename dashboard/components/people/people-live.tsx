@@ -21,9 +21,12 @@ export function PeopleLive() {
   return (
     <div className="flex flex-col gap-4">
       <Module title={p?.group.name ? redact(p.group.name) : "The group chat"} size="auto"
-        meta={p ? `${p.group.members} ${p.group.members === 1 ? "member" : "members"}${p.group.last_ts ? ` · last message ${when(p.group.last_ts)}` : " · no message yet"}` : undefined}
+        meta={p ? `${p.group.members} ${p.group.members === 1 ? "member" : "members"}${p.people.some((m) => m.is_me) ? " besides you" : ""}${p.group.last_ts ? ` · last message ${when(p.group.last_ts)}` : " · no message yet"}` : undefined}
         loading={!p && !people.error} error={people.error ? `FAILED GET /people · ${redact(people.error)}` : undefined}>
-        <CastleChip chat={chat.data} error={chat.error ? redact(chat.error) : undefined} />
+        <div className="flex flex-col gap-1.5">
+          <CastleChip chat={chat.data} error={chat.error ? redact(chat.error) : undefined} />
+          {p?.group_why && <span className="font-mono text-[12px] text-muted-foreground">no group · {redact(p.group_why)}</span>}
+        </div>
       </Module>
       {p && (members.length ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -40,7 +43,7 @@ export function PeopleLive() {
             </Module>
           ))}
         </div>
-      ) : <p className="text-[13px] text-muted-foreground">No member served for this group.</p>)}
+      ) : <p className="text-[13px] text-muted-foreground">{redact(p.why ?? "No member served for this group.")}</p>)}
     </div>
   );
 }

@@ -47,10 +47,9 @@ export interface RoutinesJson { routines: Array<{ name: string; dots: number; st
 /** GET /people (feat/people-cards): the group (its name, member count, last message) and one line per member: an opaque id,
  *  a label ("you", a first name from the local ui/people-names.json of people who agreed, else "member N"; never a
  *  handle), messages in the last 24 h, last seen, and replies to the dog. chat.db unreadable is a 500 with the error. */
-export interface PeopleJson {
-  group: { name: string | null; members: number; last_ts: string | null };
-  people: Array<{ id: string; label: string; is_me: boolean; messages_24h: number; last_ts: string | null; replies_to_dog: number }>;
-}
+export interface PeopleCard { id: string; label: string; is_me: boolean; messages_24h: number; last_ts: string | null; replies_to_dog: number }
+/** `members` excludes you; `group_why` when WTDD_CHAT_NAME is unset; `why` when the group has no participants. */
+export interface PeopleJson { group: { name: string | null; members: number; last_ts: string | null }; group_why?: string; people: PeopleCard[]; why?: string }
 /** GET /integrations (#72): one entry each for unitree, lidar, hue, tuya, imessage, jev, openrouter and ledger. `ok` null is
  *  unknown (never connected, switched off, no row, a stub row); `as_of` is when the evidence is from; `key_set` (jev and
  *  openrouter only) says a key is set, never the key. Neither route connects the dog or calls the network. */
