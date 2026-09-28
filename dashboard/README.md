@@ -1,37 +1,37 @@
-# What the Dog Doin: remote v2 (mockup)
+# The dashboard
 
-A Next.js mockup of the remote v2, built from `../wtdd-product-rig` (spec, contracts, fixtures) on the design system in `../wtdd-design-system` (tokens, shadcn theme, wrappers). It runs on dry fixtures only, with no on-screen notice. **Do not film or pitch it** until it reads the real API.
+The remote Johnny runs and films at http://127.0.0.1:3970: one page per job, every value read from this repo's API
+(`wtdd/api.py`) through the app's own `/api/*` proxy (`app/api/[...path]/route.ts`, which reads `WTDD_API` on every
+request). It never connects the dog on load; nothing posts until a click, a drag's release or a key.
 
 ```bash
-pnpm install
-pnpm dev          # http://localhost:3000
-pnpm storybook    # http://localhost:6310, every primitive in light and dark (toolbar: Theme)
-pnpm build && pnpm lint
+python -m wtdd.api                                    # the API, :7788 (from the repo root)
+cd dashboard && pnpm install && pnpm build
+WTDD_API=http://127.0.0.1:7788 pnpm start -p 3970     # the dashboard, http://127.0.0.1:3970
+pnpm storybook                                        # every primitive and the map's views, on fixture frames (:6310)
 ```
 
-## Where things are
-
-| Path | What |
-|---|---|
-| `app/globals.css` | `wtdd-design-system/shadcn/app/globals.css`, plus the two motion classes at the bottom |
-| `components/ui/*` | Stock shadcn/ui. Never edited (and not linted) |
-| `components/wtdd/*` | Brand wrappers from the DS package, plus Module loading/error states, `Sparkline`, `Gauge` |
-| `components/twin/*` | TwinMap: canvas occupancy grid on the heat ramp, SVG geometry, HTML pins. `map-pin.tsx` is the DevicePin |
-| `components/shell/*` | Sidebar (232px, 64px rail under 1024px), top bar, G-then-key shortcuts |
-| `components/overview/*` | Overview: map, body vitals, roster, last look, receipts with the item 26 timeline and row drawer |
-| `lib/data/` | `types.ts` and `data-source.ts` from the contracts, `FixtureDataSource`, the fixtures. `getDataSource()` is the one switch point for `ApiDataSource` |
-| `stories/` | Storybook: Foundations, Primitives, Map, Patterns |
-
-## Dev overlay
-
-[plumbkit](https://www.npmjs.com/package/plumbkit) is mounted in dev (`components/shell/plumb-devtools.tsx`, and the Storybook preview decorator): alignment guides `A`, padding `P`, measure `M`. It is tree-shaken out of production builds. Drag the bar off the sidebar's Settings item; the spot persists.
-
-## Shortcuts
-
-`G` then `O M P U I R S` goes to Overview, Monitoring, Paths, Routines, Images, Record, Settings. On Overview, `W` walks the route and `X` stops (both log stub rows; nothing reaches the dog). Buttons do not show key hints. On the map, arrows pan, `+`/`-` zoom, `0` resets.
+An API that does not answer is a 502 naming the address and the cause, and the page shows it as a red FAILED line.
 
 ## Pages
 
-Overview; Waiting (everything waiting on a person: the dog's questions, proposed zones, routines assigned to people, @mentions; count in the sidebar); Live (only while a session runs; watchers shown; Stop asks where the dog goes: home, a saved place, or stay); Driving (click out a path, Go; traces stream under the map); Routines (cards; detail with Edit/Save; assign to the robot or a person); Sessions; Monitoring; Images (a card per routine, a page per routine to compare nights, a page per point with dates, drag-to-compare, and notes with @mentions); People (roles: On call, Driver, Editor, Viewer); Settings.
+| page | reads | does |
+|---|---|---|
+| Overview | `/dog/state`, `/dog/grid`, `/dog/floorplan`, `/dog/lidar`, `/dog/objects`, `/dog/blobs`, `/dog/scale`, `/map`, `/ledger`, `/chat`, `/shift`, `/dog/frame.jpg` | the camera; the map (house plan, memory and live scan on one depth ramp, the route, decisions); Stop and Walk; drive (W A S D Q E, S1's rules) and LiDAR switches; the map tools bar: Calibrate (drag the dog's place and heading, Place the dog, the scale slider, Scale by a wall) and Floor plan; the receipts, repeats grouped |
+| Paths | `/map`, the map routes above | draw the dots, the stops and the no-go zones; save with the map's version; Ask here on a stop; walk and stop |
+| Waiting | `/ledger`, `/chat` | the dog's asks to the group and what followed |
+| Record | `/record/*`, `/shift`, `/evals` | start a run, its morning page and report, one signature |
+| Routines, Settings, Live, Driving, Sessions, Monitoring, Images, People | none yet | marked "Sample · not live yet", greyed and inert, until each reads the API |
 
-Routines, sessions, captures, and the live session are client-side mockup state (`components/shell/app-state.tsx`, seeded from `lib/mock/`). A reload resets them. Nothing is shown as a stub; every value is still a fixture.
+## Where things are
+
+| path | what |
+|---|---|
+| `components/overview/`, `components/paths/`, `components/waiting/`, `components/record/` | the live pages |
+| `components/twin/` | the map: `twin-map.tsx` (canvas cells and scan, SVG geometry, HTML pins), `use-live-map.tsx` (the polls, shaped into the map's props), `heat.ts` (the heat and depth ramps) |
+| `components/live/` | Stop, the receipts and their lines (`ledger.ts`) |
+| `lib/data/api.ts` | the polls, the POSTs (never throw; the reason comes back), the served types, redaction |
+| `components/ui/` | stock shadcn/ui, never edited; `components/wtdd/` the brand wrappers |
+| `stories/` | Storybook; `stories/fixtures/live-frame.json` is a labelled fixture frame |
+
+Built on the mockup in [teriyapi/wtdd-remote-v2](https://github.com/teriyapi/wtdd-remote-v2) (design system, shadcn theme, Storybook), then wired to this API there over PRs #1-#31; this folder is that work at 92ab4ae.
