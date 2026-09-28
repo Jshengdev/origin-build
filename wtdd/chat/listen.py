@@ -29,7 +29,8 @@ demo in Johnny's order (dog_on_fire picture, "dog doin", the walk with a look-an
 photo, one sentence from the vision model posted with the photo, and with WTDD_ALARM=1 "who dis?!" when a person is in frame
 and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. The round
 blocks the poll, so a wake typed while it ran is read after "dog done": one whose chat.db ROWID is at or below
-MAX(ROWID) when the round ended starts nothing (one WARN); one typed after "dog done" starts the next. WTDD_AGENT=1
+MAX(ROWID) when the round ended starts nothing (one WARN); one typed after "dog done" starts the next, armed or not (a
+round shorter than WTDD_LISTEN_S leaves the chat armed; a wake there is not a re-arm). WTDD_AGENT=1
 sends an armed message that is not a fixed command to wtdd.agent.ask with the chat context. A failed command is
 reported to the group as its class and message, never faked; a done one as its text, else the tool's result, else
 the raw dict (a registry tool answers {"result": ...}), never an empty message. Live wake demo receipt (2026-09-13 03:0x, in
@@ -538,7 +539,7 @@ class Listener:
             self.chat(m)
             return
         wake = is_wake(text)
-        if not self.armed:
+        if not self.armed or (wake and self.round_end > 0):   # after a round a wake is judged by its ROWID, armed or not (a short round leaves it armed)
             if not wake:
                 return
             if 0 < m.get("rowid", 0) <= self.round_end:   # typed while the last round ran, read only after its "dog done"
