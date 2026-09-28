@@ -37,7 +37,7 @@ import time
 from typing import Any
 
 from . import config, ledger
-from .chat.housemates import HOUSEMATES
+from .chat.housemates import HOUSEMATES, PRIVATE
 from .config import ROOT
 from .decide import JEV_APP
 
@@ -66,7 +66,7 @@ def _row(r: dict | None, what: str) -> dict[str, Any]:
     if r is None:
         return {"ok": None, "detail": f"no {what} row in the newest {TAIL} ledger rows", "as_of": None}
     stub = "stub" in (r.get("source"), r.get("app"))
-    said = "ok" if r.get("ok") else f"FAILED: {str(r.get('response_or_error'))[:160]}"
+    said = "ok" if r.get("ok") else f"FAILED: {PRIVATE.sub('a member', str(r.get('response_or_error')))[:160]}"   # redacted before cut
     return {"ok": None if stub else bool(r.get("ok")), "as_of": r.get("ts"),
             "detail": f"{r.get('tool')} via {r.get('app')} ({'stub, DEMO_CACHE: not a live call' if stub else 'live'}): {said}"}
 
