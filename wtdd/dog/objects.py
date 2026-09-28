@@ -21,7 +21,9 @@ right of the optical axis positive. The ray starts at the dog's odometry positio
 (odometry yaw is counter-clockwise positive, so the camera's right is a negative angle) and is sampled every half cell
 up to MAX_RANGE_M; the pin is the first sample whose cell (np.rint onto the grid's lattice, exactly Grid.cell's rule)
 was seen threshold+ times, at that cell's lattice point (the dots' convention), projected to map pixels through the same
-calibration as the dots (occupancy.to_map_px). The store matches a box to an object with the same label whose pin is
+calibration as the dots (occupancy.to_map_px). hit_m (odometry metres) is what is stored as the truth; pos_px is
+re-projected from it through the calibration and scale in force at every window and every read (Store.project, called
+by observe and tick), so a pin moves with the tie like the dots do; object.seen rows keep the pos_px of their moment. The store matches a box to an object with the same label whose pin is
 within MATCH_PX, else to a fresh (not stale) one of that label still waiting for its first pin; an unplaced box (no
 pose, no blob, no frame for one window) takes an unplaced object of its label, else the fresh one of its label seen
 last, which keeps its last pin: a window that cannot place a thing is not a new thing. Otherwise the box is a new
@@ -74,6 +76,7 @@ PIN_RGB = (220, 30, 30)
 WATCH = ROOT / "watch.json"   # what wtdd/watch.py writes (publish()); mirrored, not imported
 KEYS = ("id", "label", "p", "label_source", "message", "message_source", "thumb", "box", "bearing_deg", "hit_m", "dist_m",
         "pos_px", "why", "first_seen", "last_seen", "windows_unseen", "stale")
+NOT_CAL = "not calibrated: drag the dog to where it is (POST /dog/calibrate)"
 FOV_WHY = "WTDD_CAM_FOV_DEG is required: the camera's horizontal field of view in degrees, UNVERIFIED until measured on the Go2 (see .env.example)"
 SYSTEM = ("You are a robot dog's eyes on a night round of a work site. You get a small crop of its camera frame around "
           "one thing its object detector boxed, the detector's label and probability, and where the thing sits from the dog. "
@@ -204,6 +207,7 @@ class Store:
         """One detector window: every box placed (or stored unplaced with why), matched or new; unmatched objects age."""
         from PIL import Image
         t0 = time.perf_counter()
+        self.project(cal)   # a new pin is compared with the old ones through one tie: the one in force now
         self.windows += 1
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         out: dict[str, list[str]] = {"new": [], "seen": [], "stale": [], "unplaced": []}
@@ -238,7 +242,7 @@ class Store:
                 if hit is None:
                     why = f"no blob seen {threshold}+ times along the bearing within {MAX_RANGE_M} m"
                 elif cal is None:
-                    why = "not calibrated: drag the dog to where it is (POST /dog/calibrate)"
+                    why = NOT_CAL
                 else:
                     pos_px = occupancy.to_map_px([hit["xy"]], cal)[0].tolist()
             fields = {"label": label, "p": p, "label_source": src, "thumb": thumb(img, b["xyxy"]) if img is not None else None,
@@ -295,6 +299,19 @@ class Store:
             stale=len(out["stale"]), unplaced=len(out["unplaced"]), ms=ms)
         return out
 
+    def project(self, cal: dict | None) -> None:
+        """pos_px is derived, never the truth: every object with an odometry point (hit_m) is projected through the
+        calibration and scale in force now (GET /dog/blobs' rule), so dragging the tie or the scale moves every pin with
+        the map. No calibration: pos_px None and why NOT_CAL; an object with no hit_m keeps pos_px None and its why."""
+        placed = [o for o in self.objs.values() if o["hit_m"] is not None]
+        px = occupancy.to_map_px([o["hit_m"] for o in placed], cal).tolist() if cal and placed else [None] * len(placed)
+        for o, p in zip(placed, px):
+            o["pos_px"] = p
+            if cal is None:
+                o["why"] = NOT_CAL
+            elif o["why"] == NOT_CAL:
+                o["why"] = None
+
     def draft(self) -> str | None:
         """Drafts the line of the oldest object without one (never one whose draft failed): one row, ok or not."""
         o = next((o for o in list(self.objs.values()) if o["message"] is None and o["id"] not in self._failed), None)
@@ -344,6 +361,7 @@ def tick(store: Store, watch_path, pose: dict | None, grid: occupancy.Grid | Non
     taken (no field of view, no detector frame, a stale one), None when all is well. A change of kind (field of view
     set or not; frame absent, old or fresh) is logged once: the why carries the age, which changes every second."""
     p = Path(watch_path)
+    store.project(cal)   # every read serves the pins through the tie of now, window or not
     whys = [] if fov_deg is not None else [FOV_WHY]
     if not p.exists():
         kind = "absent"
