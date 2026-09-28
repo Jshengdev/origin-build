@@ -9,7 +9,8 @@ On the page: the stops (each look, what the detector and the model said, whether
 confirmed it, the correction that fixes it), the flags (every escalate post and every stop's "not sure: ..." question,
 decide.ask_line, which is also its stop's ping) with who resolved what and when (the newest intruder.verdict for
 the flag: a hold then "handled" reads handled, a hold then its expiry reads expired; the first reply's acked_ms, the
-close's closed_ms; or "unanswered"), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
+close's closed_ms; or "unanswered"; who is its args.by, the listener's HOUSEMATES first name or "a member", else, on
+a row from before S10, the raw handle args.from), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
 the path, the shift's planned stops), and the signature line: "unsigned" until an ok record.signed {by, at, shift_id}
 row exists (item 03, `python -m wtdd record_sign`), then the name and the time. Every number is counted from rows,
 nothing is typed by hand. It reads the ledger through ledger.rows() (so WTDD_LEDGER is honoured) and ui/map.json; it
@@ -185,7 +186,7 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
             v = vs[-1] if vs else None
             flags.append({"ts": r["ts"], "trigger": a.get("trigger"), "stop": _index(a.get("trigger")), "to": a.get("guid"),
                           "text": a.get("text"), "file": a.get("file"),
-                          "resolved": v and {"by": v["args"].get("from"), "text": v["args"].get("text"),
+                          "resolved": v and {"by": v["args"].get("by") or v["args"].get("from"), "text": v["args"].get("text"),
                                              "verdict": (v.get("state_after") or {}).get("verdict"), "acked_ms": vs[0]["args"].get("acked_ms"), "ts": v["ts"],
                                              **({"closed_ms": v["args"]["closed_ms"]} if v["args"].get("closed_ms") is not None else {})}})
     acked = [a["acked_ms"] for r in members for a in [r.get("args") or {}]
