@@ -446,9 +446,10 @@ class Listener:
         never the regex. A halt (00) is never read here. Only the chat that was asked answers (a decide question with no
         chat is dog_say's, posted to the group). A reply stamped before the question's confirmed post answers an earlier
         flag: one WARN, not read, the question stays open. The question read is the one posted, never a guess."""
-        if not PENDING.exists():
+        try:
+            pend = json.loads(PENDING.read_text())
+        except FileNotFoundError:   # none open (or a reset dropped it a moment ago)
             return False
-        pend = json.loads(PENDING.read_text())
         if self._expired(pend):
             return False
         chat = m.get("chat") or self.guid
@@ -626,8 +627,12 @@ class Listener:
         if self.armed_by and not self.armed:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None
-        if PENDING.exists():
-            self._expired(json.loads(PENDING.read_text()))
+        try:
+            pend = json.loads(PENDING.read_text())
+        except FileNotFoundError:   # none open (POST /chat/reset may unlink it between a check and a read)
+            pass
+        else:   # outside the try: a FileNotFoundError from _expired's own work is never swallowed here
+            self._expired(pend)
         msgs = self.read()
         for m in msgs:
             self.handle(m)

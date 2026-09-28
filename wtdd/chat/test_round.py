@@ -30,6 +30,7 @@ for _k in ("JEV_API_KEY", "JEV_MODEL", "JEV_LIVE", "WTDD_REPLY_THRESHOLD", "WTDD
 import requests  # noqa: E402
 from wtdd import config, field, ledger  # noqa: E402
 from wtdd.chat import listen as L  # noqa: E402
+L.RESET = _TMP / "chat.reset"   # POST /chat/reset writes <repo>/chat.reset: no listener here reads or deletes the checkout's flag
 
 MAP = _TMP / "map.json"
 _m = json.loads((Path(field.__file__).parent / "fixtures" / "map_route.json").read_text())
@@ -500,6 +501,27 @@ class Reset(unittest.TestCase):
             self.l.poll()
         self.assertEqual(self.rounds, ["W3"], "the armed window from the take before ate the wake (it only re-armed)")
         self.assertFalse(self.flag.exists())
+        self.assertEqual(self.posts, [])
+
+    def test_a_press_between_the_check_and_the_read_never_ends_the_listener(self):
+        # The API unlinks pending.json from its own process: a press landing between PENDING.exists() and read_text()
+        # raised FileNotFoundError out of poll() (every 2 s) or verdict() (every message), and run() has no except
+        class Unlinked(type(self.pend)):
+            def exists(self, **kw):
+                return True   # there when checked ...
+
+            def read_text(self, *a, **kw):
+                raise FileNotFoundError(2, "No such file or directory", str(self))   # ... gone when read
+
+        with mock.patch.object(L, "PENDING", Unlinked(self.pend)), mock.patch.object(self.l, "read", return_value=[]):
+            try:
+                self.assertEqual(self.l.poll(), 0)
+            except FileNotFoundError:
+                self.fail("poll() raised: run() ends and GET /chat reads the listener as down")
+            try:
+                self.assertFalse(self.l.verdict(msg("yes", "V1", 4)), "no question open: no verdict")
+            except FileNotFoundError:
+                self.fail("verdict() raised: the reply's poll() ends the listener")
         self.assertEqual(self.posts, [])
 
 
