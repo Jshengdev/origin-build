@@ -335,9 +335,11 @@ class H(BaseHTTPRequestHandler):
                 except FileNotFoundError:
                     armed = None   # no listener has ever beaten here: unknown, not false
                 try:
-                    share = json.loads(listen.SHARE.read_text()).get("trigger")
+                    share = listen.window(listen.SHARE.read_text())["trigger"]
                 except FileNotFoundError:
                     share = None   # no photo share open
+                except listen.BAD_SHARE as e:   # a corrupt window never blocks the reset: it is deleted below
+                    share = f"unreadable: {type(e).__name__}"
                 r["state_before"] = {"pending": was, "armed": armed, "share": share}
                 listen.PENDING.unlink(missing_ok=True)
                 listen.SHARE.unlink(missing_ok=True)   # the photo share's replies window closes with the take

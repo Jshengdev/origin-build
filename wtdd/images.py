@@ -168,8 +168,11 @@ def share(body: dict, pictures: Path) -> tuple[int, dict[str, Any]]:
     except FileNotFoundError:
         pend = None
     try:
-        was = json.loads(listen.SHARE.read_text())
+        was = listen.window(listen.SHARE.read_text())
     except FileNotFoundError:
+        was = None
+    except listen.BAD_SHARE as e:   # a corrupt window is replaced by this share, never a reason to refuse it
+        log("chat", "WARN share.json unreadable: this share replaces it", err=f"{type(e).__name__}: {str(e)[:80]}")
         was = None
     before = {"pending": pend and pend.get("trigger"), "share": was and was.get("trigger")}
     if not by:

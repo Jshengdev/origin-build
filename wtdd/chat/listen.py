@@ -94,8 +94,9 @@ UNVERIFIED until the first live run: a press landing during a real hold at a sto
 The reset also closes a photo share's window (the API deletes SHARE; _reset drops the one read this poll).
 
 A shared photo's replies (POST /images/share, wtdd/images.py share). SHARE (<repo>/share.json {trigger, file, by, at,
-until}) is read once per poll() (_share: in a try, a missing file is none open, never exists-then-read); past its until
-it is closed, with one line per window. While it is open and no question is (pending.json), a group message from an
+until}) is read once per poll() (_share: in a try, a missing file is none open, never exists-then-read; one that is not
+a window, window() raising BAD_SHARE, is none open and one WARN, never the listener's end); past its until it is
+closed, with one line per window. While it is open and no question is (pending.json), a group message from an
 allowed sender that the verdict, the correction, the chat turn and the wake did not take, and that is not a bare
 command (the whole message one), is ONE chat.reply row {share, file, from (the raw handle: GET /images and /ledger
 redact it), text, ts (chat.db's, UTC), rowid, guid} (share_reply). Nothing is posted and no model is called. The dog's
@@ -127,6 +128,13 @@ RESET = config.ROOT / "chat.reset"       # POST /chat/reset's flag (its time): t
 HEARTBEAT = config.ROOT / "listen.json"  # the remote's "group chat" status (GET /chat): beat(), from its own thread in run()
 SHARE = config.ROOT / "share.json"       # POST /images/share's open window {trigger, file, by, at, until}: the group's replies are kept (share_reply)
 SHARE_WINDOW_S = 600                     # how long after a shared photo the group's messages are kept as its replies
+BAD_SHARE = (ValueError, TypeError, KeyError)   # what window() raises on a share.json that is not one (UnicodeDecodeError is a ValueError)
+
+
+def window(raw: str) -> dict[str, Any]:
+    """share.json's text as {..., trigger: str, file: str, until: float}; one of BAD_SHARE when it is not a window."""
+    s = json.loads(raw)
+    return {**s, "until": float(s["until"]), "trigger": str(s["trigger"]), "file": str(s["file"])}
 PENDING_WINDOW_S = 120
 ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
@@ -635,10 +643,16 @@ class Listener:
 
     def _share(self) -> dict[str, Any] | None:
         """share.json, read once per poll() (a missing file is none open; POST /chat/reset deletes it from its own process).
-        Past its until: None, and one line the first time this listener sees that window closed."""
+        Past its until: None, and one line the first time this listener sees that window closed. Not a window (bad JSON,
+        not an object, no until, trigger or file): None and one WARN per distinct error."""
         try:
-            s = json.loads(SHARE.read_text())
+            s = window(SHARE.read_text())
         except FileNotFoundError:
+            return None
+        except BAD_SHARE as e:   # a corrupt window is a WARN and no reply kept, never the listener's end (run() has no restart)
+            if self._closed != f"bad:{e}":
+                self._closed = f"bad:{e}"
+                log("chat", "WARN share.json unreadable: no replies kept until the next share or Reset chat", err=f"{type(e).__name__}: {str(e)[:80]}")
             return None
         if time.time() < s["until"]:
             return s
