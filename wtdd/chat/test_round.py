@@ -184,6 +184,17 @@ class Round(unittest.TestCase):
         self.assertTrue(self.posts[-1][1].startswith("dog done (couldn't walk the path: RuntimeError: follow refused"), self.posts[-1])
 
 
+    # ask 7: the follow fails after a stop was looked at; the stops were never collected, so the end look ran (and asked) again
+
+    def test_a_follow_that_fails_after_a_stop_does_not_look_again(self):
+        self._stops([5])
+        failed = state(6, active=False, error="waypoint 6 not reached in 30.0s")
+        self.round([state(3), state(5, stopped_at=5), failed])
+        self.assertEqual([e for e in self.events if e[0] == "look"], [("look", 5)], "one look per stop, none again at the end")
+        self.assertIn(("POST", "/dog/resume"), self.events)
+        self.assertTrue(self.posts[-1][1].startswith("dog done (couldn't walk the path: RuntimeError: the dog's follow ended with: waypoint 6"),
+                        self.posts[-1])
+
 
 class Wake(unittest.TestCase):
     """ask 8: handle() with WTDD_WAKE_SHOW=1 and the round stubbed (it only moves chat.db's MAX(ROWID) and outlasts
