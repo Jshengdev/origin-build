@@ -334,6 +334,31 @@ class Asked(Guard):
         self.assertEqual([f["text"] for f in rec["flags"]], [self.ASK, "who dis?!"])
 
 
+class DetectorFailed(Guard):
+    def test_what_it_saw_is_the_sentence_when_the_detector_failed(self):
+        """Preflight: watch.boxes failed at stop 10 (the YOLO process errored), so see() had no labels. It still writes
+        its vision.check row (detector None, and no check on a detector that never ran), so the stop's "what it saw" is
+        the sentence the group got, never blank. The vision model is faked and the row is caught, not appended."""
+        from PIL import Image
+        from wtdd.tools import dog_say
+        frame = _TMP / "look-tilt.jpg"
+        Image.new("RGB", (64, 48), (40, 40, 40)).save(frame, "JPEG")
+        said = {"say": "a mug on the floor by the couch", "person": False, "out_of_place": ["mug"], "pick": 2, "why": "the mug"}
+        caught: list[dict] = []
+        with mock.patch("wtdd.llm.generate", return_value={"text": json.dumps(said), "model": "a-vision-model"}), \
+                mock.patch.object(ledger, "append", caught.append):
+            dog_say.see(str(frame))
+        self.assertEqual([r["tool"] for r in caught], ["vision.check"])
+        self.assertIsNone(caught[0]["args"]["detector"])
+        self.assertEqual((caught[0]["state_after"]["detector_check"], caught[0]["state_after"]["agree"]), (None, None))
+        rows = ledger.rows()
+        b, c = (next(j for j, r in enumerate(rows) if r["tool"] == t) for t in ("watch.boxes", "vision.check"))   # stop 10's
+        rows[b] = {**rows[b], "ok": False, "state_after": None, "response_or_error": "RuntimeError: detector rc=1: Traceback"}
+        rows[c] = {**rows[c], **caught[0]}
+        s10 = record.build(A, rows=rows, site=EMPTY_SITE)["stops"][0]
+        self.assertEqual((s10["index"], s10["classes"], s10["sentence"], s10["person"]), (10, None, "a mug on the floor by the couch", False))
+
+
 class ByHand(Guard):
     def test_a_look_pressed_by_hand_keeps_the_post_that_confirmed_it(self):
         """The README's by-hand path: dog_say from the page posts under say-<epoch> (kind remote), not say:<wake>:<n>.
