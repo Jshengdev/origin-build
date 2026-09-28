@@ -54,9 +54,14 @@ def msg(text: str, guid: str = "W1", rowid: int = 1, sender: str = "+15550001111
 
 def sends(test: unittest.TestCase, *fail: str) -> None:
     """The mouth stubbed under the real chat.__main__.post (its gate, claim and one chat.post row per send): a text
-    starting with one of `fail` raises as an unconfirmed send does. Nothing reaches osascript or chat.db."""
+    starting with one of `fail` raises as an unconfirmed send does, once each (the next send of those words goes through).
+    Nothing reaches osascript or chat.db."""
+    left = list(fail)
+
     def _send(text: str | None) -> dict:
-        if (text or "").startswith(fail):
+        hit = next((f for f in left if (text or "").startswith(f)), None)
+        if hit is not None:
+            left.remove(hit)
             raise RuntimeError("unconfirmed send: no from-me row above 0 within 10s (not retried)")
         now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         return {"guid": f"P-{time.time_ns()}", "rowid": 1, "ts": now, "caption": {"guid": f"C-{time.time_ns()}", "ts": now}}
