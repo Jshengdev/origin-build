@@ -97,6 +97,7 @@ HAZARD_MIN_POINTS = 8    # gate 4: the lit cluster needs this many columns (0.4 
 CONFIRM_P_MIN = 0.8      # gate 3: the confirm model's own confidence in its yes
 CONFIRM_MODEL = "google/gemini-2.5-pro"   # gate 3's default; WTDD_SCOUT_CONFIRM_MODEL overrides (UNVERIFIED live)
 CONFIRM_TIMEOUT_S = 30.0
+CONFIRM_MAX_TOKENS = 1500   # room for a reasoning model's thinking plus the JSON: at 120, gemini-2.5-pro's reply was cut ("Here is"), live 21:48
 CROP_MARGIN = 0.25       # the confirm crop is the box grown by this fraction of its size on every side (the floor around it)
 STRICT_QUESTION = ("Is there a physical obstacle on the floor here that a small walking robot must go around? "
                    'Answer only JSON: {"answer": "yes" or "no", "name": the object\'s name, "confidence": 0 to 1}.')
@@ -295,8 +296,11 @@ def confirm_live(q: dict) -> dict[str, Any]:
     out = generate("scout", [{"role": "user", "content": [
         {"type": "text", "text": f"A robot's detector boxed this as '{q['kind']}'. {STRICT_QUESTION}"},
         {"type": "image_url", "image_url": {"url": q["image"]}}]}],
-        model_id=q["model"], max_tokens=120, temperature=0.0, response_format={"type": "json_object"}, timeout=CONFIRM_TIMEOUT_S)
+        model_id=q["model"], max_tokens=CONFIRM_MAX_TOKENS, temperature=0.0, response_format={"type": "json_object"},
+        timeout=CONFIRM_TIMEOUT_S, extra={"reasoning": {"effort": "low"}})
     text = out["text"].strip()
+    if out.get("finish_reason") == "length" and "}" not in text:
+        raise RuntimeError(f"confirm reply cut at max_tokens={CONFIRM_MAX_TOKENS} (a reasoning model's thinking used it up): {text[:80]!r}")
     try:
         j = json.loads(text[text.index("{"):text.rindex("}") + 1])
         answer, name, p = str(j["answer"]).strip().lower(), str(j["name"]).strip(), float(j["confidence"])
