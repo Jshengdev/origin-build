@@ -22,7 +22,7 @@ ui/map.json (by "auto") only when ALL four gates pass, each a named constant bel
   3. PICTURE CONFIRMATION: the object's crop from the detector frame goes to a vision model (confirm_live, the repo's
      one OpenRouter path, llm.generate) with STRICT_QUESTION; a zone only if it answers yes AND p >= CONFIRM_P_MIN AND
      the thing it names agrees with the detector's label class (agrees()). The model is WTDD_SCOUT_CONFIRM_MODEL,
-     default CONFIRM_MODEL (google/gemini-2.5-pro: a stronger vision model than OPENROUTER_VISION_MODEL's
+     default CONFIRM_MODEL (qwen/qwen3.8-max-0902, chosen live 21:52 over gemini-2.5-pro for cost; a stronger vision model than OPENROUTER_VISION_MODEL's
      x-ai/grok-4.20, which the repo picked for speed; UNVERIFIED live: its answers on the real frames). A failed,
      timed-out or unparseable call is NO zone and one FAILED zone.confirm row (never a default yes, never retried).
      With no OPENROUTER_API_KEY the DEMO_CACHE confirm_stub answers (below); its zone says app "stub".
@@ -95,7 +95,7 @@ HAZARD_SPAN_S = 3.0      # gate 2: ...spanning at least this long, so four frame
 HAZARD_R_M = 0.5         # gate 4: live points this close to 07's pin are the thing's candidates (a table is about 1 m across)
 HAZARD_MIN_POINTS = 8    # gate 4: the lit cluster needs this many columns (0.4 m of lit edge at the 5 cm voxel): no stray return
 CONFIRM_P_MIN = 0.8      # gate 3: the confirm model's own confidence in its yes
-CONFIRM_MODEL = "google/gemini-2.5-pro"   # gate 3's default; WTDD_SCOUT_CONFIRM_MODEL overrides (UNVERIFIED live)
+CONFIRM_MODEL = "qwen/qwen3.8-max-0902"   # gate 3's default (Johnny 21:5x: cheaper, current); live bake-off 21:52 on one chair crop: qwen3.8-max yes 0.98 in 5.2 s, $0.0016/call vs gemini-2.5-pro 4.1 s, $0.0045; WTDD_SCOUT_CONFIRM_MODEL overrides (UNVERIFIED on the hazard mix)
 CONFIRM_TIMEOUT_S = 30.0
 CONFIRM_MAX_TOKENS = 1500   # room for a reasoning model's thinking plus the JSON: at 120, gemini-2.5-pro's reply was cut ("Here is"), live 21:48
 CROP_MARGIN = 0.25       # the confirm crop is the box grown by this fraction of its size on every side (the floor around it)
