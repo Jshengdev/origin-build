@@ -134,7 +134,7 @@ What the keys hold:
   (null with `group_why` when unset), `members` the participants (`chat_handle_join`, not counting you), `last_ts` the
   group's newest row. `people` is `you` first (`id` `me`, `is_me` true: this Mac's from-me rows), then each participant
   in handle order (`id` `m1`, `m2`, ...). `label` is `you`, else the first name in the local, gitignored
-  `ui/people-names.json` (`{"<handle>": "Teri"}`, only people who agreed to appear), else `member N`. `messages_24h`:
+  `people-names.json` at the repo root, never in the served `ui/` (`{"<handle>": "Teri"}`, only people who agreed to appear), else `member N`. `messages_24h`:
   their messages in the group in the last 24 h (tapbacks dropped); `last_ts`: their newest row there (local time, the
   ledger's format), or null; `replies_to_dog`: their distinct replies (by message guid) in the ledger's `reply.decided`,
   `intruder.verdict` and `chat.correction` rows. A handle is never in the body, not even as an id. Not macOS Contacts,

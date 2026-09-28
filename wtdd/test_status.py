@@ -159,7 +159,7 @@ class People(Api):
         self.assert_no_handle(text)
 
     def test_a_local_names_file_labels_a_member_and_no_handle_leaks_before_redact(self):
-        (self.root / "ui" / "people-names.json").write_text(json.dumps({EMAIL: "Teri"}))
+        (self.root / "people-names.json").write_text(json.dumps({EMAIL: "Teri"}))
         text, body = self.get("/people")
         self.assertEqual([p["label"] for p in body["people"]], ["you", "member 1", "Teri", "member 3"])
         self.assert_no_handle(text)

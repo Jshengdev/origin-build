@@ -45,7 +45,7 @@ pending.json
 field.stop
 chat.reset
 shift.json
-ui/people-names.json
+people-names.json
 
 # sources of truth (the origin folder), read locally, never committed
 context/

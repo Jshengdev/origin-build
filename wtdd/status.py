@@ -11,7 +11,7 @@ works, from evidence already on this Mac. Reads only: no ledger row, no network 
                          (activity); both are the ledger's local time format. replies_to_dog counts that sender's distinct
                          replies (by message guid: one reply is a reply.decided row and an intruder.verdict row) in the
                          ledger's reply.decided, intruder.verdict and chat.correction rows, matched on args.from inside this
-                         function (a from-me row's from is ""). label is "you", else the first name <repo>/ui/people-names.json
+                         function (a from-me row's from is ""). label is "you", else the first name <repo>/people-names.json
                          ({"<handle>": "Teri"}, local, gitignored, only people who agreed to appear) gives, else "member N".
                          A handle is never in the answer, not even as an id: ids are "me", "m1".. in handle ROWID order, and
                          a label that is a handle reads "a member". Never macOS Contacts, never HOUSEMATES (its allowlist is
@@ -61,7 +61,7 @@ TAIL = 10000     # newest ledger rows read per call (about 90-110 ms on the 25 M
 ALIVE_S = 10     # GET /chat's alive: the listener writes listen.json every poll
 JEV_TOOLS = ("decided", "reply.decided", "zone.decided", "blob.labelled")
 REPLY_TOOLS = ("reply.decided", "intruder.verdict", "chat.correction")   # rows that record a member answering the dog
-NAMES = "ui/people-names.json"   # local first names, {"<handle>": "Teri"}; gitignored, never committed
+NAMES = "people-names.json"   # local first names, {"<handle>": "Teri"}; gitignored, never committed, never in ui/ (served as-is)
 # One sender's rows in one chat: messages in the last 24 h (no tapbacks) and the newest row. {who} picks the sender.
 AGG_SQL = """SELECT COALESCE(SUM(m.associated_message_type = 0 AND m.date > :since), 0) AS n24, MAX(m.date) AS last
 FROM message m JOIN chat_message_join cmj ON cmj.message_id = m.ROWID WHERE cmj.chat_id = :chat AND {who}"""
