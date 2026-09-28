@@ -18,10 +18,14 @@ An API that does not answer is a 502 naming the address and the cause, and the p
 | page | reads | does |
 |---|---|---|
 | Overview | `/dog/state`, `/dog/grid`, `/dog/floorplan`, `/dog/lidar`, `/dog/objects`, `/dog/blobs`, `/dog/scale`, `/map`, `/ledger`, `/chat`, `/shift`, `/dog/frame.jpg` | the camera; the map (house plan, memory and live scan on one depth ramp, the route, decisions); Stop and Walk; drive (W A S D Q E, S1's rules) and LiDAR switches; the map tools bar: Calibrate (drag the dog's place and heading, Place the dog, the scale slider, Scale by a wall) and Floor plan; the receipts, repeats grouped |
-| Paths | `/map`, the map routes above | draw the dots, the stops and the no-go zones; save with the map's version; Ask here on a stop; walk and stop |
+| Paths | `/map`, the map routes above | draw the dots, the stops and the no-go zones; save with the map's version; per stop: look up & down, post to the group, ask here; walk (a look and a photo at each stop) and stop |
+| Routines | `/routines`, `/images?kind=look` | the named routes: save the route on the map as a routine, load one, run it; this run's look photos by stop |
+| Images | `/sessions`, `/images?shift=` | a run's photos by stop (look, ask, scout), and one stop compared across runs |
 | Waiting | `/ledger`, `/chat` | the dog's asks to the group and what followed |
 | Record | `/record/*`, `/shift`, `/evals` | start a run, its morning page and report, one signature |
-| Routines, Settings, Live, Driving, Sessions, Monitoring, Images, People | none yet | marked "Sample · not live yet", greyed and inert, until each reads the API |
+| People | `/people` | the group and its names |
+| Settings | `/integrations`, `/dog/state` | Monitoring: every integration ok, FAILED or unknown, and the dog |
+| Live, Driving | none | marked "Sample · not live yet", greyed; their live parts are on Overview |
 
 ## Where things are
 

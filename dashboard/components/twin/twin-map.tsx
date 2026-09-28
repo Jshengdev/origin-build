@@ -90,6 +90,8 @@ export type MapFocus =
   | { kind: "point"; position: XY; label: string };
 
 export interface TwinMapProps {
+  /** Called on a zoom, a key pan or a reset a person made (Overview disarms "Scale by a wall" on it). */
+  onViewChange?: () => void;
   grid?: Grid;
   floorPlan?: FloorPlan;
   zones?: Zone[];
@@ -125,7 +127,7 @@ const PAD = { l: 24, r: 56, t: 56, b: 72 };
 
 export function TwinMap({
   grid, floorPlan, zones = [], routes = [], stops = [], devices = [], looks = [],
-  runActive, focus, drawRouteId, onMapClick, onStopClick, selectedStopIds = [], draft, compact, actions, live, initialLayers, className,
+  runActive, focus, drawRouteId, onMapClick, onStopClick, selectedStopIds = [], draft, compact, actions, live, initialLayers, className, onViewChange,
 }: TwinMapProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -219,11 +221,14 @@ export function TwinMap({
     setView((v) => (v ? { ...v, tx: v.tx + dx, ty: v.ty + dy } : v));
   }, []);
 
+  const viewChanged = useRef(onViewChange);   // the wheel listener is attached once; it reads the newest callback
+  useEffect(() => { viewChanged.current = onViewChange; }, [onViewChange]);
   /* Wheel zoom (non-passive so the page doesn't scroll). */
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      viewChanged.current?.();
       e.preventDefault();
       const r = el.getBoundingClientRect();
       zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
@@ -272,6 +277,7 @@ export function TwinMap({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.target !== e.currentTarget) return;
+    onViewChange?.();
     const step = 40;
     const k: Record<string, () => void> = {
       ArrowLeft: () => pan(step, 0), ArrowRight: () => pan(-step, 0), ArrowUp: () => pan(0, step), ArrowDown: () => pan(0, -step),
@@ -665,9 +671,9 @@ export function TwinMap({
 
       {/* Zoom controls, top right. */}
       <div data-map-ui className="absolute right-3 top-3 flex flex-col gap-1">
-        <MapButton label="Zoom in" onClick={() => zoomAt(1.25, size.w / 2, size.h / 2)}><Plus /></MapButton>
-        <MapButton label="Zoom out" onClick={() => zoomAt(0.8, size.w / 2, size.h / 2)}><Minus /></MapButton>
-        <MapButton label="Reset view" onClick={reset}><Maximize /></MapButton>
+        <MapButton label="Zoom in" onClick={() => { onViewChange?.(); zoomAt(1.25, size.w / 2, size.h / 2); }}><Plus /></MapButton>
+        <MapButton label="Zoom out" onClick={() => { onViewChange?.(); zoomAt(0.8, size.w / 2, size.h / 2); }}><Minus /></MapButton>
+        <MapButton label="Reset view" onClick={() => { onViewChange?.(); reset(); }}><Maximize /></MapButton>
       </div>
 
       {/* Bottom bar: heat key and honesty line on the left, map actions on the right. When the actions do not fit beside a
