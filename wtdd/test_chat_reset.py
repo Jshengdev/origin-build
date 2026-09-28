@@ -1,10 +1,10 @@
 """POST /chat/reset {by}: a clean slate between two Loom takes. Run: python -m unittest wtdd.test_chat_reset -v
 Johnny, live at 18:3x: "just make sure there's a reset chat button". A half-answered "who dis?!" (pending.json) or an
 armed listening window must never leak from one take into the next. The API drops the open question, writes the
-listener's flag (listen.RESET, its time) and one chat.reset row {args: {by}, state_before: {pending, armed},
-state_after: {dropped}}; nothing is posted and no past row moves. The real handler on an ephemeral port in this process,
+listener's flag (listen.RESET, its time) and one chat.reset row {args: {by}, state_before: {pending, armed, share},
+state_after: {dropped, share}} (share: the open photo share's trigger, closed by the reset: wtdd.test_share); nothing is posted and no past row moves. The real handler on an ephemeral port in this process,
 as test_api_private runs it; the ledger is WTDD_LEDGER set before wtdd.ledger is imported, and the listener's PENDING,
-HEARTBEAT and RESET are temp paths, so the checkout's files are never touched. The listener's side (the flag read in
+HEARTBEAT, RESET and SHARE are temp paths, so the checkout's files are never touched. The listener's side (the flag read in
 poll() and inside a hold) is wtdd.chat.test_round.Reset."""
 from __future__ import annotations
 import json
@@ -46,9 +46,9 @@ class Reset(unittest.TestCase):
 
     def setUp(self):
         d = Path(tempfile.mkdtemp(dir=_TMP))
-        self.pend, self.hb, self.flag = d / "pending.json", d / "listen.json", d / "chat.reset"
-        for name, path in (("PENDING", self.pend), ("HEARTBEAT", self.hb), ("RESET", self.flag)):
-            self.enterContext(mock.patch.object(L, name, path, create=True))   # create: RESET is new with this route
+        self.pend, self.hb, self.flag, self.share = d / "pending.json", d / "listen.json", d / "chat.reset", d / "share.json"
+        for name, path in (("PENDING", self.pend), ("HEARTBEAT", self.hb), ("RESET", self.flag), ("SHARE", self.share)):
+            self.enterContext(mock.patch.object(L, name, path, create=True))   # create: RESET and SHARE are new with their routes
         ledger.append(PAST)   # a past take's row: never touched
         self.before = LEDGER.read_bytes()
 
@@ -76,8 +76,8 @@ class Reset(unittest.TestCase):
         self.assertRegex(self.flag.read_text(), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\n$", "the listener's flag carries the time")
         (r,) = self.new_rows()   # exactly one row: nothing posted (a post is chat.gate, chat.claim and chat.post rows)
         self.assertEqual((r["tool"], r["ok"], r["args"]), ("chat.reset", True, {"by": "Johnny"}))
-        self.assertEqual(r["state_before"], {"pending": {"trigger": "alarm:T1:5", "kind": "who_dis"}, "armed": True})
-        self.assertEqual(r["state_after"], {"dropped": True})
+        self.assertEqual(r["state_before"], {"pending": {"trigger": "alarm:T1:5", "kind": "who_dis"}, "armed": True, "share": None})
+        self.assertEqual(r["state_after"], {"dropped": True, "share": None})
         self.assertIsInstance(r["latency_ms"], int)
 
     def test_a_reset_with_nothing_open_is_one_row_dropped_false(self):
@@ -86,7 +86,7 @@ class Reset(unittest.TestCase):
         self.assertTrue(self.flag.exists(), "the flag is written anyway: the listener may still be armed")
         (r,) = self.new_rows()
         self.assertEqual((r["tool"], r["ok"], r["args"]), ("chat.reset", True, {"by": "Johnny"}))
-        self.assertEqual((r["state_before"], r["state_after"]), ({"pending": None, "armed": None}, {"dropped": False}))
+        self.assertEqual((r["state_before"], r["state_after"]), ({"pending": None, "armed": None, "share": None}, {"dropped": False, "share": None}))
 
 
 if __name__ == "__main__":

@@ -60,6 +60,7 @@ os.environ["WTDD_ON_CALL_HANDLE"] = "+15550002222"
 from wtdd import config, decide, ledger  # noqa: E402
 from wtdd.chat import listen as L  # noqa: E402
 L.RESET = _TMP / "chat.reset"   # POST /chat/reset writes <repo>/chat.reset: no listener here reads or deletes the checkout's flag
+L.SHARE = _TMP / "share.json"   # POST /images/share writes <repo>/share.json: no poll() here reads the checkout's window
 
 ROOT = config.ROOT
 PY = sys.executable
