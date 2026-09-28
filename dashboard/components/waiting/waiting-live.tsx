@@ -7,13 +7,19 @@
  *   when the ask is handled or expires); the last is the outcome. S10's by and say, 17's meaning and p (state_after).
  * Replies come from THE CASTLE; the page never answers for the group. Every string is redacted (S10); a stand-in row
  * (cached, or source stub) says so. The page computes nothing: acked_ms is written in seconds, as served.
+ * "Reset chat" (Johnny: "put it to the castle now, it's ok, just make sure there's a reset chat button"): POST /chat/reset
+ * {by}, on a second press within 4 s (the first only arms it and asks), in the name the page keeps for sign-offs, else
+ * "Johnny". It answers {ok, dropped, pending_was: {trigger, kind} | null} and writes one chat.reset row; the line is built
+ * from those fields: "reset · closed the open <kind> (<trigger>)" or "reset · nothing was open", or FAILED with the
+ * reason. Nothing is posted to the group.
  */
-import { createContext, useContext } from "react";
-import { Avatar, Module, SignalChip, WaitingChip } from "@/components/wtdd";
+import { createContext, useContext, useEffect, useState } from "react";
+import { ActionButton, Avatar, Module, SignalChip, WaitingChip } from "@/components/wtdd";
+import { Results, type Result } from "@/components/live/stop";
 import { PageActions } from "@/components/shell/page-header";
 import { CastleChip } from "@/components/overview/overview-live";
 import { age, clock } from "@/lib/format";
-import { redact, usePoll, type ApiRow, type Chat, type ImagesJson, type RunImage } from "@/lib/data/api";
+import { post, redact, usePoll, type ApiRow, type Chat, type ImagesJson, type RunImage } from "@/lib/data/api";
 import { Photo } from "@/components/live/photo";
 
 const TZ = "America/Los_Angeles";
@@ -67,6 +73,7 @@ export function WaitingLive() {
         <CastleChip chat={chat.data} error={chat.error} />
         <span className="text-[13px] text-muted-foreground">Replies come from the group chat; the first clear answer decides.</span>
         {photos.error && <SignalChip tone="alert">Photos · FAILED {redact(photos.error)}</SignalChip>}
+        <span className="ml-auto"><ResetChat /></span>
       </PageActions>
       {ledger.error ? (
         <Module title="Waiting" size="full" error={`FAILED ${ledger.error}`} />
@@ -85,6 +92,31 @@ export function WaitingLive() {
         </div>
       )}
     </div>
+  );
+}
+
+/** "Reset chat": the first press arms it for 4 s and asks, the second posts POST /chat/reset {by}; the line is the answer. */
+function ResetChat() {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<Result>(null);
+  useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(false), 4000); return () => clearTimeout(t); }, [armed]);
+  const by = () => (typeof window === "undefined" ? "" : localStorage.getItem("wtdd.scout.by") ?? "").trim() || "Johnny";
+  const reset = async () => {
+    setArmed(false); setBusy(true);
+    const r = await post("/chat/reset", { by: by() });
+    setBusy(false);
+    const was = (r.pending_was ?? null) as { trigger?: string; kind?: string } | null;
+    setResult(r.ok ? { what: r.dropped ? `Reset chat · reset · closed the open ${redact(was?.kind ?? "question")}${was?.trigger ? ` (${redact(was.trigger)})` : ""}` : "Reset chat · reset · nothing was open", ok: true }
+      : { what: "Reset chat", ok: false, error: redact(r.error ?? "no answer") });
+  };
+  return (
+    <span className="flex items-center gap-2">
+      {result && <Results rows={[result]} />}
+      {armed && <span className="text-[13px] text-muted-foreground">Close any open question and stop listening? Nothing is posted to the group.</span>}
+      <ActionButton intent={armed ? "person" : "secondary"} disabled={busy} title="POST /chat/reset: drop what the chat has open (a pending who-dis), in your name"
+        onClick={() => (armed ? reset() : setArmed(true))}>{armed ? `Confirm reset · as ${by()}` : "Reset chat"}</ActionButton>
+    </span>
   );
 }
 
