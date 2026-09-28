@@ -24,7 +24,7 @@
   POST /dog/avoid {on}            the dog's obstacle avoidance on/off with read-back (the follower turns it on itself)
   POST /dog/record {on}           on: record the believed pose while driving; off: the trace becomes ui/map.json's path + stops
   POST /dog/mark {look?, say?, ask?}   a stop with its action (the look kind, post or not, ask = the intruder check) at the current believed position, while recording
-  GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, known?, why?} (polled every 500 ms while
+  GET  /dog/lidar                 the dog's LiDAR band in map pixels {on, n, age_ms, frame, points_px, z_m?, known?, why?} (polled every 500 ms while
                                   connected); known [bool per points_px entry]: its cell (the planner's lattice, map px) a wall of the SAVED map
                                   (ui/grid.json at THRESHOLD, what was there before), absent with why "no saved map: ..." when nothing was saved;
                                   POST /dog/lidar {on} switches the voxel stream on/off (wtdd/dog/lidar.py)

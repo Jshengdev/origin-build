@@ -92,7 +92,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, follow, avoid, recheck, corr, rec}` | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
-| GET | `/dog/lidar` | | `{on, n, errors, cb_errors, grid_frames, localize, age_ms, frame, points_px, utlidar_pose?, n_xy?, known?, why?}` | 500 `{error}` |
+| GET | `/dog/lidar` | | `{on, n, errors, cb_errors, grid_frames, localize, age_ms, frame, points_px, utlidar_pose?, n_xy?, z_m?, known?, why?}` | 500 `{error}` |
 | GET | `/dog/grid` | `threshold` (default 3) | `{n, cells_px, cell_px, threshold, resolution, frames, frame_id, extent_m, source, hits?, cb_errors?, why?}` | 500 `{n: 0, cells_px: [], error}` |
 | GET | `/dog/floorplan` | `threshold` (default 3) | `{segments_px, classes, class_px, source, ok?, threshold?, frames?, ms?, ts?, cell_px?, segments_top_m?, class_top_m?, moved?, why?}` | 500 `{segments_px: [], error}` |
 | GET | `/dog/blobs` | | `{labels, source, moved, ts?, why?}` | 500 `{labels: [], error}` |
@@ -125,7 +125,9 @@ What the keys hold:
     while it drives and `done` at the end.
   - `avoid` is null without a dog. `corr` is `{tx, ty, theta, theta_deg}`.
   - `rec` is null, or `{active, n, points, marks, actions}` while recording.
-- **`/dog/lidar`**: `localize` is `{applied, rejected, unmatched, skipped, last, corr}`. `known` (a bool per `points_px`
+- **`/dog/lidar`**: `localize` is `{applied, rejected, unmatched, skipped, last, corr}`. `z_m` (a number per `points_px`
+  entry) is each dot's measured height in metres, the highest z of its column inside the band (the voxel frame's z, the same
+  z as `/dog/floorplan`'s `class_top_m`), rounded to 0.05; absent with no frame. `known` (a bool per `points_px`
   entry) is there only with a saved map. `why` names what is missing (not connected, no frame yet, lidar off, not
   calibrated, no saved map).
 - **`/dog/grid`**: `source` is `session`, `ui/grid.json` or null. `hits` (a count per `cells_px` entry) is there only when

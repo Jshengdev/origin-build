@@ -322,7 +322,9 @@ class DogSession:
         frame yet, the stream is off, or the dog is not calibrated. known (S13, the memory toggle) is parallel to it:
         True where the point's cell on the planner's lattice (plan.CELL map pixels) holds a wall of the saved map
         (_memory: ui/grid.json at occupancy.THRESHOLD, what was there before), False where it is new; with no saved map
-        it is absent and `why` says how to set one. No ledger row: a read, like /dog/state."""
+        it is absent and `why` says how to set one. z_m (Johnny 17:3x, the height colours) is parallel to points_px too: each
+        dot's measured height, the highest z of its (x, y) column inside the band, in the voxel frame's z (the band's, FLOOR's
+        and 15's class_top_m), rounded to 0.05 m; absent with no frame. No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if on is False:   # S7: the stream stopped: the pending summary is written
@@ -343,9 +345,11 @@ class DogSession:
             return {**out, "points_px": [], "why": "no frame yet" if lp["on"] else "lidar off"}
         if not self.cal or not st or not st.get("position") or not st.get("rpy"):
             return {**out, "points_px": [], "why": "not calibrated"}
-        xy = localize.apply_points(self.corr, lidar.top_down(lp["points"]))
+        xyz = lidar.top_down(lp["points"], with_z=True)
+        xy = localize.apply_points(self.corr, [(px, py) for px, py, _ in xyz])
         x, y, yaw = localize.apply_pose(self.corr, st["position"][0], st["position"][1], st["rpy"][2])
-        out = {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw)}
+        z_m = [round(round(pz / 0.05) * 0.05, 2) for _, _, pz in lidar.thin(xyz)]   # measured height per drawn dot, thinned as the dots are
+        out = {**out, "n_xy": len(xy), "points_px": lidar.to_map_points(xy, self.cal, (x, y), yaw), "z_m": z_m}
         try:
             mem = self._memory()
         except Exception as e:  # noqa: BLE001  (an unreadable ui/grid.json: the dots are still drawn, the memory's failure named)
