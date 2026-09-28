@@ -6,7 +6,8 @@
  *   Load     POST /routines {action: "load", name}: the API writes the routine's route into the map and answers with that
  *            map. The page holds the answered map until the poll serves it (never its _version alone, which would keep
  *            the old route drawn and let a later save write it back: docs/api-contract.md). Refused while a walk runs (409).
- *   Run      Load, then POST /dog/follow: the dog walks the route it was just given. Needs the dog calibrated.
+ *   Run      Load, then walk it with the checkpoint look (components/live/walk-route.tsx): a look at each stop, a post
+ *            only where the stop says so; no stops, a straight POST /dog/follow. Needs the dog calibrated.
  *   Save as  POST /routines {action: "save", name}: the map's route now, under a name; a name already saved is replaced.
  * The list and "on the map" are what GET /routines serves after each answer, never an optimistic change; a refusal is the
  * page's FAILED line with the API's reason. Stop is always here, as on every page a walk starts from.
@@ -20,6 +21,7 @@ import { useLiveMap } from "@/components/twin/use-live-map";
 import { post, redact, usePoll, type ImagesJson, type MapJson, type RoutinesJson } from "@/lib/data/api";
 import { Photo } from "@/components/live/photo";
 import { Results, useStop } from "@/components/live/stop";
+import { useWalkRoute, WalkProgress } from "@/components/live/walk-route";
 
 type Result = { what: string; ok: boolean; error?: string } | null;
 
@@ -28,7 +30,7 @@ export function RoutinesLive() {
   const list = usePoll<RoutinesJson>("/routines", 3000, kick);
   const looks = usePoll<ImagesJson>("/images?kind=look", 5000);   // this run's look photos, at their stops (#73)
   const [saved, setSaved] = useState<MapJson | null>(null);   // the map a load answered with, drawn until the poll serves it
-  const { dog, walking, props, served, notes, refresh } = useLiveMap(null, false, saved);
+  const { dog, walking, props, served, notes, field, refresh } = useLiveMap(null, false, saved);
   const { stopped, button: stopButton } = useStop();
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
@@ -42,13 +44,17 @@ export function RoutinesLive() {
     refresh();
     return r;
   };
+  const walkRoute = useWalkRoute(field.data, setResult, setSaved);
   const load = async (n: string, walk: boolean) => {
     const what = `${walk ? "Run" : "Load"} · ${n}`;
+    if (walk) {   // load, then walk it with the look at each stop
+      await walkRoute.start(what, null, async () => { const r = await routines({ action: "load", name: n }); return { ok: r.ok, error: r.error, map: r.map as MapJson | undefined }; });
+      return;
+    }
     setBusy(true);
     const r = await routines({ action: "load", name: n });
-    const f = r.ok && walk ? await post("/dog/follow", {}) : r;
     setBusy(false);
-    setResult(f.ok ? { what, ok: true } : { what, ok: false, error: f.error });
+    setResult(r.ok ? { what, ok: true } : { what, ok: false, error: r.error });
   };
   const saveAs = async () => {
     const n = name.trim();
@@ -66,13 +72,14 @@ export function RoutinesLive() {
     <div className="flex flex-col gap-4">
       <PageActions>
         {dog.error && <SignalChip tone="alert">Dog · FAILED {redact(dog.error)}</SignalChip>}
+        <WalkProgress field={field.data} follow={dog.data?.follow ?? {}} stops={served?.stops ?? []} />
         <span className="ml-auto flex items-center gap-2">{stopButton}</span>
       </PageActions>
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-12 flex flex-col gap-4 lg:col-span-5">
           {/* Results sit in this column, never above the map, as on Paths */}
-          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} /></div>}
+          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} />{walkRoute.lightsOff}</div>}
           <Module title="Routines" meta={list.data ? `${rs.length} saved` : undefined} size="auto"
             loading={!list.data && !list.error} error={list.error ? `FAILED GET /routines · ${redact(list.error)}` : undefined}>
             {rs.length === 0 ? (
@@ -90,7 +97,7 @@ export function RoutinesLive() {
                     </div>
                     <ActionButton intent="secondary" size="sm" disabled={busy || walking} title={walking ? "Walking" : "POST /routines load: put this route on the map"}
                       onClick={() => load(r.name, false)}>Load</ActionButton>
-                    <ActionButton intent="primary" size="sm" disabled={busy || !!runWhy} title={runWhy ?? "Load it, then POST /dog/follow"}
+                    <ActionButton intent="primary" size="sm" disabled={busy || walkRoute.starting || !!runWhy} title={runWhy ?? "Load it, then walk it: a look and a photo at each stop"}
                       onClick={() => load(r.name, true)}>Run</ActionButton>
                   </li>
                 ))}
