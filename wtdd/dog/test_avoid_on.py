@@ -196,3 +196,52 @@ class UnknownNotZero(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LidarBody(FakeBody):
+    """FakeBody with the LiDAR switch: lidar_on/off recorded."""
+
+    def __init__(self):
+        super().__init__()
+        self.lidar_calls: list[bool] = []
+
+    async def lidar_on(self, cb):
+        self.lidar_calls.append(True)
+
+    async def lidar_off(self):
+        self.lidar_calls.append(False)
+
+    def lidar_points(self):
+        return {"on": bool(self.lidar_calls and self.lidar_calls[-1]), "n": 0, "errors": 0, "cb_errors": 0, "age_ms": None,
+                "frame": None, "utlidar_pose": None, "points": None}   # no frame yet
+
+
+class LidarAfterReconnect(unittest.TestCase):
+    """Live 22:02: the session went stale, reconnected, and came back with the LiDAR OFF (on=false, n=0), so the grid fell
+    back to the saved memory and every pin was unplaced until the worker switched it on by hand."""
+
+    def setUp(self):
+        FakeBody.fail, FakeBody.made = None, []
+        self.s = session.DogSession()
+        self.err = io.StringIO()
+        self.enterContext(mock.patch.object(session, "Body", LidarBody))
+        self.enterContext(contextlib.redirect_stderr(self.err))
+
+    def tearDown(self):
+        stop(self.s)
+
+    def test_a_reconnect_switches_the_lidar_back_on_when_it_was_on(self):
+        self.s.lidar(on=True)
+        first = self.s.body
+        self.assertEqual(first.lidar_calls, [True])
+        first.state = lambda: {"age_ms": 10 ** 6, "n": 1}   # the peer went stale
+        second = self.s.run(self.s._ensure(), timeout=10)
+        self.assertIsNot(second, first)
+        self.assertEqual(second.lidar_calls, [True], "the LiDAR comes back on with the new session")
+
+    def test_a_reconnect_leaves_it_off_when_it_was_off(self):
+        self.s.run(self.s._ensure(), timeout=10)
+        first = self.s.body
+        first.state = lambda: {"age_ms": 10 ** 6, "n": 1}
+        second = self.s.run(self.s._ensure(), timeout=10)
+        self.assertEqual(second.lidar_calls, [], "never switched on by a reconnect that was not asked for it")

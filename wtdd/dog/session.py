@@ -191,6 +191,7 @@ class DogSession:
         self.fp_errors = 0                    # ticks that raised (each already a failed row)
         self._labels: dict[str, Any] | None = None   # the newest blob press: {labels, source, ts, why?}; a FAILED press is labels [] and why
         self.scout = scout_zones.Proposals()         # the scout's auto no-go zones, fed by the objects thread (GET/POST /dog/scout)
+        self._lidar_want = False                      # the LiDAR was switched on by a person: a reconnect switches it on again
 
     # ---- plumbing
     def run(self, coro: Awaitable[Any], timeout: float = 120.0) -> Any:
@@ -235,6 +236,13 @@ class DogSession:
             except Exception as e:  # noqa: BLE001  (loud, not fatal: the row is FAILED, the chip shows OFF, the dog stays usable)
                 log("dog", "WARN avoidance NOT on after connect: hold-to-drive goes through the sport service until it answers",
                     err=f"{type(e).__name__}: {str(e)[:120]}")
+            if self._lidar_want:   # live 22:02: a stale-session reconnect came back with the LiDAR off, the grid on the memory
+                try:
+                    await b.lidar_on(self._on_frame)
+                    log("dog", "LiDAR back on after the reconnect (it was on)")
+                except Exception as e:  # noqa: BLE001  (loud, not fatal: the page shows lidar off and the switch still works)
+                    log("dog", "WARN LiDAR NOT back on after the reconnect: switch it on from the page",
+                        err=f"{type(e).__name__}: {str(e)[:120]}")
         return self.body
 
     async def with_body(self, fn: Callable[[Body], Awaitable[Any]]) -> Any:
@@ -338,6 +346,7 @@ class DogSession:
         No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
+            self._lidar_want = on   # after the switch answered: a reconnect restores exactly this
         if on is False:   # S7: the stream stopped: the pending summary is written
             with self._grid_lock:
                 self._pc_flush()
