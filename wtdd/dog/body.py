@@ -252,6 +252,7 @@ class Body:
         self._lidar_at = 0.0
         self._lidar_cb: Callable[[dict], None] | None = None   # the session's per-frame accumulator (wtdd/dog/occupancy.py), set by lidar_on
         self._lidar_cb_err = 0                                  # frames whose callback raised: counted and logged, never raised into the driver
+        self._lidar_no_floor = 0                                # windows with no free floor column: nothing kept (lidar.keep), a WARN
         self._lidar_on = False
         self._utpose: dict | None = None  # newest rt/utlidar/robot_pose data, raw (shape UNVERIFIED; for the frame check)
 
@@ -558,6 +559,13 @@ class Body:
             elif off > 1.0:
                 log("dog", "WARN lidar window center is far from the LF_SPORT_MOD_STATE position: the voxel frame may not be that odometry",
                     center_vs_odom_m=round(off, 2), frame_id=d["frame"], utlidar_pose=str(self._utpose)[:160])
+        d = lidar.keep(d)   # only the surface columns from here on: the dots, the grid, top_m and the floor plan (lidar.py: Surfaces)
+        f = d["fill"]
+        if f["surfaces"] == "on" and f["free"] == 0:
+            self._lidar_no_floor += 1
+            if self._lidar_no_floor <= 5 or self._lidar_no_floor % 100 == 0:
+                log("dog", "WARN lidar window with no floor seen: nothing kept (a wrong FLOOR_LO/Z_MIN shows here)",
+                    no_floor=self._lidar_no_floor, floor_band=[lidar.FLOOR_LO, lidar.Z_MIN], **{k: f[k] for k in ("occupied", "voxels")})
         self._lidar, self._lidar_n, self._lidar_at = d, self._lidar_n + 1, now
         if self._lidar_cb:
             try:
@@ -567,20 +575,22 @@ class Body:
                 if self._lidar_cb_err <= 5 or self._lidar_cb_err % 100 == 0:
                     log("dog", "WARN lidar frame callback failed", err=f"{type(e).__name__}: {str(e)[:120]}", errors=self._lidar_cb_err)
         if self._lidar_n % 100 == 0:
-            log("dog", f"lidar frames={self._lidar_n}", voxels=d["n"], errors=self._lidar_err)
+            log("dog", f"lidar frames={self._lidar_n}", voxels=d["n"], errors=self._lidar_err, no_floor=self._lidar_no_floor,
+                **{k: f[k] for k in ("surfaces", *lidar.FILL_KEYS, "kept") if k in f})
 
     def _on_utpose(self, message: dict) -> None:
         self._utpose = message.get("data")
 
     def lidar_points(self) -> dict:
         """The newest decoded voxel frame and the counts: {on, n (frames), errors, age_ms, frame (None until the first:
-        id, stamp, origin, resolution, width, center, voxels), points (float64 (N, 3) meters or None), utlidar_pose}."""
+        id, stamp, origin, resolution, width, center, voxels), points (float64 (N, 3) meters or None: the surface
+        columns only, lidar.keep), fill (that window's lidar.keep counts), utlidar_pose}."""
         d = self._lidar
         return {"on": self._lidar_on, "n": self._lidar_n, "errors": self._lidar_err, "cb_errors": self._lidar_cb_err,
                 "age_ms": round((time.monotonic() - self._lidar_at) * 1000) if d else None,
                 "frame": {"id": d["frame"], "stamp": d["stamp"], "origin": d["origin"], "resolution": d["resolution"],
                           "width": d["width"], "center": d["center"], "voxels": d["n"]} if d else None,
-                "points": d["points"] if d else None, "utlidar_pose": self._utpose}
+                "points": d["points"] if d else None, "fill": d["fill"] if d else None, "utlidar_pose": self._utpose}
 
     # ---- camera
 

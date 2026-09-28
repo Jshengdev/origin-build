@@ -39,9 +39,28 @@ examples/go2/data_channel/lidar/lidar_stream.py, not shipped in the wheel, fetch
             guess: the first frame logs the z range and the count per z layer; tune from that log).
 Accumulation (wtdd/dog/occupancy.py, item 01): every decoded window is handed to the session's grid from
 Body._on_lidar; the map draws the grid under the newest window's dots; no wall extraction beyond the count threshold.
+
+Surfaces (keep, surfaces). The dog's voxel map fills space it cannot see as solid columns. Live, 2026-09-27 19:10,
+the first frame after a restart: a flat ~2,400 voxels in every layer from 0.12 to 0.73 m (a wall line would be
+100-300), persistent in 5,900 of ~6,000 cells over 550 frames, drawn beyond the room as solid blocks cut by the
+6.4 m window's straight edges. Body._on_lidar runs keep() on every decoded window before anything reads it, so the
+dots (session.lidar, _live_px), the grid, the re-correction, top_m and the floor plan all see the same kept points.
+Per window, on its own lattice: a column is FREE when it holds a floor voxel (FLOOR_LO <= z < Z_MIN) and nothing in
+Z_MIN <= z < FREE_Z_MAX; OCCUPIED when it holds a voxel in the band (Z_MIN..Z_MAX); a SURFACE is an occupied column
+with a free column among its neighbours within SURFACE_REACH cells (8 at 1). Only surface columns are kept, every
+voxel of them (floor and above the band too, so zmask's heights are the kept columns' own): a filled block's interior
+and its window-cut edges are dropped and never counted, so top_m can never be raised by one; a wall's room side and
+a table (the floor is seen under its top up to FREE_Z_MAX, so its top and legs border free columns) are kept. A
+window with no free column cannot say what a surface is: nothing is kept (Body logs the WARN with the counts),
+never the unfiltered fill. WTDD_SURFACES=0 passes every window through (the old behaviour), served as "surfaces":
+"off". UNVERIFIED on the real dog: FLOOR_LO and FREE_Z_MAX (the floor band read off one live log; a wrong band shows
+as no_floor windows and a WARN); that the fill never has a floor voxel with an empty 0.10-0.30 m under it (a filled
+column open below would be kept as free floor's neighbour); how thin the kept wall is when the dog stands in a
+doorway (only the column facing the free side is kept).
 """
 from __future__ import annotations
 import asyncio
+import os
 import time
 from typing import Any, Callable
 
@@ -55,6 +74,10 @@ REQ_TIMEOUT_S = 3.0      # disableTrafficSaving round trip
 MAX_POINTS = 2000        # dots on the map per frame
 Z_MIN, Z_MAX = 0.10, 1.00   # wtdd: UNVERIFIED band in the voxel frame's z (meters); floor clutter below, ceiling/lamps above
 KEYS = ("stamp", "frame_id", "resolution", "src_size", "origin", "width")
+FLOOR_LO = -0.15      # m: the floor band is FLOOR_LO <= z < Z_MIN; live 19:10 the floor layers were -0.12..0.08 (10,492 voxels at -0.02). UNVERIFIED
+FREE_Z_MAX = 0.30     # m: a floor column with nothing in Z_MIN..this is free (the floor seen under a table counts). UNVERIFIED
+SURFACE_REACH = 1     # cells: an occupied column is a surface when a free column is this close (1 = its 8 neighbours)
+FILL_KEYS = ("occupied", "free", "surface", "dropped")   # per window, in columns (cells of the window's own lattice)
 
 
 async def subscribe(conn: Any, cb: Callable[[dict], None], pose_cb: Callable[[dict], None] | None = None) -> None:
@@ -122,6 +145,53 @@ def decode(message: dict) -> dict[str, Any]:
     if len(pts) == 0:
         log("lidar", "WARN frame with 0 voxels", frame=out["frame"], origin=origin, width=width, src_size=out["src_size"])
     return out
+
+
+def surfaces_on() -> bool:
+    """WTDD_SURFACES=0 turns the surface filter off (the old behaviour); read per window, default on."""
+    return os.environ.get("WTDD_SURFACES", "1") != "0"
+
+
+def surfaces(points, resolution: float) -> tuple[np.ndarray, dict[str, int]]:
+    """(N, 3) metres -> (the voxels of the surface columns (M, 3), {occupied, free, surface, dropped} columns, voxels,
+    kept}) (the module docstring: Surfaces). A window with no free column keeps nothing (free 0 says why)."""
+    p = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    if len(p) == 0:
+        return p, {"occupied": 0, "free": 0, "surface": 0, "dropped": 0, "voxels": 0, "kept": 0}
+    r = SURFACE_REACH
+    ix = np.rint((p[:, 0] - p[:, 0].min()) / resolution).astype(np.int64) + r
+    iy = np.rint((p[:, 1] - p[:, 1].min()) / resolution).astype(np.int64) + r
+    shape, z = (int(iy.max()) + r + 1, int(ix.max()) + r + 1), p[:, 2]
+
+    def cols(sel: np.ndarray) -> np.ndarray:
+        m = np.zeros(shape, dtype=bool)
+        m[iy[sel], ix[sel]] = True
+        return m
+    occ = cols((z >= Z_MIN) & (z <= Z_MAX))
+    free = cols((z >= FLOOR_LO) & (z < Z_MIN)) & ~cols((z >= Z_MIN) & (z < FREE_Z_MAX))
+    near = np.zeros(shape, dtype=bool)
+    h, w = shape
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            if dx or dy:
+                near[r:h - r, r:w - r] |= free[r + dy:h - r + dy, r + dx:w - r + dx]
+    surf = occ & near
+    kept = p[surf[iy, ix]]
+    n_occ, n_surf = int(occ.sum()), int(surf.sum())
+    return kept, {"occupied": n_occ, "free": int(free.sum()), "surface": n_surf, "dropped": n_occ - n_surf,
+                  "voxels": int(len(p)), "kept": int(len(kept))}
+
+
+def keep(d: dict) -> dict:
+    """A decoded window (decode) -> the same window with only its surface voxels in `points` and the counts in `fill`
+    ({surfaces: "on", occupied, free, surface, dropped, voxels, kept}); with WTDD_SURFACES=0 the window as it came,
+    fill {surfaces: "off"}. A window that already carries `fill` is returned as it is (kept once)."""
+    if "fill" in d:
+        return d
+    if not surfaces_on():
+        return {**d, "fill": {"surfaces": "off"}}
+    kept, c = surfaces(d["points"], d["resolution"])
+    return {**d, "points": kept, "fill": {"surfaces": "on", **c}}
 
 
 def top_down(voxels: np.ndarray, z_min: float = Z_MIN, z_max: float = Z_MAX, with_z: bool = False) -> list[tuple[float, ...]]:

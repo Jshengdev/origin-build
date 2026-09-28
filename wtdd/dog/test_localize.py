@@ -214,6 +214,9 @@ class Session(unittest.TestCase):
         self.enterContext(mock.patch.object(session, "GRID_FILE", Path(self.tmp) / "grid.json"))
         self.enterContext(mock.patch.object(lidar, "subscribe", mock.AsyncMock()))
         self.err = self.enterContext(redirect_stderr(io.StringIO()))
+        # both fixtures' worlds have walls and no floor: the surface filter (lidar.keep, test_surfaces) would keep
+        # nothing; these tests are about the re-correction, so the windows pass as they came (the old behaviour)
+        self.enterContext(mock.patch.dict("os.environ", {"WTDD_SURFACES": "0"}))
         self.ledger, self.body, self.s = ledger, Body(), session.DogSession()
         self.addCleanup(stop, self.s)
         self.s.body = self.body
