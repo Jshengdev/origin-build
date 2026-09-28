@@ -46,7 +46,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 
 ## Facts that trip a client
 - **GET /ledger returns a bare array**, not an object. `n` defaults to 20. `n=0` returns every row. A negative `n`
-  returns all but the first |n|.
+  returns all but the first |n|. **GET /sessions is a bare array too** (`[]` with no stamped row).
 - **`p` means two things.**
   - In `/dog/state` (`.map.p`, `.follow.p`) and in POST `/dog/calibrate`'s body, it is a map point `[x, y]` in map pixels.
   - In `/dog/objects` (`objects[].p`), `/dog/blobs` (`labels[].p`) and `/dog/scout` (`proposals[].p`, `zones[].p`), it is a probability from 0 to 1.
@@ -70,8 +70,8 @@ their inconsistencies: a client builds against these, and a change to one is a c
   confirm is 404. What works live is dismissing an auto zone, `id` = its map name (`nogo-<n>`).
 - **The record** is GET `/record?shift=<id>` (default: the run in force) and GET `/record/shifts`. An unknown shift is a
   404 naming the shifts that exist, never an empty record.
-- **Five GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts` and
-  `/ledger`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
+- **Six GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts`,
+  `/ledger` and `/sessions`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
   Keys and numbers are untouched, the ledger file keeps the raw values, and the other routes are not redacted.
 - `_version` is `int(mtime)` of `ui/map.json`. Send it back on POST `/map` and `/dog/scout`, or the write is a 409.
 
@@ -89,6 +89,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/shift` | | `{shift_id, source}` | 500 `{error}` |
 | GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift (a plain sentence); 500 `{error}` |
 | GET | `/record/shifts` | | `{shifts, current}` | 500 `{error}` |
+| GET | `/sessions` | | `[{shift_id, start, end, rows, stops, flags, signed, signed_by, stub_rows, in_force}]` | 500 `{error}` |
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, cal, follow, avoid, recheck, corr, rec}` (`cal`: the calibration tie `{map, heading_deg, at}` every projection scales about, or `null` when the dog was never placed) | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
@@ -117,6 +118,10 @@ What the keys hold:
     `to` is the chat guid the flag went to; a 1:1's handle in it reads `a member`.
   - `signed` is null or `{by, at}`.
 - **`/record/shifts`**: `shifts` is newest first; `current` is the run in force.
+- **`/sessions`**: one line per shift in `/record/shifts`'s order (newest first), each number the one `/record?shift=<id>`
+  counts (`record.sessions()` runs `build()` per shift): `start` and `end` are its `window.from` and `window.to`, `stops` and
+  `flags` are counts, `signed` is a bool and `signed_by` the signer or null, `stub_rows` its cached/stub rows, `in_force`
+  whether it is the run in force.
 - **`/dog/state`**:
   - `state` is null, or the dog's `{mode, gait_type, progress, position, velocity, yaw_speed, body_height, range_obstacle, rpy, n, hz, age_ms}`.
   - `map` is null, or `{p, heading_deg}`.
