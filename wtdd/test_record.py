@@ -293,6 +293,40 @@ class Signed(Guard):
         self.assertIn("1 post stamped after the signature, not on the record", h)
 
 
+class Asked(Guard):
+    """Preflight: a stop's "not sure: ..." question (decide.ask_line) is that stop's ping and a flag, answered or not,
+    like "who dis?!". The listener posts it as kind listen under decide:<wake>:<n>; dog_say pressed by hand posts it
+    under say-<epoch>:decide, which is its look's question, never a second say. Shift A's stop 10 asks and a housemate
+    answers, in memory; the ledger is untouched."""
+    ASK = "not sure: out of place at 55 percent. what is it?"
+
+    def asked(self, trigger: str, say: str | None = None) -> dict:
+        m, rows = make_ledger_shift, ledger.rows()
+        if say:   # stop 10 looked by hand: dog_say's say-<epoch> post, then its ask
+            rows = [{**r, "args": {**r["args"], "trigger": say}} if r["tool"] in ("chat.claim", "chat.post")
+                    and r["args"].get("trigger") == "say:WAKE-A:10" else r for r in rows]
+        i = next(i for i, r in enumerate(rows) if r["tool"] == "chat.post" and r["args"]["trigger"] == (say or "say:WAKE-A:10"))
+        ask = [m.claim("2026-09-25T22:00:51", "fixA-chat", trigger),
+               m.post("2026-09-25T22:00:52", "fixA-chat", GROUP, "listen", trigger, self.ASK, "look-down-boxed.jpg", A, 70100, "2026-09-26 05:00:51"),
+               m.row("2026-09-25T22:01:02", "fixA-chat", "central", "intruder.verdict", "imessage",
+                     {"from": m.HOUSEMATE, "text": "its teris cup, leave it", "guid": "REPLY-A9", "asked": trigger, "acked_ms": 10000,
+                      "shift_id": A, "chat": GROUP}, {"verdict": "known"})]
+        return record.build(A, rows=rows[:i + 1] + ask + rows[i + 1:], site=EMPTY_SITE)
+
+    def test_the_listeners_not_sure_question_is_the_stops_ping_and_a_flag(self):
+        rec = self.asked("decide:WAKE-A:10")
+        self.assertEqual([(s["index"], s["pinged"]) for s in rec["stops"]], [(10, True), (22, True), (23, False)])
+        self.assertEqual([(f["stop"], f["text"]) for f in rec["flags"]], [(10, self.ASK), (22, "who dis?!")])
+        r = rec["flags"][0]["resolved"]
+        self.assertEqual((r["text"], r["verdict"], r["acked_ms"]), ("its teris cup, leave it", "known", 10000))
+
+    def test_dog_says_not_sure_by_hand_is_its_looks_question_not_a_second_stop(self):
+        rec = self.asked("say-1790400000:decide", say="say-1790400000")
+        self.assertEqual([(s["kind"], s["pinged"]) for s in rec["stops"]], [("tilt", True), ("sit", True), ("tilt", False)])
+        self.assertFalse([s["error"] for s in rec["stops"] if "no dog.look row" in str(s["error"])])
+        self.assertEqual([f["text"] for f in rec["flags"]], [self.ASK, "who dis?!"])
+
+
 class ByHand(Guard):
     def test_a_look_pressed_by_hand_keeps_the_post_that_confirmed_it(self):
         """The README's by-hand path: dog_say from the page posts under say-<epoch> (kind remote), not say:<wake>:<n>.

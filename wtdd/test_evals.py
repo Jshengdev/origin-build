@@ -317,6 +317,16 @@ class Escalate(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn(ONCALL, why)
 
+    def test_a_not_sure_question_to_the_on_call_group_with_its_answer_is_a_flag_answered(self):
+        """Preflight: a stop's "not sure: ..." question (the listener's, kind listen) is a flag like "who dis?!", graded on
+        its target, its reply and acked_ms, as the record lists it. The decide round asks one at stop 22, in the group,
+        and a housemate answers there; S10's demo makes the group the on-call chat."""
+        with mock.patch.dict(os.environ, {"WTDD_ON_CALL_GUID": GROUP}):
+            ok, why, detail = evals.grade_escalate(rows("decide"))
+        self.assertTrue(ok, why)
+        self.assertIn(f"1 flag(s) to {GROUP}", detail)
+        self.assertIn("15000", detail)
+
     def test_a_reply_without_a_measured_time_fails(self):
         rs = rows("escalate")
         a = rs[at(rs, "intruder.verdict")]["args"]
