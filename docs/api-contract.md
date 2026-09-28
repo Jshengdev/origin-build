@@ -93,7 +93,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, cal, follow, avoid, recheck, corr, rec}` (`cal`: the calibration tie `{map, heading_deg, at}` every projection scales about, or `null` when the dog was never placed) | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
 | GET | `/dog/lidar` | | `{on, n, errors, cb_errors, grid_frames, localize, age_ms, frame, points_px, utlidar_pose?, n_xy?, z_m?, known?, why?}` | 500 `{error}` |
-| GET | `/dog/grid` | `threshold` (default 3) | `{n, cells_px, cell_px, threshold, resolution, frames, frame_id, extent_m, source, hits?, cb_errors?, why?}` | 500 `{n: 0, cells_px: [], error}` |
+| GET | `/dog/grid` | `threshold` (default 3) | `{n, cells_px, cell_px, threshold, resolution, frames, frame_id, extent_m, source, hits?, top_m? \| top_why?, cb_errors?, why?}` | 500 `{n: 0, cells_px: [], error}` |
 | GET | `/dog/floorplan` | `threshold` (default 3) | `{segments_px, classes, class_px, source, ok?, threshold?, frames?, ms?, ts?, cell_px?, segments_top_m?, class_top_m?, moved?, why?}` | 500 `{segments_px: [], error}` |
 | GET | `/dog/blobs` | | `{labels, source, moved, ts?, why?}` | 500 `{labels: [], error}` |
 | GET | `/dog/objects` | | `{n, objects, windows, fov_deg, source, why?}` | 500 `{n: 0, objects: [], error}` |
@@ -132,6 +132,11 @@ What the keys hold:
   calibrated, no saved map).
 - **`/dog/grid`**: `source` is `session`, `ui/grid.json` or null. `hits` (a count per `cells_px` entry) is there only when
   cells are drawn.
+  `top_m` (a number or null per `cells_px` entry, same order) is each cell's highest measured layer at or above the
+  floor plan's FLOOR, in metres (the same z and rounding to 0.05 as `/dog/floorplan`'s `class_top_m`, band-free, so a wall
+  seen to 1.5 m reads 1.5 where `/dog/lidar`'s `z_m` stops at the band); null where the cell has no layer at or above
+  FLOOR, never 0. Served for `session` and `ui/grid.json` alike; from a grid with no height profile (a `ui/grid.json`
+  saved before item 15) it is absent and `top_why` says so.
 - **`/dog/floorplan`**: before any plan the answer is `{segments_px: [], classes: {}, class_px: {}, source: null, why}`.
   The heights (`segments_top_m`, `class_top_m`) come only from a grid with a height profile.
 - **`/dog/blobs`**: `labels[]` is `{blob_id, kind, xy, geometry_verdict, label, p, model, erase, source, pos_px, error?, ...}`.
