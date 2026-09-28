@@ -12,14 +12,18 @@ map with one tap. A routine is ui/map.json's path, stops and actions; nothing el
     save            the map's route under the name, a name already saved replaced in place (the map is not written).
     load            the routine's route written into the map by field.write_map, POST /map's own write: every other key
                     (rooms, lights, zones, labels, policy) kept, the map it replaces kept as map.prev.json, _version the
-                    file's new int(mtime), so an open page's stale POST /map is a 409.
+                    file's new int(mtime), so an open page's stale POST /map is a 409. Refused while a walk runs (a
+                    field.json younger than field.BUSY_S): the chat round reads the map's actions at every stop, so a
+                    mid-walk load would run the new routine's actions at the old route's stops.
     delete          the name gone from the file; the map keeps its route.
   Refused(code)     a name that is not 1 to 40 characters once trimmed, or an empty path, is 400; a name not saved is 404
-                    naming the routines that exist; each on its failed row. An unknown action is 400 with no row (it
+                    naming the routines that exist; a load while a walk runs is 409; each on its failed row. An unknown action is 400 with no row (it
                     names no step).
 The file is routines.json beside the map (ui/routines.json; a WTDD_MAP scratch copy keeps its own), created by the first
 save and gitignored like ledger.jsonl: it is live data. One that does not parse is a ValueError naming it, never [].
 No follow code: POST /dog/follow and the chat round read ui/map.json at use, so they walk the route that was loaded.
+A plain POST /dog/follow writes no field.json, so a load during one is not refused: the follower keeps the path and stops
+it was handed and reads no actions, while the page draws the loaded route.
 _version is int(mtime), as POST /map's, moved strictly up by field.write_map: a load in the second of the page's last read
 still makes that page's save a 409. UNVERIFIED on the dog: a routine is map pixels, so it is walked
 under the calibration tie and scale in force at the walk, not the ones it was drawn or recorded under; the first live
@@ -92,6 +96,10 @@ def act(mp: Path, body: dict[str, Any]) -> dict[str, Any]:
         if action != "save" and name not in names:
             raise Refused(404, f"no routine named {name!r}; routines: {', '.join(names) or 'none saved yet'}")
         if action == "load":
+            age = time.time() - field.FIELD.stat().st_mtime if field.FIELD.exists() else field.BUSY_S
+            if age < field.BUSY_S:   # a live walk: the chat round reads the map's actions at its next stop
+                raise Refused(409, f"not loaded: a walk is running ({field.FIELD.name} written {round(age, 1)} s ago); "
+                                   f"stop it (POST /field/stop) or let it finish, then load {name!r}")
             m = json.loads(mp.read_text())
             want = dict(zip(ROUTE, _route(rs[names.index(name)])))
             field.write_map(mp, {**m, **want})
