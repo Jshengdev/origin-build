@@ -20,7 +20,8 @@ How. bearing(): the box centre u in a pinhole camera of horizontal field of view
 right of the optical axis positive. The ray starts at the dog's odometry position (LF_SPORT_MOD_STATE) at yaw - bearing
 (odometry yaw is counter-clockwise positive, so the camera's right is a negative angle) and is sampled every half cell
 up to MAX_RANGE_M; the pin is the first sample whose cell (np.rint onto the grid's lattice, exactly Grid.cell's rule)
-was seen threshold+ times, at that cell's lattice point (the dots' convention), projected to map pixels through the same
+was seen threshold+ times (with the camera's own floor-contact depth, ground_depth, the first such cell NEAR that depth,
+so a chair in front does not pin the couch behind it; placed_by and depth_cam_m say which), at that cell's lattice point (the dots' convention), projected to map pixels through the same
 calibration as the dots (occupancy.to_map_px). hit_m (odometry metres) is what is stored as the truth; pos_px is
 re-projected from it through the calibration and scale in force at every window and every read (Store.project, called
 by observe and tick), so a pin moves with the tie like the dots do; object.seen rows keep the pos_px of their moment. The store matches a box to an object with the same label whose pin is
@@ -63,6 +64,10 @@ from ..ledger import append as ledger_append, log
 from . import occupancy
 
 MAX_RANGE_M = 8.0     # a ray that meets no counted cell within this is "no blob"
+CAM_HEIGHT_M = 0.30   # the front camera above the floor, standing (body_height 0.32 live). UNVERIFIED: measure it on the Go2
+CAM_FWD_M = 0.30      # the camera sits about this far ahead of the odometry origin (see How)
+EDGE_PX = 4           # a box whose bottom is this close to the frame's bottom edge is cut: its floor contact is out of view
+DEPTH_TOL_M, DEPTH_TOL_FRAC = 0.4, 0.35   # a lit cell is "near the camera's depth" within max(0.4 m, 35 % of it)
 STALE_WINDOWS = 8     # detector windows unseen before an object is stale (2 s at the detector's 4 Hz)
 MATCH_PX = 60         # map pixels (about 0.55 m): a box of the same label pinned this close is the same object
 THUMB_PX = 96         # the thumbnail's longest side
@@ -75,7 +80,7 @@ PIN_PX = 9            # the replay PNG's pin square, pixels
 PIN_RGB = (220, 30, 30)
 WATCH = ROOT / "watch.json"   # what wtdd/watch.py writes (publish()); mirrored, not imported
 KEYS = ("id", "label", "p", "label_source", "message", "message_source", "thumb", "box", "bearing_deg", "hit_m", "dist_m",
-        "pos_px", "why", "first_seen", "last_seen", "windows_unseen", "stale")
+        "pos_px", "why", "first_seen", "last_seen", "windows_unseen", "stale", "depth_cam_m", "placed_by")
 NOT_CAL = "not calibrated: drag the dog to where it is (POST /dog/calibrate)"
 FOV_WHY = "WTDD_CAM_FOV_DEG is required: the camera's horizontal field of view in degrees, UNVERIFIED until measured on the Go2 (see .env.example)"
 SYSTEM = ("You are a robot dog's eyes on a night round of a work site. You get a small crop of its camera frame around "
@@ -95,10 +100,30 @@ def bearing(xyxy, frame_w: float, fov_deg: float) -> float:
     return math.atan((u / frame_w - 0.5) * 2 * math.tan(math.radians(fov_deg) / 2))
 
 
+def ground_depth(xyxy, frame_w: float, frame_h: float, fov_deg: float, brg: float, cam_h: float = CAM_HEIGHT_M,
+                 pitch_rad: float = 0.0) -> float | None:
+    """Metres from the odometry origin along the box's bearing to where the box meets the floor, from the camera alone:
+    the bottom row's angle below the optical axis (square pixels: the horizontal fov's focal length) and the camera's
+    height give the forward depth z = cam_h / tan(angle); the range is z / cos(bearing) + CAM_FWD_M. None when the bottom
+    is cut by the frame's edge (the contact is out of view) or at or above the horizon. A floor-standing thing only;
+    UNVERIFIED on the Go2: CAM_HEIGHT_M, a level camera (pitch 0 unless given) and the lens's distortion at 120 deg."""
+    f = (frame_w / 2) / math.tan(math.radians(fov_deg) / 2)
+    y = float(xyxy[3])
+    if y >= frame_h - EDGE_PX:
+        return None
+    below = math.atan((y - frame_h / 2) / f) + pitch_rad
+    if below <= math.radians(1.0):
+        return None
+    return cam_h / math.tan(below) / max(math.cos(brg), 1e-6) + CAM_FWD_M
+
+
 def nearest_blob(grid: occupancy.Grid, xy_m, angle_rad: float, threshold: int = occupancy.THRESHOLD,
-                 max_range_m: float = MAX_RANGE_M) -> dict[str, Any] | None:
-    """The first cell seen threshold+ times along the ray, as {xy (its lattice point, metres), dist_m, count}; None when
-    the ray meets none within max_range_m. Pure: the caller holds the grid's lock."""
+                 max_range_m: float = MAX_RANGE_M, near_m: float | None = None) -> dict[str, Any] | None:
+    """The cell seen threshold+ times along the ray, as {xy (its lattice point, metres), dist_m, count, placed_by,
+    depth_cam_m}; None when the ray meets none within max_range_m. With near_m (ground_depth: where the camera sees the
+    thing meet the floor), the first counted cell within max(DEPTH_TOL_M, DEPTH_TOL_FRAC * near_m) of it: a chair in front
+    no longer pins the couch behind it; none there, the first counted cell, and placed_by says so. Pure: the caller holds
+    the grid's lock."""
     if threshold < 1:
         raise ValueError(f"threshold must be at least 1 frame, got {threshold}")
     res = grid.resolution
@@ -112,9 +137,15 @@ def nearest_blob(grid: occupancy.Grid, xy_m, angle_rad: float, threshold: int = 
     k = np.flatnonzero(c >= threshold)
     if not len(k):
         return None
+    placed = "first lidar hit"
+    if near_m is not None:
+        close = k[np.abs(t[k] - near_m) <= max(DEPTH_TOL_M, DEPTH_TOL_FRAC * near_m)]
+        placed = "lidar near the camera's depth" if len(close) else "first lidar hit (none near the camera's depth)"
+        k = close if len(close) else k
     k = int(k[0])
     xy = [round(float(grid.origin[0] + ix[k] * res), 6), round(float(grid.origin[1] + iy[k] * res), 6)]
-    return {"xy": xy, "dist_m": round(math.hypot(xy[0] - xy_m[0], xy[1] - xy_m[1]), 3), "count": int(c[k])}
+    return {"xy": xy, "dist_m": round(math.hypot(xy[0] - xy_m[0], xy[1] - xy_m[1]), 3), "count": int(c[k]),
+            "placed_by": placed, "depth_cam_m": None if near_m is None else round(float(near_m), 2)}
 
 
 def thumb(src, xyxy, width: int = THUMB_PX) -> str:
@@ -238,7 +269,8 @@ class Store:
             elif grid is None:
                 why = "no grid: no LiDAR frame this session"
             else:
-                hit = nearest_blob(grid, pose["position"], pose["yaw"] - brg, threshold)
+                est = ground_depth(b["xyxy"], img.width, img.height, fov_deg, brg, pitch_rad=float(pose.get("pitch") or 0.0))
+                hit = nearest_blob(grid, pose["position"], pose["yaw"] - brg, threshold, near_m=est)
                 if hit is None:
                     why = f"no blob seen {threshold}+ times along the bearing within {MAX_RANGE_M} m"
                 elif cal is None:
@@ -247,7 +279,8 @@ class Store:
                     pos_px = occupancy.to_map_px([hit["xy"]], cal)[0].tolist()
             fields = {"label": label, "p": p, "label_source": src, "thumb": thumb(img, b["xyxy"]) if img is not None else None,
                       "box": list(b["xyxy"]), "bearing_deg": None if brg is None else round(math.degrees(brg), 1),
-                      "hit_m": hit["xy"] if hit else None, "dist_m": hit["dist_m"] if hit else None, "pos_px": pos_px, "why": why}
+                      "hit_m": hit["xy"] if hit else None, "dist_m": hit["dist_m"] if hit else None, "pos_px": pos_px, "why": why,
+                      "depth_cam_m": hit["depth_cam_m"] if hit else None, "placed_by": hit["placed_by"] if hit else None}
             same = [o for o in self.objs.values() if o["label"] == label and o["id"] not in matched]
             fresh = [o for o in same if not o["stale"]]   # with no pin to compare, identity rides on continuity alone
             if pos_px is not None:   # the nearest pin within MATCH_PX, else a fresh object still waiting for its first pin
