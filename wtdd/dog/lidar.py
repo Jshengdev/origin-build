@@ -124,22 +124,33 @@ def decode(message: dict) -> dict[str, Any]:
     return out
 
 
-def top_down(voxels: np.ndarray, z_min: float = Z_MIN, z_max: float = Z_MAX) -> list[tuple[float, float]]:
+def top_down(voxels: np.ndarray, z_min: float = Z_MIN, z_max: float = Z_MAX, with_z: bool = False) -> list[tuple[float, ...]]:
     """Occupied voxels (N, 3) meters -> unique (x, y) of those with z_min <= z <= z_max (the band between floor
     clutter and head height, in the voxel frame's z). Logs in/out counts; a WARN with the z range seen when the
-    band is empty (so a wrong Z_MIN/Z_MAX is one grep away)."""
+    band is empty (so a wrong Z_MIN/Z_MAX is one grep away). with_z: (x, y, z) with z the highest in-band z of that
+    (x, y) column, in the same order (the page colours the dots by it; nothing is drawn from it)."""
     v = np.asarray(voxels, dtype=np.float64).reshape(-1, 3)
     if len(v) == 0:
         log("lidar", "WARN top_down of 0 voxels")
         return []
     keep = v[(v[:, 2] >= z_min) & (v[:, 2] <= z_max)]
-    xy = np.unique(keep[:, :2], axis=0) if len(keep) else keep[:, :2]
+    xy, inv = np.unique(keep[:, :2], axis=0, return_inverse=True) if len(keep) else (keep[:, :2], np.zeros(0, dtype=np.int64))
     if len(xy) == 0:
         log("lidar", "WARN top_down kept 0 of %d voxels" % len(v), z_min=z_min, z_max=z_max,
             z_seen=(round(float(v[:, 2].min()), 2), round(float(v[:, 2].max()), 2)))
     else:
         log("lidar", "top_down", voxels=len(v), in_band=len(keep), xy=len(xy), z_min=z_min, z_max=z_max)
+    if with_z:
+        top = np.full(len(xy), -np.inf)
+        np.maximum.at(top, np.asarray(inv).reshape(-1), keep[:, 2])
+        return [(float(x), float(y), float(z)) for (x, y), z in zip(xy, top)]
     return [(float(x), float(y)) for x, y in xy]
+
+
+def thin(seq, max_points: int = MAX_POINTS):
+    """Every stride-th item when there are more than max_points (to_map_points' thinning, shared so parallel lists stay parallel)."""
+    n = len(seq)
+    return seq[::-(-n // max_points)] if n > max_points else seq
 
 
 def to_map_points(points_m, cal: dict, pos, yaw: float, max_points: int = MAX_POINTS) -> list[list[int]]:
@@ -149,9 +160,7 @@ def to_map_points(points_m, cal: dict, pos, yaw: float, max_points: int = MAX_PO
     calibration alone maps them. More than max_points is thinned to an evenly spaced subset."""
     pts = list(points_m)
     n = len(pts)
-    if n > max_points:
-        stride = -(-n // max_points)
-        pts = pts[::stride]
+    pts = thin(pts, max_points)
     px = [[round(v) for v in nav.to_map(cal, p, yaw)[:2]] for p in pts]
     if n == 0:
         log("lidar", "WARN to_map_points of 0 points", pos=[round(float(v), 2) for v in pos[:2]])
