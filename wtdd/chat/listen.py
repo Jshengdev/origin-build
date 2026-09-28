@@ -9,7 +9,10 @@ claims a key before it sends, so a send that fails has consumed its key: its err
 Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once]
      python -m wtdd.chat simulate "what the dog doin" "lights off" "stop"   (dry-run posts, REAL commands)
 
-Facts. No replay at boot: the watermark starts at MAX(ROWID). WTDD_LISTEN_S (default 120) is the armed window and any
+Facts. The listener never connects the dog itself: `listen` sets WTDD_API_ONLY=1, so with no API up (a restart) a
+look, command or round is a ConnectionError naming the API address, posted as its error ("couldn't look: ..."), never a
+second WebRTC client beside the API's (wtdd/commands.py _via_api). UNVERIFIED until the first live run: a wake landing
+during a real API restart. No replay at boot: the watermark starts at MAX(ROWID). WTDD_LISTEN_S (default 120) is the armed window and any
 recognized message re-arms it. Who may wake the dog: any member while HOUSEMATES is empty (one WARN), else the listed
 handles (any other sender is ignored with one masked WARN per sender); from-me rows only with WTDD_ALLOW_SELF=1
 (Johnny's phone shares the dog's account), and even then the dog's
