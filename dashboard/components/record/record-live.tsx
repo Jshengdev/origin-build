@@ -5,6 +5,8 @@
  *   GET /shift, POST /shift {name}          the run in force; "Start morning run" / "Start night run" (S11)
  *   GET /record/shifts, GET /record?shift=  the runs that exist, and one run's record (item 10's JSON, S13's route)
  *   POST /tools/record_sign {by, shift_id}  sign it once; a second signature is refused, and the refusal is shown as served
+ *   GET /sessions                           every run in one table (#75), newest first; a row opens its record here (the
+ *                                           Sessions tab folds into Record: Johnny's "sessions ... into Record")
  *   GET /evals                              evals.json as written by `python -m wtdd.evals --write`, with its own time:
  *                                           the page never says it graded this run (G3)
  * The record is filmed: every string in it is redacted (flags[].to and resolved.by are raw handles). A record whose rows
@@ -18,7 +20,7 @@ import { ActionButton, Module, SelectMenu, SignalChip, WaitingChip } from "@/com
 import { PageActions } from "@/components/shell/page-header";
 import { Results, type Result } from "@/components/live/stop";
 import { age, clock } from "@/lib/format";
-import { post, redact, redactDeep, usePoll, type Evals, type RecordJson, type Shift, type Shifts } from "@/lib/data/api";
+import { post, redact, redactDeep, usePoll, type Evals, type RecordJson, type Sessions, type Shift, type Shifts } from "@/lib/data/api";
 
 const TZ = "America/Los_Angeles";
 const secs = (ms: number | null | undefined) => { if (ms == null) return null; const t = age(ms); return `${t.value} ${t.unit}`; };
@@ -35,6 +37,7 @@ export function RecordLive() {
   const shiftId = picked ?? (shifts.data && listed.includes(shifts.data.current) ? shifts.data.current : null);
   const rec = usePoll<RecordJson>(shiftId ? `/record?shift=${encodeURIComponent(shiftId)}` : null, 4000);
   const evals = usePoll<Evals>("/evals", 10000);
+  const sessions = usePoll<Sessions>("/sessions", 10000);
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
   const [by, setBy] = useState(() => (typeof window === "undefined" ? "" : localStorage.getItem("wtdd.scout.by") ?? ""));
@@ -109,6 +112,32 @@ export function RecordLive() {
           <Report evals={evals.data} error={evals.error} />
         </div>
       </div>
+
+      <Module title="Sessions" meta={sessions.data ? `${sessions.data.length} ${sessions.data.length === 1 ? "run" : "runs"}` : undefined} size="auto"
+        loading={!sessions.data && !sessions.error} error={sessions.error ? `FAILED GET /sessions · ${redact(sessions.error)}` : undefined}>
+        {sessions.data?.length === 0 ? <p className="text-[13px] text-muted-foreground">No run has a stamped row yet.</p> : (
+          <table className="w-full text-[13px]">
+            <thead className="text-left text-muted-foreground">
+              <tr>{["Run", "From", "To", "Rows", "Stops", "Flags", "Signed", ""].map((h) => <th key={h} className="pb-2 font-normal">{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {(sessions.data ?? []).map((s) => (
+                <tr key={s.shift_id} onClick={() => setPicked(s.shift_id)} aria-selected={s.shift_id === shiftId}
+                  className="cursor-pointer border-t border-border hover:bg-accent aria-selected:bg-accent">
+                  <td className="py-2 font-mono">{s.shift_id}</td>
+                  <td className="py-2 font-mono text-muted-foreground">{s.start?.replace("T", " ").slice(5, 16) ?? "none"}</td>
+                  <td className="py-2 font-mono text-muted-foreground">{s.end?.replace("T", " ").slice(5, 16) ?? "none"}</td>
+                  <td className="py-2 font-mono">{s.rows}{s.stub_rows ? <span className="text-muted-foreground"> · {s.stub_rows} stand-in</span> : null}</td>
+                  <td className="py-2 font-mono">{s.stops}</td>
+                  <td className="py-2 font-mono">{s.flags}</td>
+                  <td className="py-2">{s.signed ? redact(s.signed_by ?? "signed") : <span className="text-muted-foreground">unsigned</span>}</td>
+                  <td className="py-2 text-right">{s.in_force && <SignalChip tone="neutral">in force</SignalChip>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Module>
     </div>
   );
 }

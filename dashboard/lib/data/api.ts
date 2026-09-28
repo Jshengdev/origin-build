@@ -50,6 +50,8 @@ export interface PeopleJson { group: string | null; group_why?: string; people: 
  *  unknown (never connected, switched off, no row, a stub row); `as_of` is when the evidence is from; `key_set` (jev and
  *  openrouter only) says a key is set, never the key. Neither route connects the dog or calls the network. */
 export interface IntegrationsJson { checked_at: string; integrations: Array<{ name: string; ok: boolean | null; detail: string; as_of: string | null; key_set?: boolean }> }
+/** GET /sessions (#75): one line per run, newest first, each number the one /record?shift=<id> counts. A bare array. */
+export type Sessions = Array<{ shift_id: string; start: string | null; end: string | null; rows: number; stops: number; flags: number; signed: boolean; signed_by: string | null; stub_rows: number; in_force: boolean }>;
 /** GET /dog/objects. */
 export interface ObjectsPx {
   n: number; windows?: number; fov_deg?: number; source?: string; why?: string; error?: string;

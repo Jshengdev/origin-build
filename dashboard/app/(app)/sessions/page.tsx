@@ -1,11 +1,6 @@
-import { SessionsView } from "@/components/sessions/sessions-view";
-import { SampleFrame } from "@/components/shell/sample-frame";
+import { redirect } from "next/navigation";
 
-/** Back as a sample (Johnny, 17:3x: "bring them back so i can be more specific about what it should and shouldnt display"). Sessions are not wired yet. */
-export default function SessionsPage() {
-  return (
-    <SampleFrame what="Sessions are not wired yet: a run, its morning page, report and signature are on Record.">
-      <SessionsView />
-    </SampleFrame>
-  );
+/** Sessions live in Record now: every run in one table, and a row opens its record (GET /sessions, #75). */
+export default function Page() {
+  redirect("/record");
 }
