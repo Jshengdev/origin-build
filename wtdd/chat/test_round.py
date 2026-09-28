@@ -219,6 +219,23 @@ class Wake(unittest.TestCase):
             l.handle(msg("what the dog doin", "W3", 104))   # typed after "dog done": the next take
         self.assertEqual(rounds, ["W1", "W3"])
 
+    def test_after_a_round_shorter_than_listen_s_the_chat_is_still_armed_and_a_wake_still_decides(self):
+        """A failed take ends in 20 s, so the chat is still armed after "dog done": the retake must start (it was read
+        as a silent re-arm), and a wake typed during the round must still be its one WARN (it too re-armed silently)."""
+        top = [100]
+        rounds: list[str] = []
+        with mock.patch.object(L.db, "max_rowid", side_effect=lambda: top[0]), \
+                mock.patch.dict(os.environ, {"WTDD_WAKE_SHOW": "1"}), mock.patch.object(L, "log") as log, \
+                mock.patch.object(L, "PENDING", _TMP / "pending-wake.json"), mock.patch.object(L, "STATE", _TMP / "state-wake.json"):
+            l = L.Listener(GROUP, lambda *a: None, listen_s=120)
+            l.wake_show = lambda m: (rounds.append(m["guid"]), top.__setitem__(0, top[0] + 3))   # a short round: still armed after it
+            l.handle(msg("what the dog doin", "W1", 101))
+            l.handle(msg("what the dog doin", "W2", 102))   # typed during W1's round
+            self.assertTrue(l.armed)
+            l.handle(msg("what the dog doin", "W3", 104))   # the retake, typed after "dog done"
+        self.assertEqual(rounds, ["W1", "W3"])
+        self.assertEqual(len([c for c in log.call_args_list if "typed during the round" in c.args[1]]), 1, log.call_args_list)
+
 
 
 class Reply(unittest.TestCase):
