@@ -264,6 +264,17 @@ class Decide(unittest.TestCase):
         self.assertTrue(ok, why)
         self.assertIn("3 stops", detail)
 
+    def test_the_followers_own_look_ends_the_alarms_look_before_it(self):
+        """Preflight: the alarm's look (a detector row, no vision call: no stop) then the follower's classify rows before
+        the next stop. The follower's look ends the alarm's look as any look does, so its vision call makes no stop of it."""
+        rs = rows("decide")
+        alarm = [copy.deepcopy(rs[at(rs, t)]) for t in ("dog.look", "watch.boxes")]
+        alarm[0]["args"]["kind"] = "level"
+        i = at(rs, "dog.look", 1)
+        ok, why, detail = evals.grade_decide(rs[:i] + alarm + follow_look(rs) + rs[i:])
+        self.assertTrue(ok, why)
+        self.assertIn("3 stops", detail)
+
     def test_decisions_without_any_look_fail(self):
         """Three decided rows and no dog.look: decisions tied to no stop are receipts out of order, never a pass."""
         ok, why, _ = evals.grade_decide(without(rows("decide"), "dog.look"))
