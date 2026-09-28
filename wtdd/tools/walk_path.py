@@ -3,8 +3,11 @@ rooms dimmed), pausing at the map's stops. source=entity: a simulated entity wal
 is hand-driven). source=dog: the API's follower drives the real dog along the same path (calibrated, avoidance on), the
 lights follow where it believes it is, and at every stop the dog performs the action recorded there (map.json
 `actions`: the look kind and whether to post; default a tilt look posted to the castle), keyed round:<epoch>:<stop> so a
-replay never posts twice for one stop. The chat's wake sequence calls wtdd.field.walk itself to key the posts on the
-wake message. Returns seconds, writes, rooms, stops, and the actions done."""
+replay never posts twice for one stop. A Stop (POST /field/stop) pressed while the dog looks at a stop lets the look
+finish, skips that stop's post (its action says stopped: "stopped before the post") and the walk ends at its next tick;
+the check is read once, after the look, so a Stop landing during the send itself still posts (UNVERIFIED on the real
+dog: a Stop mid-look, seen only with the look stubbed). The chat's wake sequence calls wtdd.field.walk itself to key
+the posts on the wake message. Returns seconds, writes, rooms, stops, and the actions done."""
 ARGS = {"dry": {"type": "boolean", "default": False, "doc": "true = compute and log levels, write nothing"},
         "source": {"type": "string", "default": "entity", "doc": "entity | dog"},
         "act": {"type": "boolean", "default": True, "doc": "source=dog: perform the recorded action at each stop (look, and post when recorded so)"},
@@ -15,7 +18,7 @@ ARGS = {"dry": {"type": "boolean", "default": False, "doc": "true = compute and 
 def run(dry=False, source="entity", act=True, avoid=True, follower=True):
     import json
     import time
-    from ..field import MAP, walk
+    from ..field import MAP, STOP, walk
     if source != "dog":
         return walk(dry=dry, source=source)
     from ..commands import _via_api
@@ -35,8 +38,8 @@ def run(dry=False, source="entity", act=True, avoid=True, follower=True):
         a = actions.get(str(i)) or {"look": "tilt", "say": True}
         from . import dog_look, dog_say
         try:
-            out = dog_say.run(look=a.get("look", "tilt"), trigger=f"round:{run_id}:{i}", stop=i) if a.get("say", True) else dog_look.run(look=a.get("look", "tilt"))
-            done.append({"stop": i, "look": a.get("look", "tilt"), "say": bool(a.get("say", True)), "ok": True, "text": out.get("text")})
+            out = dog_say.run(look=a.get("look", "tilt"), trigger=f"round:{run_id}:{i}", stop=i, cancel=STOP.exists) if a.get("say", True) else dog_look.run(look=a.get("look", "tilt"))
+            done.append({"stop": i, "look": a.get("look", "tilt"), "say": bool(a.get("say", True)), "ok": True, "text": out.get("text"), "stopped": out.get("stopped")})
         except Exception as e:  # noqa: BLE001  (recorded on the action's own rows; the walk goes on and the result names it)
             done.append({"stop": i, "look": a.get("look", "tilt"), "say": bool(a.get("say", True)), "ok": False, "error": f"{type(e).__name__}: {str(e)[:120]}"})
             log("field", f"action at stop {i} FAILED", err=str(e)[:120])

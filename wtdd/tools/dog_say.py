@@ -7,7 +7,9 @@ words and {label, p, needs_person, model}, or {error}), the confirmed post row, 
 the photo, posted when needs_person; the chat listener, not this tool, reads the reply). The caption gets a
 "[detector: cup, chair x2]" suffix when the detector saw something. look_and_see() is the half without the post: the chat listener calls it and posts under the wake message's
 guid (say:<guid>); with person true at an ask stop it flags "who dis?!" to the on-call chat and holds for the answer, and
-only a reply read as stranger sounds light_alarm (wtdd/chat/listen.py look_and_say, verdict).
+only a reply read as stranger sounds light_alarm (wtdd/chat/listen.py look_and_say, verdict). run(cancel=f), Python
+callers only (walk_path passes field.stop's exists): f() is read after the look and before the post; true = no post,
+one "stopped before the post" line, and the result carries stopped.
 
   python -m wtdd dog_say                          nod, look, say, post (trigger defaults to say-<epoch>)
   python -m wtdd dog_say look=sit trigger=k       the sit look; trigger is the idempotence key of the post
@@ -197,7 +199,7 @@ def look_and_see(look: str = "tilt", stop: int | None = None) -> dict:
             "file_up": shot["file"], "file": picked, "detector": det, "state": state, "decision": decision}   # file = the picture the model picked, boxed when the detector ran
 
 
-def run(look="tilt", trigger=None, baseline=False, stop=None):
+def run(look="tilt", trigger=None, baseline=False, stop=None, cancel=None):
     import shutil
     import time
     from . import chat_post
@@ -208,6 +210,10 @@ def run(look="tilt", trigger=None, baseline=False, stop=None):
         shutil.copy2(shot["file"], tidy_path(look, stop))
         return {**shot, "baseline": tidy_path(look, stop), "text": "tidy baseline captured"}
     out = look_and_see(look, stop)
+    if cancel is not None and cancel():   # Stop pressed during the look (walk_path's field.stop): the look finished, nothing posts
+        from ..ledger import log
+        log("say", "stopped before the post", stop=stop, look=look)
+        return {**out, "stopped": "stopped before the post"}
     trigger = trigger or f"say-{int(time.time())}"
     out["post"] = chat_post.run(text=out["text"], file=out["file"], trigger=trigger)
     if out["decision"].get("needs_person"):   # not sure: one question with the photo; the listener process reads the reply
