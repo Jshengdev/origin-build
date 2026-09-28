@@ -104,6 +104,8 @@ python -m wtdd.chat listen    # the group chat
 python -m wtdd.watch          # the detector over the live camera
 ```
 
+The dashboard: `cd dashboard && pnpm install && pnpm build && WTDD_API=http://127.0.0.1:7788 pnpm start -p 3970`, then http://127.0.0.1:3970 ([dashboard/README.md](dashboard/README.md)).
+
 On the remote: drag the dog to where it stands, "record route" and drive it once, pressing a look at each spot it should report from, "stop & save route"; then text the group. The whole setup, done once on camera with the mistakes left in, is the [extended setup video](https://github.com/Jshengdev/what-the-dog-doin/releases/download/demo-day-2026-09-13/setup-walkthrough-uncut.mp4) (uncut, 2.5 min, optional).
 
 ## The take
@@ -245,6 +247,7 @@ ledger.jsonl          one row per step from every process; the remote and this R
 | the eye: look and say, the detector | `wtdd/tools/dog_say.py`, `wtdd/watch.py` | `python -m wtdd dog_say`, `python -m wtdd.watch` |
 | the planner | `wtdd/plan.py` | `python -m wtdd plan_path` |
 | the remote and the API | `wtdd/api.py`, `ui/` | `python -m wtdd.api` |
+| the dashboard (the remote on camera) | `dashboard/` | `WTDD_API=http://127.0.0.1:7788 pnpm start -p 3970` |
 | the evals, the numbers | `wtdd/evals.py`, `wtdd/numbers.py` | `python -m wtdd.evals --write`, `python -m wtdd.numbers --write` |
 | receipts | `ledger.jsonl` (private), `docs/evidence/` | `python -m wtdd ledger_tail n=20` |
 | the video, shot by shot | `docs/DEMO-SCRIPT.md` | |

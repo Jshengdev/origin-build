@@ -1,0 +1,113 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "id": "go2",
+   "kind": "body",
+   "name": "Go2",
+   "model": "Unitree Go2 (tier: Johnny names)",
+   "status": "online",
+   "integration": "unitree",
+   "position": [
+    8.2,
+    1.4
+   ],
+   "headingDeg": 90,
+   "vitals": {
+    "batteryPct": 64,
+    "tempC": null,
+    "faults": [],
+    "stateAgeMs": 180,
+    "videoAgeMs": 240,
+    "lidarAgeMs": 400
+   },
+   "item": "24"
+  },
+  {
+   "id": "hue-1",
+   "kind": "light",
+   "name": "Hue lamp 1",
+   "status": "online",
+   "integration": "hue",
+   "position": [
+    3.5,
+    3.2
+   ],
+   "placedBy": "hand",
+   "on": false,
+   "brightness": 0
+  },
+  {
+   "id": "hue-2",
+   "kind": "light",
+   "name": "Hue lamp 2",
+   "status": "online",
+   "integration": "hue",
+   "position": [
+    3.5,
+    8.8
+   ],
+   "placedBy": "hand",
+   "on": false,
+   "brightness": 0
+  },
+  {
+   "id": "hue-3",
+   "kind": "light",
+   "name": "Hue lamp 3",
+   "status": "online",
+   "integration": "hue",
+   "position": [
+    9,
+    2.6
+   ],
+   "placedBy": "hand",
+   "on": false,
+   "brightness": 0
+  },
+  {
+   "id": "hue-4",
+   "kind": "light",
+   "name": "Hue lamp 4",
+   "status": "online",
+   "integration": "hue",
+   "position": [
+    13.5,
+    8
+   ],
+   "placedBy": "hand",
+   "on": false,
+   "brightness": 0
+  },
+  {
+   "id": "tuya-strip",
+   "kind": "light",
+   "name": "Tuya strip",
+   "status": "online",
+   "integration": "tuya",
+   "position": [
+    9,
+    4.8
+   ],
+   "placedBy": "hand",
+   "on": false,
+   "brightness": 0
+  },
+  {
+   "id": "cam-gate",
+   "kind": "camera",
+   "name": "Gate camera (laptop)",
+   "status": "online",
+   "integration": "laptop-cam",
+   "position": [
+    6.3,
+    0.3
+   ],
+   "headingDeg": 80,
+   "placedBy": "click",
+   "item": "09/23",
+   "honest": "Its point is a click, not a measurement."
+  }
+ ]
+}
