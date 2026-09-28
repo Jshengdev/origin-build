@@ -28,6 +28,9 @@ export interface DogState {
 export interface GridPx {
   n: number; cells_px: XY[]; cell_px: number | null; threshold: number; frames: number; source: string | null;
   why?: string; error?: string; cb_errors?: number; hits?: number[];
+  /** #70: each cell's highest measured layer in metres, parallel to cells_px (null: none at or above the floor); absent
+   *  with top_why for a grid saved with no height profile. */
+  top_m?: Array<number | null>; top_why?: string;
 }
 /** GET /dog/floorplan. segments_px rows are [x0, y0, x1, y1, n]. */
 export interface FloorPlanPx {

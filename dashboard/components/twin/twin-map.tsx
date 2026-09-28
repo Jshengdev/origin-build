@@ -34,7 +34,7 @@ export interface LiveLayers {
   /** Paths: a tap on a waypoint (delete it, or make it a stop). Unset, the dots are drawn only. */
   onWaypoint?: (i: number) => void;
   /** GET /dog/grid: one square per cell centred on its served corner pixel. Without `hits` it is one ink and the heat key is hidden. */
-  cells?: { cells: XY[]; cell: number; hits?: number[]; threshold: number; tops?: Array<number | null> };
+  cells?: { cells: XY[]; cell: number; hits?: number[]; threshold: number; tops?: Array<number | null>; topsWhy?: string };
   /** GET /dog/lidar points_px: the live scan; `scanKnown` (S13) is true where that cell is already a wall in memory. */
   scan?: XY[];
   scanKnown?: boolean[];
@@ -145,6 +145,7 @@ export function TwinMap({
   // The live map remembers its layer switches across reloads (Johnny's opening shot keeps the house plan off); Storybook's
   // initialLayers win there. Everything the switches change is drawn only on the client, after the first measure.
   useEffect(() => { if (live && !initialLayers) localStorage.setItem("wtdd.map.layers", JSON.stringify(layers)); }, [layers, live, initialLayers]);
+  const relief = reliefOn(live, layers, depth);
   const { resolvedTheme } = useTheme();
   const hatchId = useId().replace(/:/g, "");
 
@@ -374,13 +375,6 @@ export function TwinMap({
               onLoad={() => setHouseLoaded(true)} onError={() => setHouseFailed(true)} />;
           })()}
 
-          {live && layers.heights && layers.floorplan && live.heights && live.pxPerM && floorPlan?.segments.map(([x1, y1, x2, y2], i) => {
-            const top = live.heights!.segments[i];
-            if (top == null) return null;   // no measured top: this run stays flat, never guessed
-            const h = top * live.pxPerM! * (view?.s ?? 0), [a, b] = P([x1, y1]), [c, d] = P([x2, y2]);
-            const ink = depth ? rampCss(rampT(top, depth)) : MAP_INK;
-            return <polygon key={`face${i}`} points={`${a},${b} ${c},${d} ${c},${d - h} ${a},${b - h}`} style={{ fill: ink, stroke: ink }} fillOpacity={0.14} strokeOpacity={0.7} strokeWidth={1} />;
-          })}
 
           {layers.floorplan && floorPlan?.segments.map(([x1, y1, x2, y2], i) => {
             const [a, b] = P([x1, y1]), [c, d] = P([x2, y2]), top = live?.heights?.segments[i];
@@ -639,7 +633,7 @@ export function TwinMap({
       <div className="pointer-events-none absolute inset-x-3 bottom-3 flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
       {live ? (
         <div data-map-ui className="pointer-events-auto flex min-w-64 flex-1 flex-col gap-1 font-mono text-[11px]" style={{ color: MAP_INK_MUTED }}>
-          {layers.heights && !live.heights && <span>2.5D · no heights served for this floor plan</span>}
+          {layers.heights && !relief && <span>2.5D · heights not served{live.cells?.topsWhy ? ` · ${live.cells.topsWhy}` : ""}</span>}
           {layers.memory && (depth
             ? <span className="flex items-center gap-1.5">depth {depth[0].toFixed(2)} m <span className="h-2 w-16 rounded-sm" style={{ background: `linear-gradient(to right, ${LIDAR_TOKENS.map((t) => `var(${t})`).join(", ")})` }} /> {depth[1].toFixed(2)} m</span>
             : <span>depth · heights not served</span>)}
@@ -792,6 +786,12 @@ function dither(ctx: CanvasRenderingContext2D, glyph: "+" | "x" | "both", densit
   patterns.set(key, p);
   return p;
 }
+/** 2.5D's relief: a served height drawn at this share of its true height, so a 1 m top rises 0.3 m of plan (the head). */
+const RELIEF = 0.3;
+/** The relief is drawn when the 2.5D switch is on and at least one memory cell has a served top at a served scale. */
+function reliefOn(live: LiveLayers | undefined, layers: Record<LayerKey, boolean>, depth: [number, number] | null) {
+  return !!(live && layers.heights && layers.grid && live.pxPerM && depth && live.cells?.tops?.some((t) => t != null));
+}
 /** "Scale by a wall": how much farther from the pivot the hand put the grabbed point; null for a grab on the pivot itself. */
 function stretchOf(g: { from: XY; to: XY }, pivot?: XY) {
   if (!pivot) return null;
@@ -824,7 +824,7 @@ function drawLive(ctx: CanvasRenderingContext2D, css: CSSStyleDeclaration, live:
     const w = cell * view.s, h = w / 2;
     cells.forEach(([x, y], i) => { paint(i); ctx.fillRect(x * view.s + view.tx - h, y * view.s + view.ty - h, w, w); });
   };
-  if (live.cells && layers.grid) {
+  if (live.cells && layers.grid && !reliefOn(live, layers, depth)) {
     const { cells, cell, hits } = live.cells, color: Record<string, string> = {};
     const one = css.getPropertyValue(HEAT_FLOOR_TOKEN).trim();
     if (layers.memory) {
@@ -843,22 +843,21 @@ function drawLive(ctx: CanvasRenderingContext2D, css: CSSStyleDeclaration, live:
     }
     else square(cells, cell, (i) => { const t = hits ? heatToken(hits[i]) : HEAT_FLOOR_TOKEN; ctx.fillStyle = hits ? (color[t] ??= css.getPropertyValue(t).trim()) : one; });
   }
-  const heights = layers.heights && live.heights && live.pxPerM ? live.heights : null;
-  if (heights && live.classCells && layers.floorplan) {
-    const { cell, byClass } = live.classCells, w = cell * view.s, half = w / 2, k = live.pxPerM! * view.s;
-    const shade: Record<string, [string, number]> = { wall: [MAP_INK, 0.55], tall: [MAP_INK, 0.35], slab: [MAP_INK_MUTED, 0.6], low: [MAP_INK_MUTED, 0.45] };
-    const prisms: Array<{ x: number; y: number; h: number; top: number; c: string }> = [];
-    for (const [name, pts] of Object.entries(byClass)) {
-      const tops = heights.classes[name] ?? [];
-      pts.forEach(([x, y], i) => { const t = tops[i]; if (t != null && shade[name]) prisms.push({ x: x * view.s + view.tx, y: y * view.s + view.ty, h: t * k, top: t, c: name }); });
+  if (reliefOn(live, layers, depth)) {
+    // 2.5D (Johnny's switch; the head's plan): every memory cell raised by its served top (GET /dog/grid top_m, else the
+    // floor plan's class_top_m at that cell) as an oblique relief at RELIEF of true height, so a 1 m top does not tower
+    // over the room behind it: the top in the depth ramp's colour, the side facing the viewer darker, back to front. A
+    // cell with no served top stays flat in muted ink. Memory's "+" and the furniture dither are not drawn under it.
+    const { cells, cell } = live.cells!, tops = live.cells!.tops!, w = cell * view.s, half = w / 2, k = live.pxPerM! * view.s * RELIEF;
+    const base = css.getPropertyValue("--twin-canvas").trim(), side = new Map<string, string>();
+    const order = cells.map((_, i) => i).sort((a, b) => cells[a][1] - cells[b][1]);   // back to front
+    for (const i of order) {
+      const X = cells[i][0] * view.s + view.tx, Y = cells[i][1] * view.s + view.ty, t = tops[i];
+      if (t == null) { ctx.globalAlpha = 0.35; ctx.fillStyle = MAP_INK_MUTED; ctx.fillRect(X - half, Y - half, w, w); ctx.globalAlpha = 1; continue; }
+      const c = ramp(t), h = t * k;
+      ctx.fillStyle = side.get(c) ?? side.set(c, mix(c, base, 0.45)).get(c)!; ctx.fillRect(X - half, Y + half - h, w, h);   // the side
+      ctx.fillStyle = c; ctx.fillRect(X - half, Y - half - h, w, w);                                                         // the top
     }
-    prisms.sort((p, q) => p.y - q.y);   // back to front
-    for (const p of prisms) {
-      const [ink, a] = shade[p.c];
-      ctx.globalAlpha = a * 0.6; ctx.fillStyle = depth ? ramp(p.top) : ink; ctx.fillRect(p.x - half, p.y - half - p.h, w, p.h);   // the side
-      ctx.globalAlpha = a; ctx.fillRect(p.x - half, p.y - half - p.h, w, w);                                 // the top
-    }
-    ctx.globalAlpha = 1;
   } else if (live.classCells && layers.floorplan) {
     // the furniture, dithered: the canvas colour under it (so the grid's squares do not show through), then the glyphs
     const { cell, byClass } = live.classCells, tops = live.heights?.classes ?? {};
