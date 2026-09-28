@@ -1,4 +1,4 @@
-import { LayoutGrid, Inbox, Route, FileSignature, ListChecks, Settings, Radio, Gamepad2, Image as ImageIcon, Users, type LucideIcon } from "lucide-react";
+import { LayoutGrid, Inbox, Route, FileSignature, ListChecks, Settings, Radio, Gamepad2, Users, type LucideIcon } from "lucide-react";
 
 export interface NavEntry { href: string; label: string; icon: LucideIcon; key: string; faded?: boolean }
 
@@ -24,10 +24,9 @@ export const NAV: NavEntry[] = [
  */
 export const SAMPLES: NavEntry[] = [
   // Johnny: "driving can be faded and live can be faded": their live parts are on Overview (the camera, the drive switch).
-  // Monitoring is live inside Settings, Sessions inside Record; Images come as their route lands.
+  // Monitoring is live inside Settings, Sessions inside Record, and the photos inside Routines and Waiting.
   { href: "/live", label: "Live", icon: Radio, key: "L", faded: true },
   { href: "/driving", label: "Driving", icon: Gamepad2, key: "D", faded: true },
-  { href: "/images", label: "Images", icon: ImageIcon, key: "I" },
 ];
 
 export const SETTINGS: NavEntry = { href: "/settings", label: "Settings", icon: Settings, key: "S" };

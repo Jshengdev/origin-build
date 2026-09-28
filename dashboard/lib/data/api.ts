@@ -52,6 +52,11 @@ export interface PeopleJson { group: string | null; group_why?: string; people: 
 export interface IntegrationsJson { checked_at: string; integrations: Array<{ name: string; ok: boolean | null; detail: string; as_of: string | null; key_set?: boolean }> }
 /** GET /sessions (#75): one line per run, newest first, each number the one /record?shift=<id> counts. A bare array. */
 export type Sessions = Array<{ shift_id: string; start: string | null; end: string | null; rows: number; stops: number; flags: number; signed: boolean; signed_by: string | null; stub_rows: number; in_force: boolean }>;
+/** GET /images (#73): the photos a run's rows name, in time order; the bytes are behind /pictures/<file>. `missing`: the
+ *  file is not in the pictures folder. `replaced`: a newer look wrote the same name after the row, so the bytes at `url`
+ *  are not this row's. `why` counts both, or says why the list is empty. */
+export interface RunImage { file: string; url: string; ts: string; kind: "look" | "ask" | "scout" | "blob"; stop: number | null; trigger: string | null; caption: string | null; shift_id: string; ok: boolean; missing: boolean; replaced: boolean }
+export interface ImagesJson { shift: string; images: RunImage[]; n: number; why?: string }
 /** GET /dog/objects. */
 export interface ObjectsPx {
   n: number; windows?: number; fov_deg?: number; source?: string; why?: string; error?: string;
