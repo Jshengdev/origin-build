@@ -183,6 +183,7 @@ class DogSession:
         self._fp: tuple[dict, str, dict | None] | None = None   # the newest floor plan: (floorplan.run's result, its grid source, a file grid's saved cal)
         self._fp_t: float | None = None       # monotonic time of the last floor plan on the session grid
         self._fp_frames: int | None = None    # grid.frames it ran on
+        self.fill = self._fill0()             # lidar.keep's counts summed over the windows since the grid started (GET /dog/grid fill)
         self._fp_lock = threading.Lock()      # one floor plan at a time: the ticker and the button
         self._fp_thread: threading.Thread | None = None   # the ticker, started once by lidar(on=True), never by _on_frame
         self._fp_row: tuple = (None, -math.inf, 0)   # the ticker's last written row: (signature, when, quiet ticks since)
@@ -330,7 +331,10 @@ class DogSession:
         (_memory: ui/grid.json at occupancy.THRESHOLD, what was there before), False where it is new; with no saved map
         it is absent and `why` says how to set one. z_m (Johnny 17:3x, the height colours) is parallel to points_px too: each
         dot's measured height, the highest z of its (x, y) column inside the band, in the voxel frame's z (the band's, FLOOR's
-        and 15's class_top_m), rounded to 0.05 m; absent with no frame. No ledger row: a read, like /dog/state."""
+        and 15's class_top_m), rounded to 0.05 m; absent with no frame. The dots are the surface columns only (Body keeps
+        each window, lidar.keep): surfaces "on"/"off" (WTDD_SURFACES) and fill, the newest window's counts {occupied,
+        free, surface, dropped (columns the dog's map filled and no free floor borders: not drawn), voxels, kept}.
+        No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if on is False:   # S7: the stream stopped: the pending summary is written
@@ -342,9 +346,12 @@ class DogSession:
             self._fp_thread.start()
         if self.body is None:
             return {"on": False, "n": 0, "errors": 0, "cb_errors": 0, "grid_frames": g.frames if (g := self.grid) is not None else 0,
-                    "localize": loc, "age_ms": None, "frame": None, "points_px": [], "why": "not connected"}
+                    "localize": loc, "age_ms": None, "frame": None, "points_px": [], "why": "not connected",
+                    "surfaces": "on" if lidar.surfaces_on() else "off", "fill": None}
         lp = self.body.lidar_points()
         out = {k: lp[k] for k in ("on", "n", "errors", "cb_errors", "age_ms", "frame", "utlidar_pose")}
+        out["fill"] = lp.get("fill")   # the newest window's lidar.keep counts
+        out["surfaces"] = out["fill"]["surfaces"] if out["fill"] else "on" if lidar.surfaces_on() else "off"
         out["grid_frames"], out["localize"] = g.frames if (g := self.grid) is not None else 0, loc
         st = self.body.state()
         if lp["points"] is None:
@@ -366,12 +373,22 @@ class DogSession:
         return {**out, "known": [(px // plan.CELL, py // plan.CELL) in cells for px, py in out["points_px"]]}
 
     # ---- the occupancy grid (wtdd/dog/occupancy.py): every LiDAR window this session, accumulated in odometry metres
+    @staticmethod
+    def _fill0() -> dict[str, int]:
+        return dict.fromkeys(("frames", *lidar.FILL_KEYS, "no_floor"), 0)
+
     def _on_frame(self, d: dict) -> None:
         """Body._on_lidar hands every decoded frame here, on the driver's dispatcher: one count per cell per drawn frame,
         every window after the first re-corrected first (_relocalize). A raise is counted by Body (cb_errors, on GET
         /dog/lidar and /dog/grid) and logged there; it never stops the stream."""
         with self._grid_lock:
             t0 = time.perf_counter()
+            f = d.get("fill") or {"surfaces": None}   # Body kept the window (lidar.keep); a window handed here raw is not counted
+            if f["surfaces"] == "on":   # counted as sums of columns over windows: a block dropped in 100 windows is 100x its cells
+                for k in lidar.FILL_KEYS:
+                    self.fill[k] += f[k]
+                self.fill["frames"] += 1
+                self.fill["no_floor"] += f["free"] == 0
             if self.grid is None:
                 self.grid = occupancy.Grid.from_frame(d)
                 log("dog", "grid started", frame_id=d["frame"], resolution=d["resolution"], origin=[round(v, 2) for v in d["origin"][:2]])
@@ -383,7 +400,10 @@ class DogSession:
                 self._pc_flush()
             if touched is not None and self.grid.frames % 100 == 0:
                 log("dog", "grid", frames=self.grid.frames, cells=int((self.grid.counts > 0).sum()), shape=self.grid.shape,
-                    touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1), z_rebased=self.grid.z_rebased, z_dropped=self.grid.z_dropped)
+                    touched=touched, ms=round((time.perf_counter() - t0) * 1000, 1), z_rebased=self.grid.z_rebased, z_dropped=self.grid.z_dropped,
+                    surfaces=f["surfaces"], **{f"fill_{k}": v for k, v in self.fill.items()})
+                if f["surfaces"] == "on" and self.fill["surface"] == 0:
+                    log("dog", "WARN 0 surface columns kept in the grid's windows: nothing is drawn", **self.fill)
 
     def _relocalize(self, d: dict) -> int | None:
         """One window against the grid (wtdd/dog/localize.py), under _grid_lock: applied, rejected, unmatched or skipped
@@ -468,8 +488,11 @@ class DogSession:
 
     def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
-        `source` naming the grid drawn, plus cb_errors while a dog is connected. No ledger row: a read, like /dog/state."""
+        `source` naming the grid drawn, plus cb_errors while a dog is connected, surfaces "on"/"off" (WTDD_SURFACES) and
+        fill: lidar.keep's counts summed over the windows since the session grid started (frames, occupied, free, surface,
+        dropped, no_floor; columns x windows, so a block dropped in 100 windows is 100x its cells). No ledger row."""
         errs = {"cb_errors": self.body.lidar_points()["cb_errors"]} if self.body else {}
+        errs.update(surfaces="on" if lidar.surfaces_on() else "off", fill=dict(self.fill))
         with self._grid_lock:
             if self.grid is not None:
                 return {**occupancy.response(self.grid, self.cal, threshold, "session"), **errs}
@@ -542,7 +565,7 @@ class DogSession:
                 if self.cal is not None and tuple(self.corr) != localize.IDENTITY:   # the dot is drawn through it: dropping it moves the dot
                     self.recheck = True
                     log("dog", "WARN grid cleared under a correction: the dot moved by it, drag the dog to where it is", corr=before["corr_before"])
-                self.grid = None
+                self.grid, self.fill = None, self._fill0()
                 self.corr = localize.IDENTITY
                 self.loc.update(applied=0, rejected=0, unmatched=0, skipped=0, rejected_streak=0, last=None)
                 self._pc_t, self._pc_n = -math.inf, {}   # the new grid's first correction is written at once, counted from zero
@@ -860,12 +883,15 @@ class DogSession:
     def _live_px(self) -> list | None:
         """S6: the newest LiDAR window's floor-to-head band in map pixels, every point, through the correction and the
         tie (what the page draws as blue dots); None when there is no live view: no body or stream, a window older than
-        LIVE_MAX_AGE_MS, no pose, or not calibrated."""
+        LIVE_MAX_AGE_MS, the newest window saw no floor (lidar.keep kept nothing), no pose, or not calibrated."""
         b = self.body
         if b is None or self.cal is None:
             return None
         lp, st = b.lidar_points(), b.state()
         if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
+            return None
+        f = lp.get("fill") or {}
+        if f.get("surfaces") == "on" and f.get("free") == 0:   # no floor seen: lidar.keep kept nothing, which is not a clear view
             return None
         if not st or not st.get("position") or not st.get("rpy"):
             return None

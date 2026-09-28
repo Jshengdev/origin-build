@@ -282,6 +282,9 @@ class Hook(unittest.TestCase):
         self.body, self.msgs, self.err = Body(), [fx.decode_wire(b) for b in fx.blobs()], io.StringIO()
         self.enterContext(mock.patch.object(lidar, "subscribe", mock.AsyncMock()))
         self.enterContext(redirect_stderr(self.err))
+        # the fixture's world has walls and no floor: the surface filter (lidar.keep, test_surfaces) would keep nothing;
+        # these tests are about the hook, so the windows pass as they came (the old behaviour, exactly)
+        self.enterContext(mock.patch.dict("os.environ", {"WTDD_SURFACES": "0"}))
 
     def feed(self, on_frame) -> None:
         asyncio.run(self.body.lidar_on(on_frame))

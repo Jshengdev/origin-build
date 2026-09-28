@@ -16,7 +16,9 @@ a PNG (PNG_SCALE px per cell, row = grid row, white empty, grey seen fewer than 
 text), one stderr line per frame and a summary. It writes no ledger row: a replay of a fixture, not a step.
 
 How. Grid.counts is uint32 [iy, ix]; cell (0, 0)'s corner is `origin` (x0, y0) in metres, both taken from the first
-frame's own `origin` and `resolution`. update(points) keeps lidar.Z_MIN..Z_MAX (the dots' band), snaps each (x, y)
+frame's own `origin` and `resolution`. A live window reaches the grid already cut to its surface columns (lidar.keep
+in Body._on_lidar: the voxel map's fill behind walls is dropped before it is counted; a replayed fixture is not cut).
+update(points) keeps lidar.Z_MIN..Z_MAX (the dots' band), snaps each (x, y)
 to the nearest lattice cell (np.rint((x - x0) / res): the driver's points sit on the lattice when the window origin
 does; a live origin off the lattice lands in the nearest cell), and adds 1 per distinct cell per frame, however many
 z voxels stack there. A point outside the grid grows it on that side by max(needed, GROW_MARGIN) cells
