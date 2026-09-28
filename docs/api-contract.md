@@ -71,8 +71,8 @@ their inconsistencies: a client builds against these, and a change to one is a c
   confirm is 404. What works live is dismissing an auto zone, `id` = its map name (`nogo-<n>`).
 - **The record** is GET `/record?shift=<id>` (default: the run in force) and GET `/record/shifts`. An unknown shift is a
   404 naming the shifts that exist, never an empty record.
-- **Five GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts` and
-  `/ledger`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
+- **Seven GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts`,
+  `/ledger`, `/people` and `/integrations`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
   Keys and numbers are untouched, the ledger file keeps the raw values, and the other routes are not redacted.
 - `_version` is `int(mtime)` of `ui/map.json`. Send it back on POST `/map` and `/dog/scout`, or the write is a 409.
 
@@ -91,6 +91,8 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift (a plain sentence); 500 `{error}` |
 | GET | `/record/shifts` | | `{shifts, current}` | 500 `{error}` |
 | GET | `/routines` | | `{routines: [{name, dots, stops, saved_at}], loaded}` | 500 `{error}` (a malformed `ui/routines.json`, named) |
+| GET | `/people` | | `{group, people, group_why?, why?}` | 500 `{error}` |
+| GET | `/integrations` | | `{checked_at, integrations}` | 500 `{error}` |
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, cal, follow, avoid, recheck, corr, rec}` (`cal`: the calibration tie `{map, heading_deg, at}` every projection scales about, or `null` when the dog was never placed) | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
@@ -122,6 +124,14 @@ What the keys hold:
 - **`/evals`**: `{}` with no `evals.json`. Otherwise `{written, rows: [{scenario, trial, grade, seconds, why, detail, ran}]}`.
 - **`/watch`**: `{intruder}` alone with no `watch.json`. Otherwise the detector's newest window plus `age_ms` and `intruder`.
 - **`/shift`**: `source` is `file`, `WTDD_SHIFT` or `date`.
+- **`/people`** (`wtdd/status.py`): `group` is `WTDD_CHAT_NAME`, or null with `group_why`. `people` is `[{name}]`, the
+  distinct first names in `HOUSEMATES` (`wtdd/chat/housemates.py`), never a handle; `[]` with `why` when it is empty.
+- **`/integrations`** (`wtdd/status.py`): `integrations` is `[{name, ok, detail, as_of, key_set?}]`, one each, in this
+  order: `unitree`, `lidar`, `hue`, `tuya`, `imessage`, `jev`, `openrouter`, `ledger`. `ok` is true, false (failed or
+  stale, `detail` says why) or null (unknown: never connected, switched off, no row, a stub row). `as_of` is when the
+  evidence is from (a row's `ts`, the newest state sample or frame, the heartbeat), or null. `key_set` (a bool, never
+  the key) is on `jev` and `openrouter` only; unset, that entry is false. Rows are read from the newest 10000 only.
+  Neither route connects the dog or calls the network.
 - **`/record`**: what `python -m wtdd.record --shift <id>` prints.
   - `window` is `{from, to, closed_by}`.
   - `flags[]` is `{ts, trigger, stop, to, text, file, resolved: null | {by, text, verdict, acked_ms, ts, closed_ms?}}`;
