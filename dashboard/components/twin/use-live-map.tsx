@@ -7,7 +7,7 @@
  * A route that fails shows FAILED and its reason on the map's bottom lines; nothing falls back to a fixture.
  */
 import { useState } from "react";
-import { usePoll, type BlobsPx, type DogState, type FloorPlanPx, type GridPx, type LidarPx, type MapJson, type ObjectsPx, type Scale } from "@/lib/data/api";
+import { usePoll, type ImagesJson, type BlobsPx, type DogState, type FloorPlanPx, type GridPx, type LidarPx, type MapJson, type ObjectsPx, type Scale } from "@/lib/data/api";
 import type { Device, FloorPlan, Route, Stop, Zone } from "@/lib/data";
 import type { LiveLayers, TwinMapProps } from "./twin-map";
 import { MAP_INK, MAP_INK_MUTED } from "./heat";
@@ -38,6 +38,7 @@ export function useLiveMap(draft?: MapJson | null, floorPlanButton = true, saved
   const lidar = usePoll<LidarPx>(d?.connected ? "/dog/lidar" : null, 500, kick);
   const scale = usePoll<Scale>("/dog/scale", 10000, kick);
   const map = usePoll<MapJson>("/map", 3000);
+  const scouted = usePoll<ImagesJson>("/images?kind=scout", 10000);   // the photo behind each auto zone (#73), for its hover card
 
   const follow = d?.follow ?? {};
   const fresh = !!d?.connected && d.state?.age_ms != null && d.state.age_ms < FRESH_MS;
@@ -47,12 +48,12 @@ export function useLiveMap(draft?: MapJson | null, floorPlanButton = true, saved
   const served = saved && (map.data?._version ?? 0) <= (saved._version ?? 0) ? saved : map.data;
   const props = shapeLive({
     map: draft ?? served, grid: grid.data, plan: plan.data, objects: objects.data, blobs: blobs.data, lidar: lidar.data, pxPerM: scale.data?.px_per_m,
-    dog: d, fresh, house: "/api/house.svg",
+    dog: d, fresh, house: "/api/house.svg", scouted: scouted.data,
     status: (follow.planned?.length ?? 0) > 0 ? <RouteKey /> : undefined,
   });
   // Johnny: "the sitemap has to be in its own box with the depth map instruction legend and that's it": the map keeps its
   // legend; each layer's served status and every FAILED is the page's to show, outside the map, never dropped
-  const notes = <MapStatus map={map} scale={scale} blobs={blobs} grid={grid} plan={plan} objects={objects} lidar={lidar} connected={!!d?.connected} press={floorPlanButton} />;
+  const notes = <MapStatus map={map} scale={scale} blobs={blobs} grid={grid} plan={plan} objects={objects} lidar={lidar} connected={!!d?.connected} press={floorPlanButton} scouted={scouted} />;
   return { dog, lidar, scale, map, served, fresh, walking, follow, props, notes, refresh: () => setKick((k) => k + 1) };
 }
 
@@ -74,7 +75,7 @@ function cellTops(g: GridPx, f?: FloorPlanPx) {
 /** Served responses → TwinMap's props, with no request of its own: the hook's shaping, and the Storybook stories' on a fixture frame. */
 export function shapeLive(x: {
   map?: MapJson | null; grid?: GridPx; plan?: FloorPlanPx; objects?: ObjectsPx; blobs?: BlobsPx; lidar?: LidarPx; pxPerM?: number;
-  dog?: DogState; fresh?: boolean; house?: string; status?: React.ReactNode;
+  dog?: DogState; fresh?: boolean; house?: string; status?: React.ReactNode; scouted?: ImagesJson;
 }): Pick<TwinMapProps, "live" | "zones" | "routes" | "stops" | "devices" | "runActive" | "floorPlan"> {
   const m = x.map, g = x.grid, f = x.plan, px = x.pxPerM, d = x.dog, follow = d?.follow ?? {};
   const path = m?.path ?? [];
@@ -106,6 +107,14 @@ export function shapeLive(x: {
       text: l.error ? `${l.kind} ${l.blob_id} · FAILED` : `${l.label} · ${l.p != null ? l.p.toFixed(2) : "no p"}${l.source === "fixture" || l.source === "stub" ? " · stand-in" : ""}`,
     })),
     status: x.status,
+    // Johnny: "just draw what it is and label what it is ... when you hover over it it shows an image of what it sees, and it
+    // doesn't show on the map itself": each no-go zone's words and, for an auto zone, the scout's photo of it (its file
+    // names the zone's proposal, scout-<ts>-<proposal>.jpg) and the scout's own sentence, for the hover card only
+    zoneInfo: Object.fromEntries((m?.zones ?? []).filter((z) => z.nogo === true).map((z) => {
+      const photo = z.by === "auto" && z.proposal ? x.scouted?.images.findLast((i) => i.kind === "scout" && i.file.includes(`-${z.proposal}.`)) : undefined;
+      const what = z.by === "auto" ? `${String(z.label ?? "hazard").replace(/_/g, " ")} · no-go the dog added${z.p != null ? ` · p ${z.p.toFixed(2)}` : ""}` : `${z.label ?? z.name} · no-go drawn by a person`;
+      return [z.name, { what, photo }];
+    })),
   };
   const floorPlan: FloorPlan | undefined = f?.segments_px.length
     ? { segments: f.segments_px.map((r) => [r[0], r[1], r[2], r[3]] as [number, number, number, number]), classes: f.classes, constantsVerified: false } : undefined;
@@ -137,9 +146,10 @@ export function zoneName(z: NonNullable<MapJson["zones"]>[number]) {
  * and why, a shortcut (objects served from a fixture file, DEMO_CACHE), and the planned / actual key while walking.
  * Counts and file names stay in the receipts' rows, not on the map.
  */
-function MapStatus({ map, scale, blobs, grid, plan, objects, lidar, connected, press }: {
+function MapStatus({ map, scale, blobs, grid, plan, objects, lidar, connected, press, scouted }: {
   map: { error?: string }; scale: { error?: string }; blobs: { data?: BlobsPx; error?: string }; grid: { data?: GridPx; error?: string }; plan: { data?: FloorPlanPx; error?: string };
   objects: { data?: ObjectsPx; error?: string }; lidar: { data?: LidarPx; error?: string }; connected: boolean; press: boolean;
+  scouted: { error?: string };
 }) {
   const bad = (what: string, e: string) => <span className="text-signal-alert">{e.startsWith(what) ? `FAILED ${e}` : `${what} · FAILED ${e}`}</span>;
   const words = (why: string) => why.replace(/\s*\((?:GET|POST) [^)]*\)/g, "");   // a served reason names its route; the button beside it already says it
@@ -154,6 +164,7 @@ function MapStatus({ map, scale, blobs, grid, plan, objects, lidar, connected, p
       {objects.error ? bad("objects", objects.error) : o?.why ? <span>objects · {o.why}</span> : null}
       {o?.source?.startsWith("fixture") && <span>objects · served from a fixture file, not seen tonight</span>}
       {blobs.error ? bad("names", blobs.error) : blobs.data?.source?.startsWith("fixture") && <span>names · served from a fixture file, not seen tonight</span>}
+      {scouted.error && bad("zone photos", scouted.error)}
       {lidar.error ? bad("live scan", lidar.error) : connected && l?.why ? <span>live scan · {l.why}</span> : null}
     </>
   );
