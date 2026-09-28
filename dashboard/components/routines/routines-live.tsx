@@ -124,7 +124,7 @@ export function RoutinesLive() {
           <div className="flex flex-col gap-3">
             {looks.data.why && <span className="font-mono text-[12px] text-muted-foreground">{redact(looks.data.why)}</span>}
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
-              {looks.data.images.map((i, k) => <Photo key={`${i.ts}-${i.file}-${k}`} img={i} label={i.stop != null ? `stop at dot ${i.stop + 1}` : "no stop"} />)}
+              {looks.data.images.map((i, k) => <Photo key={`${i.ts}-${i.file}-${k}`} img={i} label={i.stop != null ? `stop at dot ${i.stop + 1}` : "no stop"} share />)}
             </div>
           </div>
         ) : <p className="text-[13px] text-muted-foreground">{redact(looks.data.why ?? "No look photo in this run yet.")}</p>)}

@@ -27,7 +27,7 @@ function ImageCard({ img }: { img: RunImage }) {
         <SignalChip tone="neutral">{img.kind}</SignalChip>
         {img.replaced && <SignalChip tone="neutral">replaced: a newer look wrote this name</SignalChip>}
       </span>
-      <Photo img={img} />
+      <Photo img={img} share />
     </div>
   );
 }
