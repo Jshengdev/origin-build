@@ -147,6 +147,20 @@ class Round(unittest.TestCase):
         self.assertEqual([r["ok"] for r in stop], [False])
         self.assertIn("ConnectionError", stop[0]["response_or_error"])
 
+    # lights 1: field.walk ends dark and drains its pool even when it raises (a failed read) or is interrupted (Ctrl-C)
+
+    def test_a_walk_that_fails_or_is_interrupted_ends_dark(self):
+        lamp = json.loads(MAP.read_text())["lights"][0]
+        for err in (requests.ReadTimeout("read timeout=3"), KeyboardInterrupt()):
+            with self.subTest(err=type(err).__name__):
+                self.writes.clear()
+                api = Api([state(1, p=lamp["pts"][0]), err], self.events)   # the dog on the lamp: it goes to 100, then the read fails
+                with mock.patch.object(requests, "get", api.get), self.assertRaises(type(err)):
+                    field.walk(source="dog")
+                mine = [lv for lid, lv in self.writes if lid == lamp["id"]]
+                self.assertEqual([lv > 0 for lv in mine], [False, True, False], f"the lamp wrote {mine}: left lit after the walk")
+                self.assertEqual(set({lid: lv for lid, lv in self.writes}.values()), {0}, f"every light ends at 0: {self.writes}")
+
 
 if __name__ == "__main__":
     unittest.main()
