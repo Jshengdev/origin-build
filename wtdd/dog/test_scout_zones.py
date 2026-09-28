@@ -417,7 +417,8 @@ class Base(unittest.TestCase):
         self.g = accumulated()
         self.store = objects.Store(append=lambda r: None, draft=objects.draft_stub)
         self.store.observe(frame(), POSE, self.g, CAL, FOV, threshold=THR)
-        env = mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "0.7", "WTDD_SHIFT": "2026-09-27"})
+        env = mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "0.7", "WTDD_SHIFT": "2026-09-27",
+                                           "WTDD_SCOUT_ZONES": ""})   # "" not a pop: a .env holding 0 would refill it (gotcha 02-2)
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -785,6 +786,49 @@ class Feed(Base):
         self.assertEqual(len(lines), 1, f"one WARN line for the change: {err.getvalue()!r}")
         self.assertTrue(all(s in lines[0] for s in ("WARN", "o1", "o2", "stale")), lines[0])
         self.assertFalse(self.rows, "nothing was asked, so no row")
+
+
+class ZonesOff(Base):
+    """Johnny, 2026-09-27 19:3x: "turn scout zones off". WTDD_SCOUT_ZONES=0 is the scout's own switch (raising the shared
+    WTDD_DECIDE_THRESHOLD would also move when the chat round asks): 07's objects still come in, nothing else happens."""
+    OFF = "scout zones off (WTDD_SCOUT_ZONES=0): objects kept, no auto zone"
+
+    def test_off_a_hazard_writes_no_zone_no_row_and_calls_no_model(self):
+        calls, before = [], self.map.read_text()
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"WTDD_SCOUT_ZONES": "0"}), contextlib.redirect_stderr(err):
+            p = self.props(decide=lambda q: calls.append(q) or self.jev(0.84)(q))   # today: the chair is nogo-1 at 0.84
+            self.feed(p)
+            self.feed(p)
+            st = p.state()
+        self.assertEqual(calls, [], "no model call for a zone")
+        self.assertEqual(self.rows, [], "no zone.decided, zone.proposed or zone.confirmed row")
+        self.assertEqual(self.map.read_text(), before, "no auto zone on the map")
+        self.assertFalse(self.map.with_name("map.prev.json").exists())
+        self.assertFalse(list(self.pics.glob("*")) if self.pics.exists() else [], "no photo copied")
+        self.assertTrue(all(o["pos_px"] for o in self.store.to_list()), "07's objects (the pins) are untouched")
+        self.assertEqual(err.getvalue().count(self.OFF), 1, f"one line, never per feed: {err.getvalue()!r}")
+        self.assertEqual((st["n"], st["proposals"], st["auto_zones"]), (0, [], "off (WTDD_SCOUT_ZONES=0)"))
+        self.assertEqual(st["why"], self.OFF, "a zero that says off, never one that looks like nothing found")
+
+    def test_unset_or_1_is_todays_scout(self):
+        for v in ("", "1"):
+            with self.subTest(WTDD_SCOUT_ZONES=v), mock.patch.dict(os.environ, {"WTDD_SCOUT_ZONES": v}):
+                shutil.copy(ROOT / "ui" / "map.json", self.map)
+                p = self.props(decide=self.jev(0.84))
+                self.feed(p)
+                self.assertEqual([z["name"] for z in self.auto()], ["nogo-1"])
+                self.assertEqual(len(self.tool("zone.confirmed")), 1)
+                self.assertEqual(p.state()["auto_zones"], "on")
+                self.rows.clear()
+
+    def test_a_value_other_than_0_or_1_is_raised_not_guessed(self):
+        with mock.patch.dict(os.environ, {"WTDD_SCOUT_ZONES": "off"}):
+            p = self.props(decide=self.jev(0.84))
+            with self.assertRaisesRegex(ValueError, "WTDD_SCOUT_ZONES"):
+                self.feed(p)
+        self.assertIn("WTDD_SCOUT_ZONES", p.error)
+        self.assertEqual(self.auto(), [])
 
 
 class Confirm(Base):
