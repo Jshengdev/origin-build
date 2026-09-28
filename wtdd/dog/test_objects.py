@@ -588,3 +588,37 @@ class Api(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CameraDepth(unittest.TestCase):
+    """Johnny, live 21:3x: 'if it looks farther, it should put it farther than where the dog is ... better estimates of depth
+    and scale and locating those to the lidar scans'. The pin is the lit LiDAR cell along the bearing nearest the camera's
+    own floor-contact depth, not always the first cell the ray meets."""
+
+    def setUp(self):
+        self.g = occupancy.Grid(0.05, (-1.0, -1.0))
+        for _ in range(3):   # two things on one bearing: a chair at 1.0 m in front, a couch at 3.0 m behind it
+            self.g.update(np.array([[1.0, 0.0, 0.5], [3.0, 0.0, 0.5]]))
+
+    def test_the_floor_contact_row_gives_the_depth(self):
+        w, h, fov = 1280, 720, 120.0
+        f = (w / 2) / math.tan(math.radians(fov) / 2)
+        z = 2.7                                                   # forward metres from the camera to the floor contact
+        y = h / 2 + f * (objects.CAM_HEIGHT_M / z)                # the box's bottom row for that contact
+        d = objects.ground_depth([600, 200, 680, y], w, h, fov, 0.0)
+        self.assertAlmostEqual(d, z + objects.CAM_FWD_M, delta=0.02)
+        self.assertIsNone(objects.ground_depth([600, 200, 680, h - 1], w, h, fov, 0.0), "cut by the frame's bottom: no contact in view")
+        self.assertIsNone(objects.ground_depth([600, 100, 680, h / 2 - 5], w, h, fov, 0.0), "above the horizon: no floor contact")
+
+    def test_the_pin_is_the_lit_cell_nearest_the_cameras_depth(self):
+        first = objects.nearest_blob(self.g, (0.0, 0.0), 0.0, threshold=3)
+        self.assertAlmostEqual(first["xy"][0], 1.0, places=6)
+        self.assertEqual(first["placed_by"], "first lidar hit")
+        far = objects.nearest_blob(self.g, (0.0, 0.0), 0.0, threshold=3, near_m=3.1)
+        self.assertAlmostEqual(far["xy"][0], 3.0, places=6, msg="it looks farther: the couch behind, not the chair in front")
+        self.assertEqual((far["placed_by"], far["depth_cam_m"]), ("lidar near the camera's depth", 3.1))
+        near = objects.nearest_blob(self.g, (0.0, 0.0), 0.0, threshold=3, near_m=1.2)
+        self.assertAlmostEqual(near["xy"][0], 1.0, places=6)
+        none_near = objects.nearest_blob(self.g, (0.0, 0.0), 0.0, threshold=3, near_m=6.5)
+        self.assertAlmostEqual(none_near["xy"][0], 1.0, places=6, msg="no lit cell near the estimate: the first hit, said so")
+        self.assertEqual(none_near["placed_by"], "first lidar hit (none near the camera's depth)")
