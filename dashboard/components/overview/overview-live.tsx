@@ -8,7 +8,7 @@
  * nothing falls back to a fixture. The page computes no number: counts, sources and reasons are the API's own.
  */
 import { useMemo, useState } from "react";
-import { ActionButton, LiveMark, Module, SignalChip } from "@/components/wtdd";
+import { ActionButton, Module, SignalChip } from "@/components/wtdd";
 import { PageActions } from "@/components/shell/page-header";
 import { TwinMap, type MapFocus } from "@/components/twin/twin-map";
 import { useLiveMap } from "@/components/twin/use-live-map";
@@ -18,6 +18,7 @@ import { Camera } from "@/components/overview/camera";
 import { useAsks } from "@/components/waiting/waiting-live";
 import { LidarSwitch, LightsSwitch, ScaleSlider, useDrive } from "@/components/overview/controls";
 import { Results, useStop, type Result } from "@/components/live/stop";
+import { useWalkRoute, WalkProgress } from "@/components/live/walk-route";
 import { age } from "@/lib/format";
 import { post, redact, redactDeep, usePoll, type ApiRow, type Chat, type DogState, type LidarPx, type Shift } from "@/lib/data/api";
 import type { LedgerRow } from "@/lib/data";
@@ -28,7 +29,7 @@ const RECEIPTS = 25;
 
 
 export function OverviewLive() {
-  const { dog, lidar, scale, fresh, walking, follow, props, notes, field, refresh } = useLiveMap();
+  const { dog, lidar, scale, fresh, walking, follow, props, notes, field, served, refresh } = useLiveMap();
   const d = dog.data;
   const chat = usePoll<Chat>("/chat", 3000);
   const shift = usePoll<Shift>("/shift", 5000);
@@ -36,6 +37,7 @@ export function OverviewLive() {
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
   const { stopped, button: stopButton } = useStop();
+  const walkRoute = useWalkRoute(field.data, setResult);   // Walk the route: the route with a look at each stop
   const drive = useDrive(!!d?.connected);
   // Calibrate (Johnny, live: "calibrate ... where I'm allowed to touch the location of the dog, the angle it's looking
   // at, and the scale of the site map, and ... the toggle with lidar as well"): one switch in the map's actions; on, the
@@ -88,7 +90,7 @@ export function OverviewLive() {
         <DogChip dog={dog.data} error={dog.error} fresh={fresh} />
         {d?.connected && (d.avoid ? <SignalChip tone="neutral">Avoid on</SignalChip> : <SignalChip tone="alert">Avoid OFF</SignalChip>)}
         <CastleChip chat={chat.data} error={chat.error} />
-        {walking && <SignalChip tone="good" mark={<LiveMark />}>Walking · waypoint {follow.i} of {follow.n}</SignalChip>}
+        <WalkProgress field={field.data} follow={follow} stops={served?.stops ?? []} />
         <span className="ml-auto flex items-center gap-2">
           <LidarSwitch lidar={lidar.data} connected={!!d?.connected} onResult={setResult} />
           <LightsSwitch field={field.data} connected={!!d?.connected} calibrated={!!d?.calibrated} onResult={setResult} />
@@ -97,14 +99,15 @@ export function OverviewLive() {
             <ActionButton intent="secondary" disabled={busy} onClick={() => act("Resume", [["/dog/resume", {}]])}>Resume</ActionButton>
           )}
           {stopButton}
-          <ActionButton intent="primary" disabled={busy || !d?.calibrated || walking}
-            title={dog.error ? "The dog's state did not load" : !d?.calibrated ? "Calibrate first: place or drag the dog on the map" : walking ? "Walking" : "POST /dog/follow: the drawn path, every leg planned"}
-            onClick={() => act("Walk the route", [["/dog/follow", {}]])}>
+          <span className="text-[12px] text-muted-foreground">looks and photographs at each stop</span>
+          <ActionButton intent="primary" disabled={busy || walkRoute.starting || !d?.calibrated || walking}
+            title={dog.error ? "The dog's state did not load" : !d?.calibrated ? "Calibrate first: place or drag the dog on the map" : walking ? "Walking" : "POST /tools/walk_path: the drawn path, a look at each stop, the lights following"}
+            onClick={() => walkRoute.start("Walk the route", served)}>
             Walk the route
           </ActionButton>
         </span>
       </PageActions>
-      <Results rows={[...stopped, result]} />
+      <div className="flex flex-wrap items-center gap-2"><Results rows={[...stopped, result]} />{walkRoute.lightsOff}</div>
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-12 flex flex-col gap-4 lg:col-span-8">

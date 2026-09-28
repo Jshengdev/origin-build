@@ -6,7 +6,10 @@
  *
  * Edits stay on the page until "Save" posts the whole map (POST /map, the way ui/index.html does); a refused save shows
  * FAILED with the API's reason and the edit stays. 04's guard is kept verbatim: no save while a zone is being drawn.
- * "Walk the route" is POST /dog/follow and needs the saved map, so it waits for a save.
+ * "Walk the route" needs the saved map, so it waits for a save; it walks with the checkpoint look (components/live/
+ * walk-route.tsx): at each stop the dog does that stop's action, and the Stops card sets it: "Look up & down" (look tilt,
+ * else level) and "Post to the group" (say). A stop with no action looks up and down and does NOT post (the walk saves
+ * that before it starts). No stops: a straight walk, POST /dog/follow.
  * 19's auto zones (a hazard the scout named at p >= the threshold) are on the map at once; a person dismisses one in
  * their own name (POST /dog/scout), the way today's remote does. Its proposals (the feed opens none now) are not drawn.
  * "Ask here" on a stop (the head, for the live film): the intruder check, map.json actions["<path index>"].ask, which
@@ -23,6 +26,7 @@ import { TwinMap } from "@/components/twin/twin-map";
 import { useLiveMap, zoneName } from "@/components/twin/use-live-map";
 import { post, redact, usePoll, type MapJson, type Scout, type XY } from "@/lib/data/api";
 import { Results, useStop } from "@/components/live/stop";
+import { useWalkRoute, WalkProgress } from "@/components/live/walk-route";
 
 type Tool = "dots" | "stops" | "zone";
 /** The chosen tool in ink, the rest on surface: stock "on" is accent, 1.2:1 on surface and the same as hover. */
@@ -45,7 +49,7 @@ export function PathsLive() {
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<MapJson | null>(null);
-  const { dog, walking, props, map, served, notes } = useLiveMap(draft, false, saved);
+  const { dog, walking, props, map, served, notes, field } = useLiveMap(draft, false, saved);
   const { stopped, button: stopButton } = useStop();   // anywhere a walk starts, it can be stopped
   const scout = usePoll<Scout>("/dog/scout", 2000);
   const [by, setBy] = useState(() => (typeof window === "undefined" ? "" : localStorage.getItem("wtdd.scout.by") ?? ""));
@@ -115,11 +119,18 @@ export function PathsLive() {
     setResult(r.ok ? { what, ok: true } : { what, ok: false, error: r.error });
     if (r.ok) setSaved({ ...served, actions, _version: r._version as number | undefined });
   };
-  const walk = async () => {
+  const walkRoute = useWalkRoute(field.data, setResult, setSaved);
+  const walk = () => walkRoute.start("Walk the route", served);
+  // a stop's action, saved at once against the map as served (like Ask here): "Look up & down" and "Post to the group"
+  const setAction = async (i: number, what: string, patch: { look?: string; say?: boolean }) => {
+    if (!served) return;
+    const k = String(i), actions = { ...(served.actions ?? {}) };
+    actions[k] = { look: "tilt", ...(actions[k] ?? {}), ...patch };
     setBusy(true);
-    const r = await post("/dog/follow", {});
+    const r = await post("/map", { ...served, actions });
     setBusy(false);
-    setResult(r.ok ? { what: "Walk the route", ok: true } : { what: "Walk the route", ok: false, error: r.error });
+    setResult(r.ok ? { what, ok: true } : { what, ok: false, error: r.error });
+    if (r.ok) setSaved({ ...served, actions, _version: r._version as number | undefined });
   };
 
   const d = dog.data;
@@ -128,12 +139,14 @@ export function PathsLive() {
       <PageActions>
         {dog.error && <SignalChip tone="alert">Dog · FAILED {redact(dog.error)}</SignalChip>}
         {draft && <SignalChip tone="neutral">Not saved</SignalChip>}
+        <WalkProgress field={field.data} follow={dog.data?.follow ?? {}} stops={served?.stops ?? []} />
         <span className="ml-auto flex items-center gap-2">
           {draft && <ActionButton intent="quiet" disabled={busy} onClick={() => { setDraft(null); setCorners([]); setTool(null); }}>Discard</ActionButton>}
           <ActionButton intent="secondary" disabled={busy || !draft} onClick={() => save(draft, "Save")}>Save</ActionButton>
           {stopButton}
-          <ActionButton intent="primary" disabled={busy || !!draft || !d?.calibrated || walking || dots.length < 2}
-            title={draft ? "Save first" : dog.error ? "The dog's state did not load" : !d?.calibrated ? "Place or drag the dog on Overview's map first" : dots.length < 2 ? "Draw at least two dots" : walking ? "Walking" : undefined}
+          <span className="text-[12px] text-muted-foreground">looks and photographs at each stop</span>
+          <ActionButton intent="primary" disabled={busy || walkRoute.starting || !!draft || !d?.calibrated || walking || dots.length < 2}
+            title={draft ? "Save first" : dog.error ? "The dog's state did not load" : !d?.calibrated ? "Place or drag the dog on Overview's map first" : dots.length < 2 ? "Draw at least two dots" : walking ? "Walking" : "POST /tools/walk_path: the route, a look at each stop, the lights following"}
             onClick={walk}>
             Walk the route
           </ActionButton>
@@ -153,7 +166,7 @@ export function PathsLive() {
         <div className="col-span-12 flex flex-col gap-4 lg:col-span-4">
           {/* Results sit in this column, never above the map: a line appearing after a save must not move the map
               under a finger that is about to tap again (worker's live check). */}
-          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} /></div>}
+          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} />{walkRoute.lightsOff}</div>}
           {/* each map layer's served status and every FAILED, outside the map (the map keeps only its legend) */}
           <div className="flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground empty:hidden">{notes}</div>
           <Module title="Draw" size="auto">
@@ -183,14 +196,23 @@ export function PathsLive() {
             ) : (
               <ul className="flex flex-col">
                 {(served?.stops ?? []).map((i, n) => {
-                  const a = served?.actions?.[String(i)] ?? {};
+                  const entry = served?.actions?.[String(i)], a = entry ?? {};
+                  const look = (a.look ?? "tilt") === "tilt", say = a.say === true;   // no action saved: looks up and down, no post (the walk saves that first)
                   return (
-                    <li key={i} className="flex items-center gap-2 border-t border-border py-2 first:border-t-0 first:pt-0">
+                    <li key={i} className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0 first:pt-0">
                       <span className="text-[13px] font-medium">Stop {n + 1}</span>
-                      <span className="font-mono text-[12px] text-muted-foreground">dot {i + 1}{a.look ? ` · ${LOOK[a.look] ?? a.look}` : ""}{a.say ? " + report" : ""}</span>
-                      <ActionButton intent={a.ask ? "primary" : "secondary"} size="sm" className="ml-auto" aria-pressed={!!a.ask} disabled={busy || !!draft}
+                      <span className="font-mono text-[12px] text-muted-foreground">dot {i + 1} · {entry ? `${LOOK[a.look ?? "tilt"] ?? a.look}${say ? " + post" : ", no post"}` : "default: look up & down, no post"}</span>
+                      <span className="ml-auto flex items-center gap-1.5">
+                      <ActionButton intent={look ? "primary" : "secondary"} size="sm" aria-pressed={look} disabled={busy || !!draft}
+                        title={draft ? "Save or discard the edit first" : look ? "At this stop the dog looks down at the floor, then up at the room, and photographs. Tap for one level look instead." : "At this stop the dog takes one level look. Tap to look up and down."}
+                        onClick={() => setAction(i, look ? `Level look · stop ${n + 1}` : `Look up & down · stop ${n + 1}`, { look: look ? "level" : "tilt" })}>Look up & down</ActionButton>
+                      <ActionButton intent={say ? "primary" : "secondary"} size="sm" aria-pressed={say} disabled={busy || !!draft}
+                        title={draft ? "Save or discard the edit first" : say ? "The photo and a sentence go to the group chat. Tap to keep it on the page only." : "The photo stays on the page (Images). Tap to also post it to the group chat."}
+                        onClick={() => setAction(i, say ? `No post · stop ${n + 1}` : `Post to the group · stop ${n + 1}`, { say: !say })}>Post to the group</ActionButton>
+                      <ActionButton intent={a.ask ? "primary" : "secondary"} size="sm" aria-pressed={!!a.ask} disabled={busy || !!draft}
                         title={draft ? "Save or discard the edit first" : a.ask ? "If the dog sees a person here it asks the on-call person \"who dis?!\" and waits. Tap to stop asking here." : "The intruder check: if the dog sees a person here, it asks who it is and waits for the answer"}
                         onClick={() => askHere(i, n + 1, !a.ask)}>{a.ask ? "Asks here" : "Ask here"}</ActionButton>
+                      </span>
                     </li>
                   );
                 })}
