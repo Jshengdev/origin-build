@@ -17,7 +17,8 @@ import { ActionButton, Module, SignalChip } from "@/components/wtdd";
 import { PageActions } from "@/components/shell/page-header";
 import { TwinMap } from "@/components/twin/twin-map";
 import { useLiveMap } from "@/components/twin/use-live-map";
-import { post, redact, usePoll, type MapJson, type RoutinesJson } from "@/lib/data/api";
+import { post, redact, usePoll, type ImagesJson, type MapJson, type RoutinesJson } from "@/lib/data/api";
+import { Photo } from "@/components/live/photo";
 import { Results, useStop } from "@/components/live/stop";
 
 type Result = { what: string; ok: boolean; error?: string } | null;
@@ -25,6 +26,7 @@ type Result = { what: string; ok: boolean; error?: string } | null;
 export function RoutinesLive() {
   const [kick, setKick] = useState(0);
   const list = usePoll<RoutinesJson>("/routines", 3000, kick);
+  const looks = usePoll<ImagesJson>("/images?kind=look", 5000);   // this run's look photos, at their stops (#73)
   const [saved, setSaved] = useState<MapJson | null>(null);   // the map a load answered with, drawn until the poll serves it
   const { dog, walking, props, served, notes, refresh } = useLiveMap(null, false, saved);
   const { stopped, button: stopButton } = useStop();
@@ -115,6 +117,18 @@ export function RoutinesLive() {
           <TwinMap {...props} className="h-auto min-h-[720px] flex-1" />
         </Module>
       </div>
+
+      <Module title="This run's looks" meta={looks.data ? `run ${looks.data.shift} · ${looks.data.n}` : undefined} size="auto"
+        loading={!looks.data && !looks.error} error={looks.error ? `FAILED GET /images · ${redact(looks.error)}` : undefined}>
+        {looks.data && (looks.data.images.length ? (
+          <div className="flex flex-col gap-3">
+            {looks.data.why && <span className="font-mono text-[12px] text-muted-foreground">{redact(looks.data.why)}</span>}
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+              {looks.data.images.map((i, k) => <Photo key={`${i.ts}-${i.file}-${k}`} img={i} label={i.stop != null ? `stop at dot ${i.stop + 1}` : "no stop"} />)}
+            </div>
+          </div>
+        ) : <p className="text-[13px] text-muted-foreground">{redact(looks.data.why ?? "No look photo in this run yet.")}</p>)}
+      </Module>
     </div>
   );
 }

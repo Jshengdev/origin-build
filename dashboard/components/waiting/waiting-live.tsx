@@ -13,7 +13,8 @@ import { Avatar, Module, SignalChip, WaitingChip } from "@/components/wtdd";
 import { PageActions } from "@/components/shell/page-header";
 import { CastleChip } from "@/components/overview/overview-live";
 import { age, clock } from "@/lib/format";
-import { redact, usePoll, type ApiRow, type Chat } from "@/lib/data/api";
+import { redact, usePoll, type ApiRow, type Chat, type ImagesJson, type RunImage } from "@/lib/data/api";
+import { Photo } from "@/components/live/photo";
 
 const TZ = "America/Los_Angeles";
 type Obj = Record<string, unknown>;
@@ -58,12 +59,14 @@ export function openAsks({ ledger, answered, asks }: ReturnType<typeof useLedger
 export function WaitingLive() {
   const chat = usePoll<Chat>("/chat", 3000);
   const { ledger, verdicts, asks } = useAsks();
+  const photos = usePoll<ImagesJson>("/images?kind=ask", 5000);   // the photo each ask posted, this run's (#73)
 
   return (
     <div className="flex flex-col gap-4">
       <PageActions>
         <CastleChip chat={chat.data} error={chat.error} />
         <span className="text-[13px] text-muted-foreground">Replies come from the group chat; the first clear answer decides.</span>
+        {photos.error && <SignalChip tone="alert">Photos · FAILED {redact(photos.error)}</SignalChip>}
       </PageActions>
       {ledger.error ? (
         <Module title="Waiting" size="full" error={`FAILED ${ledger.error}`} />
@@ -76,7 +79,8 @@ export function WaitingLive() {
           {asks.map((ask) => {
             const trigger = str((ask.args as Obj | undefined)?.trigger);
             const answers = verdicts.filter((v) => str((v.args as Obj | undefined)?.asked) === trigger);   // oldest first
-            return <Ask key={`${ask.ts}-${trigger}`} ask={ask} answers={answers} group={chat.data?.group} />;
+            const photo = trigger ? photos.data?.images.findLast((i) => i.trigger === trigger) : undefined;   // the post's own photo, by its trigger
+            return <Ask key={`${ask.ts}-${trigger}`} ask={ask} answers={answers} group={chat.data?.group} photo={photo} />;
           })}
         </div>
       )}
@@ -85,7 +89,7 @@ export function WaitingLive() {
 }
 
 /** The mockup's card: a short title with the group and time, one chip row when there is a chip, the ask as the body sentence. */
-function Ask({ ask, answers, group }: { ask: ApiRow; answers: ApiRow[]; group?: string }) {
+function Ask({ ask, answers, group, photo }: { ask: ApiRow; answers: ApiRow[]; group?: string; photo?: RunImage }) {
   const a = (ask.args ?? {}) as Obj;
   const text = str(a.text);
   const waiting = ask.ok && !answers.length;
@@ -100,6 +104,7 @@ function Ask({ ask, answers, group }: { ask: ApiRow; answers: ApiRow[]; group?: 
           </span>
         )}
         <p className="text-[15px] leading-[22px]">{text ? redact(text) : "The dog asked"}</p>
+        {photo && <div className="max-w-md"><Photo img={{ ...photo, caption: null }} label="the photo it posted" /></div>}
         {!ask.ok && <p role="alert" className="font-mono text-[12px] text-signal-alert">{redact(String(ask.response_or_error ?? ""))}</p>}
         {answers.length > 0 && <Answers rows={answers} />}
       </div>
