@@ -109,6 +109,8 @@ class Hazard(Base):
         self.assertEqual(ev["confirm"], {"model": "test/confirm-double", "answer": "yes", "name": "dining table", "p": 0.9})
         self.assertEqual(ev["points_n"], len(square(TABLE_AT, 0.15)))
         self.assertEqual(zs[0]["kind"], "hazard")
+        self.assertEqual(zs[0]["label"], "dining table", "the zone reads what the confirm model says it truly is")
+        self.assertEqual(zs[0]["class"], "table", "Jev's hazard class kept beside it")
         served = [z for z in p.state(CAL)["zones"] if z["kind"] == "hazard"]
         self.assertEqual(len(served), 1)
         self.assertEqual(served[0]["evidence"], ev)
