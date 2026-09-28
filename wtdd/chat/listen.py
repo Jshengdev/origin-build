@@ -11,7 +11,7 @@ Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once
 
 Facts. No replay at boot: the watermark starts at MAX(ROWID). WTDD_LISTEN_S (default 120) is the armed window and any
 recognized message re-arms it. Who may wake the dog: any member while HOUSEMATES is empty (one WARN), else the listed
-handles; from-me rows only with WTDD_ALLOW_SELF=1 (Johnny's phone shares the dog's account), and even then the dog's
+handles (any other sender is ignored with one masked WARN per sender); from-me rows only with WTDD_ALLOW_SELF=1 (Johnny's phone shares the dog's account), and even then the dog's
 own posts are refused by confirmed guid and by the opening words of its replies. "yo dog ..." (or "hey dog", "dog ...") is a chat turn: the model answers from the group's context (memory.context: who
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" (a round's look with a person in frame, or
@@ -129,6 +129,7 @@ class Listener:
         self.last = db.max_rowid()          # no replay at boot
         self.round_end = 0                  # chat.db's MAX(ROWID) when the last round ended: a wake at or below it was typed during it
         self._warned = False
+        self._unlisted: set[str] = set()    # senders not in HOUSEMATES already warned about (one WARN each)
         self.oncall_handle = config.maybe("WTDD_ON_CALL_HANDLE")
         self.oncall = config.maybe("WTDD_ON_CALL_GUID") or (oncall.guid(self.oncall_handle) if self.oncall_handle else None)   # the group (S10) or the 1:1 (03)
         self.group_oncall = self.oncall == guid   # S10: the group answers its own flags and keeps its wake words and commands
@@ -155,7 +156,13 @@ class Listener:
                 log("chat", "WARN HOUSEMATES is empty: any member of the group may wake the dog")
                 self._warned = True
             return True
-        return m["sender"] in HOUSEMATES
+        if m["sender"] in HOUSEMATES:
+            return True
+        if m["sender"] not in self._unlisted:   # once per sender, masked (stderr is on screen while filming)
+            self._unlisted.add(m["sender"])
+            log("chat", "WARN sender not in HOUSEMATES: ignored (add its handle to housemates.py; `python -m wtdd.chat watch` prints it)",
+                sender=PRIVATE.sub(lambda h: h.group()[:3] + "…" + h.group()[-4:], m["sender"] or "") or "no handle")
+        return False
 
     def say(self, key: str, text: str | None, file: str | None = None, guid: str | None = None) -> None:
         if self.dry:
