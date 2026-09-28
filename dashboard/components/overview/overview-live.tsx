@@ -44,7 +44,10 @@ export function OverviewLive() {
   // dog's ring and cone tip drag, and the scale, the LiDAR switch and "Place the dog" show beside it. Off is the plain view.
   const [calibrating, setCalibrating] = useState(false);
   const [placing, setPlacing] = useState(false);   // "Place the dog": the next tap on the map is where it is
-  const [stretching, setStretching] = useState(false);   // "Scale by a wall": the next drag on the map sets the scale
+  const [stretching, setStretching] = useState(false);   // "Scale by a wall": the next drag on the map proposes a scale
+  // the head's e2e audit: a 60 px pan after arming "Scale by a wall" posted a scale (79.5 → 73). A drag now only proposes;
+  // nothing posts until "Set scale"; the mode disarms on the slider, any zoom or key pan, and Calibrate off.
+  const [proposed, setProposed] = useState<{ from: number; to: number } | null>(null);
 
   const act = async (what: string, calls: Array<[string, unknown]>) => {
     setBusy(true);
@@ -118,16 +121,23 @@ export function OverviewLive() {
             <div className="flex flex-wrap items-center gap-2">
               <ActionButton intent={calibrating ? "person" : "secondary"} size="sm" aria-pressed={calibrating}
                 title="Align the scan to the plan: drag the dog's ring to where it is and its cone tip to where it faces, and set the scale"
-                onClick={() => { setCalibrating(!calibrating); setPlacing(false); setStretching(false); }}>{calibrating ? "Done calibrating" : "Calibrate"}</ActionButton>
+                onClick={() => { setCalibrating(!calibrating); setPlacing(false); setStretching(false); setProposed(null); }}>{calibrating ? "Done calibrating" : "Calibrate"}</ActionButton>
               {calibrating && <>
                 <ActionButton intent={placing ? "person" : "secondary"} size="sm" disabled={busy}
                   title={d?.connected ? "Tap the map where the dog is, then drag its cone tip to where it faces" : "Tap the map where the dog is: the first calibrate connects the dog"}
                   onClick={() => { setPlacing(!placing); setStretching(false); }}>{placing ? "Tap where the dog is" : "Place the dog"}</ActionButton>
                 <ActionButton intent={stretching ? "person" : "secondary"} size="sm" disabled={busy || !scale.data || !(d?.cal?.map ?? d?.map)}
                   title={!scale.data ? "The scale did not load" : !(d?.cal?.map ?? d?.map) ? "Place the dog first" : "Press on a wall of the scan and drag it onto its line on the plan"}
-                  onClick={() => { setStretching(!stretching); setPlacing(false); }}>{stretching ? "Drag a scan wall onto its line" : "Scale by a wall"}</ActionButton>
+                  onClick={() => { setStretching(!stretching); setPlacing(false); setProposed(null); }}>{stretching ? "Drag a scan wall onto its line" : "Scale by a wall"}</ActionButton>
                 <LidarSwitch lidar={lidar.data} connected={!!d?.connected} onResult={setResult} />
-                <ScaleSlider scale={scale} busy={busy} onCommit={(v) => act("Scale", [["/dog/scale", { px_per_m: v }]]).then(refresh)} />
+                <ScaleSlider scale={scale} busy={busy} onCommit={(v) => { setStretching(false); setProposed(null); return act("Scale", [["/dog/scale", { px_per_m: v }]]).then(refresh); }} />
+                {proposed && (
+                  <span className="flex items-center gap-2 text-[13px]">
+                    Set scale {proposed.from} → {proposed.to} px/m?
+                    <ActionButton intent="primary" size="sm" disabled={busy} onClick={() => { const v = proposed.to; setProposed(null); act("Scale", [["/dog/scale", { px_per_m: v }]]).then(refresh); }}>Set scale</ActionButton>
+                    <ActionButton intent="quiet" size="sm" onClick={() => setProposed(null)}>Cancel</ActionButton>
+                  </span>
+                )}
               </>}
               <ActionButton intent="secondary" size="sm" className="ml-auto" disabled={busy} title="POST /dog/floorplan: one run, one row"
                 onClick={() => act("Floor plan", [["/dog/floorplan", { threshold: 3 }]])}>Floor plan</ActionButton>
@@ -147,8 +157,9 @@ export function OverviewLive() {
                 ...(calibrating && { calibrate: (pose) => act("Calibrate", [["/dog/calibrate", pose]]).then(refresh) }),
                 ...(stretching && scale.data && { stretch: (f) => {
                   setStretching(false);
-                  act("Scale", [["/dog/scale", { px_per_m: Math.round(scale.data!.px_per_m * f * 2) / 2 }]]).then(refresh);
+                  setProposed({ from: scale.data!.px_per_m, to: Math.round(scale.data!.px_per_m * f * 2) / 2 });   // posts only on "Set scale"
                 } }) }}
+              onViewChange={() => setStretching(false)}
               onMapClick={placing ? (xy) => {
                 setPlacing(false);
                 act("Place the dog", [["/dog/calibrate", { p: [Math.round(xy[0]), Math.round(xy[1])], heading_deg: d?.map?.heading_deg ?? 0 }]]).then(refresh);
