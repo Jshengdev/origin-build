@@ -243,3 +243,33 @@ class Switch(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfirmBudget(unittest.TestCase):
+    """Live 21:48: every confirm on google/gemini-2.5-pro failed ("confirm reply is not {answer, name, confidence}: 'Here is'")
+    because max_tokens=120 and a reasoning model's thinking ate the budget. The call must leave room for the thinking and
+    ask for low effort, and a reply cut at the limit must say so."""
+
+    def fake(self, seen):
+        def generate(agent, messages, **kw):
+            seen.append(kw)
+            if kw.get("max_tokens", 0) < 1000:   # the thinking eats a small budget: the visible reply is cut
+                return {"text": "Here is", "model": "google/gemini-2.5-pro", "finish_reason": "length", "usage": {}, "raw": {}}
+            return {"text": '{"answer": "yes", "name": "couch", "confidence": 0.93}', "model": "google/gemini-2.5-pro",
+                    "finish_reason": "stop", "usage": {}, "raw": {}}
+        return generate
+
+    def test_the_confirm_call_leaves_room_for_a_reasoning_model(self):
+        seen: list = []
+        with mock.patch("wtdd.llm.generate", self.fake(seen)):
+            c = sz.confirm_live({"kind": "couch", "model": "google/gemini-2.5-pro", "image": "data:image/jpeg;base64,AAAA"})
+        self.assertEqual((c["answer"], c["name"], c["p"]), ("yes", "couch", 0.93))
+        self.assertGreaterEqual(seen[0]["max_tokens"], 1000)
+        self.assertEqual(seen[0]["extra"], {"reasoning": {"effort": "low"}})
+
+    def test_a_reply_cut_at_the_limit_says_so(self):
+        def cut(agent, messages, **kw):
+            return {"text": "Here is", "model": "m", "finish_reason": "length", "usage": {}, "raw": {}}
+        with mock.patch("wtdd.llm.generate", cut):
+            with self.assertRaisesRegex(RuntimeError, "cut at max_tokens"):
+                sz.confirm_live({"kind": "couch", "model": "m", "image": "data:image/jpeg;base64,AAAA"})
