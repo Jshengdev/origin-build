@@ -30,6 +30,7 @@ for _k in ("JEV_API_KEY", "JEV_MODEL", "JEV_LIVE", "WTDD_REPLY_THRESHOLD", "WTDD
 import requests  # noqa: E402
 from wtdd import config, field, ledger  # noqa: E402
 from wtdd.chat import listen as L  # noqa: E402
+L.RESET = _TMP / "chat.reset"   # POST /chat/reset writes <repo>/chat.reset: no listener here reads or deletes the checkout's flag
 
 MAP = _TMP / "map.json"
 _m = json.loads((Path(field.__file__).parent / "fixtures" / "map_route.json").read_text())

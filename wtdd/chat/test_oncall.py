@@ -38,6 +38,7 @@ os.environ["JEV_API_KEY"] = ""   # 17: verdict() reads the reply through decide.
 
 from wtdd import ledger, numbers, tools  # noqa: E402
 from wtdd.chat import __main__ as cli, db, listen as L, memory, send  # noqa: E402
+L.RESET = _TMP / "chat.reset"   # POST /chat/reset writes <repo>/chat.reset: no listener here reads or deletes the checkout's flag
 
 GROUP = os.environ["WTDD_CHAT_GUID"]
 NAME = "Sam Stand-in"
