@@ -331,7 +331,10 @@ class DogSession:
         (_memory: ui/grid.json at occupancy.THRESHOLD, what was there before), False where it is new; with no saved map
         it is absent and `why` says how to set one. z_m (Johnny 17:3x, the height colours) is parallel to points_px too: each
         dot's measured height, the highest z of its (x, y) column inside the band, in the voxel frame's z (the band's, FLOOR's
-        and 15's class_top_m), rounded to 0.05 m; absent with no frame. No ledger row: a read, like /dog/state."""
+        and 15's class_top_m), rounded to 0.05 m; absent with no frame. The dots are the surface columns only (Body keeps
+        each window, lidar.keep): surfaces "on"/"off" (WTDD_SURFACES) and fill, the newest window's counts {occupied,
+        free, surface, dropped (columns the dog's map filled and no free floor borders: not drawn), voxels, kept}.
+        No ledger row: a read, like /dog/state."""
         if on is True or (on is False and self.body is not None):
             self.run(self.with_body(lambda b: b.lidar_on(self._on_frame) if on else b.lidar_off()))
         if on is False:   # S7: the stream stopped: the pending summary is written
@@ -485,7 +488,9 @@ class DogSession:
 
     def grid_px(self, threshold: int = occupancy.THRESHOLD) -> dict[str, Any]:
         """GET /dog/grid: the cells seen threshold+ times in map pixels through the calibration (occupancy.response),
-        `source` naming the grid drawn, plus cb_errors while a dog is connected. No ledger row: a read, like /dog/state."""
+        `source` naming the grid drawn, plus cb_errors while a dog is connected, surfaces "on"/"off" (WTDD_SURFACES) and
+        fill: lidar.keep's counts summed over the windows since the session grid started (frames, occupied, free, surface,
+        dropped, no_floor; columns x windows, so a block dropped in 100 windows is 100x its cells). No ledger row."""
         errs = {"cb_errors": self.body.lidar_points()["cb_errors"]} if self.body else {}
         errs.update(surfaces="on" if lidar.surfaces_on() else "off", fill=dict(self.fill))
         with self._grid_lock:
