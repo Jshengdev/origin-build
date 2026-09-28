@@ -39,14 +39,17 @@ def lights(on: bool, bri: float | None = None) -> str:
 def _via_api(tool: str, **args: Any) -> Any | None:
     """While the API process runs it owns the dog's single WebRTC slot, so any other process sends dog tools to it (and
     walk_path, so the remote's map can follow the walk). Returns None when no API is up (then this process does the work
-    itself). The API process itself never recurses."""
+    itself), except with WTDD_API_ONLY=1 (the chat listener sets it at start): then no API is a ConnectionError naming the
+    address, and the caller's failure path runs, never a second WebRTC client. The API process itself never recurses."""
     import os
     if os.environ.get("WTDD_API_PROCESS"):
         return None
     import requests
     try:
         r = requests.post(f"{API}/tools/{tool}", json=args, timeout=600)
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
+        if os.environ.get("WTDD_API_ONLY"):
+            raise ConnectionError(f"the wtdd API at {API} did not answer; the listener never connects the dog itself") from e
         return None
     out = r.json()
     if not out.get("ok"):

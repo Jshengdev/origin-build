@@ -28,6 +28,7 @@ from here. Still Johnny's: fill HOUSEMATES in housemates.py (until then anyone i
 from __future__ import annotations
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Any
@@ -198,6 +199,7 @@ def cmd_reply(a: argparse.Namespace) -> None:
 
 def cmd_listen(a: argparse.Namespace) -> None:
     from .listen import Listener
+    os.environ["WTDD_API_ONLY"] = "1"   # the API owns the dog's one WebRTC slot: no API is a failed dog step, never a second client
     guid = _guid(a)
     if not a.dry_run:
         gate(guid)   # fail at boot, not minutes later on the first post
