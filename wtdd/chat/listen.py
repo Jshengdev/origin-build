@@ -317,9 +317,12 @@ class Listener:
         has no stops), then "dog done". Each part is a tool call and a gated post keyed on the wake message; a failed
         part is posted as its error, never faked, and the sequence still ends with "dog done". With the real dog, a walk
         that fails (or a Ctrl-C of the listener) first halts the follower (halt(), POST /dog/stop), so the dog is never
-        driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look."""
+        driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look. Stop on
+        either dashboard during this round (field.stop written since the wake, or the follow ended "stopped") is no
+        end look and "dog done (stopped)"."""
         from .. import tools
-        from ..field import walk
+        from ..field import STOP, walk
+        t_wake = time.time()
         try:
             pic = tools.call("dog_on_fire")
             self.say(f"fire:{m['guid']}", None, pic["file"])
@@ -348,9 +351,10 @@ class Listener:
             if not isinstance(e, Exception):
                 raise
             walked = f"couldn't walk the path: {type(e).__name__}: {str(e)[:100]}"
-        if not stops:                      # no stop reached: the look point is wherever the dog is now
+        stopped = (STOP.exists() and STOP.stat().st_mtime >= t_wake) or "follow ended with: stopped" in (walked or "")
+        if not stops and not stopped:      # no stop reached: the look point is wherever the dog is now
             self.look_and_say(m)
-        self.say(f"done:{m['guid']}", "dog done" + (f" ({walked})" if walked else ""))
+        self.say(f"done:{m['guid']}", "dog done" + (" (stopped)" if stopped else "") + (f" ({walked})" if walked else ""))
 
     def halt(self, why: str) -> None:
         """POST /dog/stop when the round's walk is gone: the API cancels the follower and halts the dog, walking or
