@@ -300,6 +300,23 @@ class Signed(Guard):
         self.assertIn("1 post stamped after the signature, not on the record", h)
 
 
+    def test_a_photo_shared_after_the_signature_is_not_a_post_after_it(self):
+        """POST /images/share after the signature, the run still in force: its chat.post (kind share) is stamped B, but it
+        re-posts a photo on Johnny's press, so it is neither listed after the signature nor, captioned "not sure: ...", a
+        flag or a stop's ping. In memory; the ledger is untouched."""
+        m, rows, base = make_ledger_shift, ledger.rows(), self.rec
+        sig = next(i for i, r in enumerate(rows) if r["tool"] == "record.signed" and r["ok"])
+        late = [m.claim("2026-09-27T10:00:06", "share", "share:look-down-boxed.jpg:1790500000"),
+                m.post("2026-09-27T10:00:09", "share", GROUP, "share", "share:look-down-boxed.jpg:1790500000",
+                       "not sure: is that a cup?", "look-down-boxed.jpg", B, 90001, "2026-09-27 17:00:08", caption=True)]
+        late[-1]["args"]["by"] = "Johnny"
+        rec = record.build(B, rows=rows[:sig + 2] + late + rows[sig + 2:])
+        self.assertEqual(rec["after_signature"], [], "a share after signing is listed as a stray post")
+        self.assertEqual(rec["flags"], base["flags"])
+        self.assertEqual([s["pinged"] for s in rec["stops"]], [s["pinged"] for s in base["stops"]])
+        self.assertNotIn("after the signature", record.html(rec))
+
+
 class Asked(Guard):
     """Preflight: a stop's "not sure: ..." question (decide.ask_line) is that stop's ping and a flag, answered or not,
     like "who dis?!". The listener posts it as kind listen under decide:<wake>:<n>; dog_say pressed by hand posts it

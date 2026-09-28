@@ -253,11 +253,95 @@ class Share(unittest.TestCase):
         self.assertEqual([r["tool"] for r in self.new_rows() if r["tool"] == "intruder.verdict"], ["intruder.verdict"])
         self.assertEqual([r["args"]["guid"] for r in self.replies()], ["R-1"])
 
+    def planted_at(self, ago_s: float) -> None:
+        """The round's looks re-stamped ago_s before now (ROWS are fixed at 21:00 today: the correction window is the clock's)."""
+        at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - ago_s))
+        LEDGER.write_text("".join(json.dumps({**r, "ts": at}) + "\n" for r in ROWS))
+        self.before = LEDGER.read_bytes()
+
     def test_a_correction_in_the_window_is_the_correction_not_a_reply(self):
+        self.planted_at(0)   # the round's look just posted: its correction window is open, whatever the time of day
         self.shared()
         self.poll(msg("that's a mug not a cup", "F1", 11), msg("lol", "R-1", 12))
         self.assertEqual([r["tool"] for r in self.new_rows() if r["tool"] == "chat.correction"], ["chat.correction"])
         self.assertEqual([r["args"]["guid"] for r in self.replies()], ["R-1"])
+
+    def test_a_reply_to_an_old_photo_shared_is_kept_not_taken_as_a_correction(self):
+        """A share re-posts a photo; it is not the dog's look, so it opens no correction window of its own. The round's
+        looks are hours old: "that's so cute" is the photo's reply, kept, nothing posted back, no state.json correction."""
+        self.planted_at(3 * 3600)
+        self.shared()
+        self.poll(msg("that's so cute", "R-1", 11), msg("its adorable", "R-2", 12))
+        self.assertEqual([r["tool"] for r in self.new_rows() if r["tool"] == "chat.correction"], [])
+        self.assertEqual(self.posts, [], "the dog answered a reply to a shared photo")
+        self.assertFalse(L.STATE.exists(), "a reply to a shared photo became a correction the next look's prompt carries")
+        self.assertEqual([r["args"]["guid"] for r in self.replies()], ["R-1", "R-2"])
+
+    def test_a_message_while_a_question_is_open_is_not_a_reply(self):
+        """A question open (a halt: never read as an answer) and a group message that is not its answer: not kept."""
+        self.shared()
+        self.pend.write_text(json.dumps({"kind": "halt", "t": time.time(), "trigger": "halt:T1", "chat": GROUP}))
+        self.poll(msg("so cute", "R-1", 11))
+        self.assertEqual(self.replies(), [])
+        self.assertTrue(self.pend.exists(), "the open question was dropped")
+
+    # armed: the dog's commands run as on main, a share open or not
+
+    def armed(self) -> None:
+        self.shared()
+        with mock.patch.dict(os.environ, {"WTDD_WAKE_SHOW": "0"}):
+            self.poll(msg("what the dog doin", "W2", 11))
+        self.assertTrue(self.l.armed)
+
+    def test_stop_please_while_armed_is_stop_as_on_main(self):
+        self.armed()
+        self.poll(msg("stop please", "C1", 12))
+        self.assertFalse(self.l.armed, "stop please was kept as a reply: the dog stays armed")
+        self.assertEqual([k for k, _ in self.posts], ["wake:W2", "stop:C1"])
+        self.assertEqual(self.replies(), [])
+
+    def test_lights_off_please_while_armed_runs_as_on_main(self):
+        self.armed()
+        with mock.patch.object(L.cmds, "run", return_value="lights off: ok") as run:
+            self.poll(msg("lights off please", "C2", 12))
+        run.assert_called_once_with("lights off")
+        self.assertEqual(self.replies(), [])
+
+    # a corrupt share.json: a WARN, never the listener's end, the reset's or the next share's
+
+    BAD = (b"{not json", b"", b"[]", b"{}", b"\xff\xfe",
+           json.dumps({"until": "soon", "trigger": "share:x:1", "file": "x.jpg"}).encode(),
+           json.dumps({"until": 9e12, "file": "x.jpg"}).encode())
+
+    def test_corrupt_share_json_never_ends_the_listener(self):
+        for bad in self.BAD:
+            with self.subTest(bad=bad):
+                self.share.write_bytes(bad)
+                self.poll(msg("so cute", "R-1", 11))   # raised on the branch: the listener's run() has no restart
+                self.assertEqual(self.replies(), [])
+                self.assertEqual(self.posts, [])
+        warns = [l for l in self.err.getvalue().splitlines() if "WARN" in l and "share.json" in l]
+        self.assertEqual(len(warns), len(self.BAD), self.err.getvalue())
+
+    def test_corrupt_share_json_never_blocks_reset_chat(self):
+        self.pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "trigger": "alarm:T1:5", "chat": GROUP}))
+        for bad in (b"{not json", b"[]"):
+            with self.subTest(bad=bad):
+                self.share.write_bytes(bad)
+                code, got = self.call("POST", "/chat/reset", {"by": "Johnny"})
+                self.assertEqual(code, 200, got)
+                self.assertFalse(self.share.exists(), "the corrupt window was left for the next take")
+                self.assertTrue(self.flag.exists(), "chat.reset was never written: the listener stays armed")
+        self.assertFalse(self.pend.exists(), "the open question stays open")
+
+    def test_corrupt_share_json_never_blocks_the_next_share(self):
+        for bad in (b"{not json", b"[]"):
+            with self.subTest(bad=bad):
+                self.share.write_bytes(bad)
+                code, got = self.call("POST", "/images/share", {"file": LOOK, "by": "Johnny"})
+                self.assertEqual((code, got.get("ok")), (200, True), got)
+                self.assertEqual(json.loads(self.share.read_text())["trigger"], got["trigger"])
+                time.sleep(1.05)   # the next share of this photo in the same second is the same claim, refused
 
     def test_a_reset_closes_the_window(self):
         trig = self.shared()["trigger"]
