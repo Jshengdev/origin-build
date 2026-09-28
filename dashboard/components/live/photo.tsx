@@ -13,7 +13,7 @@ import { clock } from "@/lib/format";
 export function Photo({ img, label }: { img: RunImage; label?: string }) {
   const [failed, setFailed] = useState(false);
   const note = img.replaced ? `replaced · a newer look wrote ${img.file} after this row, so its photo is gone`
-    : img.missing ? `missing · ${img.file} is not in the pictures folder`
+    : img.missing ? `FAILED · missing: ${img.file} is not in the pictures folder`
     : failed ? `FAILED to load ${img.file}` : null;
   return (
     <figure className="flex flex-col gap-1.5">
