@@ -40,8 +40,8 @@ is reported in skipped_stops, never waited on. UNVERIFIED on the dog: exercised 
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
-  tilt:  BalanceStand, Pose on, Euler y=+0.3 (nose down, +15 deg at 0.7 s): frame look-down.jpg (the floor) at 0.7 s,
-         1.6 s total, Euler y=-0.3 (nose up, -15 deg from 0.36 s to 0.79 s): frame look-tilt.jpg (the room) at 0.6 s,
+  tilt:  BalanceStand, Pose on, Euler y=+0.3 (nose down, +15 deg at 0.7 s): frame look-down (the floor) at 0.7 s,
+         1.6 s total, Euler y=-0.3 (nose up, -15 deg from 0.36 s to 0.79 s): frame look-tilt (the room) at 0.6 s,
          Euler 0, Pose off. Two frames per nod, both with the IMU pitch; the vision model picks the one to send. The
          pose is a nod, not a hold, and only fires as this down-then-up pair: a single cold Euler does nothing and
          re-sending it every 2 s does nothing.
