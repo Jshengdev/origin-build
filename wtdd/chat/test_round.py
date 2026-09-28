@@ -100,6 +100,7 @@ class Round(unittest.TestCase):
 
     def _write(self, light: dict, level: int) -> float:
         self.writes.append((light["id"], level))
+        self.events.append(("write", level))
         return 0.0
 
     def _look(self, look: str = "tilt", stop: int | None = None) -> dict:
@@ -160,6 +161,28 @@ class Round(unittest.TestCase):
                 mine = [lv for lid, lv in self.writes if lid == lamp["id"]]
                 self.assertEqual([lv > 0 for lv in mine], [False, True, False], f"the lamp wrote {mine}: left lit after the walk")
                 self.assertEqual(set({lid: lv for lid, lv in self.writes}.values()), {0}, f"every light ends at 0: {self.writes}")
+
+    # lights 1, the rest: the dashboard's dog walk (walk_path, field.walk(source="dog") with no listener) halts too, and
+    # both stop the dog before the end dark (the listener's halt ran after walk()'s finally had darkened every light)
+
+    def test_a_dog_walk_that_fails_stops_the_dog_first_then_goes_dark(self):
+        n = len(json.loads(MAP.read_text())["lights"])
+        for name in ("the dashboard's walk", "the chat's round"):
+            with self.subTest(name):
+                self.events.clear()
+                n0 = len(ledger.rows())
+                script = [state(1), requests.ReadTimeout("read timeout=3")]   # one tick, then a slow /dog/state read
+                if name == "the chat's round":
+                    self.round(script)
+                else:
+                    api = Api(script, self.events)
+                    with mock.patch.object(requests, "get", api.get), mock.patch.object(requests, "post", api.post), \
+                            self.assertRaises(requests.ReadTimeout):
+                        field.walk(source="dog")
+                self.assertIn(("POST", "/dog/stop"), self.events, "the follower was left driving the dog after the walk failed")
+                after = self.events[self.events.index(("POST", "/dog/stop")):]
+                self.assertEqual(after.count(("write", 0)), n, f"stop the dog first, then the end dark: {self.events}")
+                self.assertEqual(len([r for r in ledger.rows()[n0:] if r["tool"] == "dog.stop"]), 1, "one dog.stop row per failure")
 
     # ask 2: Stop on either dashboard mid-round (field.stop, and /dog/stop) is no end look and "dog done (stopped)"
 
