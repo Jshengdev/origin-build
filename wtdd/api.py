@@ -7,7 +7,7 @@
   POST /tools/<name>  {args}      {ok, tool, args, result}, or 500 {ok: false, tool, args, error}
   GET  /ledger?n=25               the last n ledger rows (the page polls this every 2 s)
   GET  /field                     the running walk's position, room, levels and stop from <repo>/field.json, {} when idle (polled at 10 Hz)
-  GET  /chat                      the listener's heartbeat (<repo>/listen.json, written every poll): alive, armed, the gated group's name
+  GET  /chat                      the listener's heartbeat (<repo>/listen.json, rewritten every 2 s, through a round too): alive, armed, the gated group's name
   GET  /evals                     <repo>/evals.json, every scenario's newest trials (python -m wtdd.evals --write)
   GET  /watch                     <repo>/watch.json, the detector's newest counts and boxes plus age_ms and the intruder flag
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)

@@ -2,14 +2,17 @@
 command list and run; "stop" disarms. Every wake, command, and ask is a ledger row (chat.wake / chat.command /
 chat.ask); every post goes through __main__.post keyed on the guid of the message that caused it
 (wake:/fire:/doin:/say:/alarm:/done:/ack:/res:/stop:/ai:<guid>, decide:<guid>:<stop> for a stop's question, and
-ok:/reask:/unread:/danger:<reply guid> for what a reply was read as), so a re-read message can never post twice.
+ok:/reask:/unread:/danger:<reply guid> for what a reply was read as), so a re-read message can never post twice. post()
+claims a key before it sends, so a send that fails has consumed its key: its error is posted under its own
+(say-fail:/fire-fail:/ai-fail:/escalate-fail:), never re-posted under the claimed one.
 
 Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once]
      python -m wtdd.chat simulate "what the dog doin" "lights off" "stop"   (dry-run posts, REAL commands)
 
 Facts. No replay at boot: the watermark starts at MAX(ROWID). WTDD_LISTEN_S (default 120) is the armed window and any
 recognized message re-arms it. Who may wake the dog: any member while HOUSEMATES is empty (one WARN), else the listed
-handles; from-me rows only with WTDD_ALLOW_SELF=1 (Johnny's phone shares the dog's account), and even then the dog's
+handles (any other sender is ignored with one masked WARN per sender); from-me rows only with WTDD_ALLOW_SELF=1
+(Johnny's phone shares the dog's account), and even then the dog's
 own posts are refused by confirmed guid and by the opening words of its replies. "yo dog ..." (or "hey dog", "dog ...") is a chat turn: the model answers from the group's context (memory.context: who
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" (a round's look with a person in frame, or
@@ -24,7 +27,10 @@ real dog's: the wake starts the API's path follower (the dog must be calibrated 
 follows the dog's believed pose; unset, the entity walks the drawn path and the dog is hand-driven. WTDD_WAKE_SHOW=1 makes a wake run the
 demo in Johnny's order (dog_on_fire picture, "dog doin", the walk with a look-and-say at every stop on the map: nod,
 photo, one sentence from the vision model posted with the photo, and with WTDD_ALARM=1 "who dis?!" when a person is in frame
-and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. WTDD_AGENT=1
+and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. The round
+blocks the poll, so a wake typed while it ran is read after "dog done": one whose chat.db ROWID is at or below
+MAX(ROWID) when the round ended starts nothing (one WARN); one typed after "dog done" starts the next, armed or not (a
+round shorter than WTDD_LISTEN_S leaves the chat armed; a wake there is not a re-arm). WTDD_AGENT=1
 sends an armed message that is not a fixed command to wtdd.agent.ask with the chat context. A failed command is
 reported to the group as its class and message, never faked; a done one as its text, else the tool's result, else
 the raw dict (a registry tool answers {"result": ...}), never an empty message. Live wake demo receipt (2026-09-13 03:0x, in
@@ -45,7 +51,8 @@ in the 1:1 chat as read here, and the send to it (send.py).
 
 S10, the demo: WTDD_ON_CALL_GUID set to the group's own guid makes the group the on-call target (oncall.person()). The
 flag goes to the group, the group is read once, and it keeps its wake words, commands and chat turns: while a flag is
-open those are not an answer (the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
+open those are not an answer (a command only when the whole message is one: "sit" is not an answer, "it is teri"
+is; the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
 reply from a member (not a wake word, a command or a chat turn) decides, as in the 1:1. Every intruder.verdict row
 carries args.by (the HOUSEMATES first name, else "a member"), args.say (one first-person sentence, the reply quoted
 with any phone or email in it replaced by "a member", as the page's redact() does) and args.decided true; args.from
@@ -81,6 +88,7 @@ on camera, and that a live reply's chat.db time is never before the post it answ
 from __future__ import annotations
 import json
 import re
+import threading
 import time
 from typing import Any, Callable
 
@@ -95,7 +103,7 @@ CORRECTION = re.compile(r"^(its|it s|thats|that s|those are|these are|that is|no
 CORRECTION_WINDOW_S = 1800   # a correction counts within this long after the dog's last post
 STATE = config.ROOT / "state.json"
 PENDING = config.ROOT / "pending.json"   # the open question from intruder_alarm ("who dis?!"): the chat's next answer decides
-HEARTBEAT = config.ROOT / "listen.json"  # written every poll: the remote's "group chat" status reads it (GET /chat)
+HEARTBEAT = config.ROOT / "listen.json"  # the remote's "group chat" status (GET /chat): beat(), from its own thread in run()
 PENDING_WINDOW_S = 120
 ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
@@ -122,7 +130,9 @@ class Listener:
         self.armed_until = 0.0
         self.armed_by: str | None = None
         self.last = db.max_rowid()          # no replay at boot
+        self.round_end = 0                  # chat.db's MAX(ROWID) when the last round ended: a wake at or below it was typed during it
         self._warned = False
+        self._unlisted: set[str] = set()    # senders not in HOUSEMATES already warned about (one WARN each)
         self.oncall_handle = config.maybe("WTDD_ON_CALL_HANDLE")
         self.oncall = config.maybe("WTDD_ON_CALL_GUID") or (oncall.guid(self.oncall_handle) if self.oncall_handle else None)   # the group (S10) or the 1:1 (03)
         self.group_oncall = self.oncall == guid   # S10: the group answers its own flags and keeps its wake words and commands
@@ -149,7 +159,13 @@ class Listener:
                 log("chat", "WARN HOUSEMATES is empty: any member of the group may wake the dog")
                 self._warned = True
             return True
-        return m["sender"] in HOUSEMATES
+        if m["sender"] in HOUSEMATES:
+            return True
+        if m["sender"] not in self._unlisted:   # once per sender, masked (stderr is on screen while filming)
+            self._unlisted.add(m["sender"])
+            log("chat", "WARN sender not in HOUSEMATES: ignored (add its handle to housemates.py; `python -m wtdd.chat watch` prints it)",
+                sender=PRIVATE.sub(lambda h: h.group()[:3] + "…" + h.group()[-4:], m["sender"] or "") or "no handle")
+        return False
 
     def say(self, key: str, text: str | None, file: str | None = None, guid: str | None = None) -> None:
         if self.dry:
@@ -202,7 +218,7 @@ class Listener:
             seen = look_and_see(look, stop=at)
             self.say(f"say:{k}", seen["text"], seen["file"])
         except Exception as e:  # noqa: BLE001
-            self.say(f"say:{k}", f"couldn't look: {type(e).__name__}: {str(e)[:100]}")
+            self.say(f"say-fail:{k}", f"couldn't look: {type(e).__name__}: {str(e)[:100]}")
             return
         if seen.get("person") and ask:   # the intruder check: someone in frame, flag the on-call person, hold here for their verdict
             try:
@@ -243,8 +259,9 @@ class Listener:
 
     def await_verdict(self, seconds: float) -> bool:
         """After "who dis?!" at a stop, the listener is inside the round, so it reads the chats here: the asked chat's
-        next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, within the
-        same `seconds`. No answer in `seconds` = the question is withdrawn and the round goes on; that is logged, never
+        next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, a fresh
+        `seconds` from the re-ask (at most twice `seconds` in all, under the follower's 180 s stop timeout). No answer
+        in `seconds` = the question is withdrawn and the round goes on; that is logged, never
         faked, and a re-ask nobody answered is its unclear verdict row (_drop)."""
         t0 = time.monotonic()
         log("chat", "who dis: waiting for the verdict", seconds=seconds)
@@ -253,7 +270,8 @@ class Listener:
                 if m.get("text") and self.allowed(m) and self.verdict(m):
                     pend = json.loads(PENDING.read_text()) if PENDING.exists() else {}
                     if pend.get("reasked") and not pend.get("acknowledged"):
-                        continue   # asked once more: hold for that answer
+                        t0 = time.monotonic()   # asked once more: the re-ask gets its own `seconds`
+                        continue
                     return True
                 log("chat", "who dis: a message while holding, not the verdict: not handled", chat=m["chat"], chars=len(m.get("text") or ""))
             time.sleep(1.0)
@@ -313,21 +331,31 @@ class Listener:
 
     def wake_show(self, m: dict[str, Any]) -> None:
         """The wake demo, in Johnny's order: the picture, "dog doin" as the walk starts, the walk (wtdd/field.py, the same
-        one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when the map
-        has no stops), then "dog done". Each part is a tool call and a gated post keyed on the wake message; a failed
-        part is posted as its error, never faked, and the sequence still ends with "dog done"."""
+        one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when no stop
+        was looked at: each is counted as it happens, so a walk that fails after one never looks again), then "dog
+        done". Each part is a tool call and a gated post keyed on the wake message; a failed part is posted as its
+        error, never faked, and the sequence still ends with "dog done". With the real dog, a walk that fails (or a
+        Ctrl-C of the listener) first halts the follower (field.halt, POST /dog/stop: inside walk() before its end dark,
+        else here, one dog.stop row either way), so the dog is never driven under the end look and the next wake's
+        follow is not refused; a Ctrl-C then exits, no look. Stop on either dashboard during this round (field.stop
+        written since the wake, or the follow ended "stopped") is no end look and "dog done (stopped)"; written before
+        the walk began (the picture, "dog doin"), no follow starts."""
         from .. import tools
-        from ..field import walk
+        from ..field import STOP, halt, walk
+        t_wake = time.time()
+        pressed = lambda: STOP.exists() and STOP.stat().st_mtime >= t_wake   # noqa: E731  Stop on a dashboard since this wake
         try:
             pic = tools.call("dog_on_fire")
             self.say(f"fire:{m['guid']}", None, pic["file"])
         except Exception as e:  # noqa: BLE001
-            self.say(f"fire:{m['guid']}", f"couldn't make the picture: {type(e).__name__}: {str(e)[:100]}")
+            self.say(f"fire-fail:{m['guid']}", f"couldn't make the picture: {type(e).__name__}: {str(e)[:100]}")
         self.say(f"doin:{m['guid']}", "dog doin")
         walked: str | None = None
         stops: list[int] = []
         source = "dog" if (config.maybe("WTDD_ROUND") or "entity") == "dog" else "entity"
         try:
+            if pressed():         # Stop during the picture or "dog doin": walk() would clear it and the follower would start
+                raise RuntimeError("stopped before the walk began")
             if source == "dog":   # the real dog walks the round: the API's follower drives it, the field follows its pose
                 import requests
                 avoid = (config.maybe("WTDD_ROUND_AVOID") or "1") not in ("0", "false", "no")   # 0 = follow without the dog's avoidance, by explicit choice
@@ -335,26 +363,31 @@ class Listener:
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})
-            out = walk(on_stop=lambda i, p, here: self.look_and_say(m, i), source=source)
-            stops = out.get("stops", [])
+            out = walk(on_stop=lambda i, p, here: (stops.append(i), self.look_and_say(m, i)), source=source)   # as they happen: a walk that raises later keeps them
             log("chat", "walked", seconds=out["seconds"], writes=out["writes"], errors=out["errors"], stops=len(stops), rooms=",".join(out["rooms"]))
             if out.get("errors"):
                 walked = f"{out['errors']} light write(s) failed, see the ledger"
-        except Exception as e:  # noqa: BLE001
+        except BaseException as e:  # noqa: BLE001  (a Ctrl-C too: never leave the follower driving with nobody watching)
+            if source == "dog" and not getattr(e, "dog_halted", False):   # walk() halts a failure in its own loop, before the dark
+                halt(f"{type(e).__name__}: {e}", "chat")
+            if not isinstance(e, Exception):
+                raise
             walked = f"couldn't walk the path: {type(e).__name__}: {str(e)[:100]}"
-        if not stops:                      # no stop reached: the look point is wherever the dog is now
+        stopped = pressed() or "follow ended with: stopped" in (walked or "")
+        if not stops and not stopped:      # no stop reached: the look point is wherever the dog is now
             self.look_and_say(m)
-        self.say(f"done:{m['guid']}", "dog done" + (f" ({walked})" if walked else ""))
+        self.say(f"done:{m['guid']}", "dog done" + (" (stopped)" if stopped else "") + (f" ({walked})" if walked else ""))
 
     def correction(self, m: dict[str, Any]) -> bool:
         """A housemate correcting the dog's last report ("that's socks, not a bird"): one chat.correction row naming
         what it corrects (the last posted look: sentence, file, detector counts), appended to state.json so the next
         look's prompt carries it (wtdd/tools/dog_say.py), and acknowledged in the chat. Only within CORRECTION_WINDOW_S
-        of the dog's last post, armed or not."""
+        of the dog's last post, armed or not: the whole ledger is scanned for it (a row count would end the window
+        early, as the last 300 rows did; the scan runs only on a correction-shaped message)."""
         if not CORRECTION.match(normalize(m["text"])):
             return False
         chat = m.get("chat") or self.guid   # a chat corrects the last photo it was shown (a row without a guid predates 03)
-        looks = [r for r in ledger_rows(300) if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("file")
+        looks = [r for r in ledger_rows() if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("file")
                  and (r["args"].get("guid") or chat) == chat]
         if not looks:
             return False
@@ -401,7 +434,8 @@ class Listener:
             return False
         if kind == "halt":   # item 00's local stop: resumed by its own word or button, never by a model reading
             return False
-        if self.group_oncall and (is_wake(m["text"]) or match_command(m["text"]) or is_chat(m["text"])):   # S10: not an answer, the group's own
+        if self.group_oncall and (is_wake(m["text"]) or normalize(m["text"]) in command_list() or is_chat(m["text"])):   # S10: not an answer, the group's own
+            # a command only when the whole message is one: match_command's fuzzy word ("it" is sit) dropped real answers
             return False
         from .. import tools
         from ..decide import ask_line, read_reply
@@ -479,7 +513,7 @@ class Listener:
             out = ask(text, context=memory.context(self.guid))
             self.say(f"ai:{m['guid']}", out["text"][:300] or f"did: {', '.join(c['tool'] for c in out['calls']) or 'nothing'}")
         except Exception as e:  # noqa: BLE001
-            self.say(f"ai:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
+            self.say(f"ai-fail:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
 
     def handle(self, m: dict[str, Any]) -> None:
         text = m["text"]
@@ -497,8 +531,11 @@ class Listener:
             self.chat(m)
             return
         wake = is_wake(text)
-        if not self.armed:
+        if not self.armed or (wake and self.round_end > 0):   # after a round a wake is judged by its ROWID, armed or not (a short round leaves it armed)
             if not wake:
+                return
+            if 0 < m.get("rowid", 0) <= self.round_end:   # typed while the last round ran, read only after its "dog done"
+                log("chat", "WARN a wake typed during the round: not starting another", by=hname(m["sender"]), phrase=wake[0])
                 return
             self.armed_until = time.time() + self.listen_s
             self.armed_by = m["sender"]
@@ -506,6 +543,7 @@ class Listener:
             self._event("chat.wake", m, phrase=wake[0], score=wake[1])
             if _flag("WTDD_WAKE_SHOW"):
                 self.wake_show(m)
+                self.round_end = db.max_rowid()
             else:
                 self.say(f"wake:{m['guid']}", f"the dog is doin. listening for {int(self.listen_s)}s: {' · '.join(command_list())}")
             return
@@ -525,7 +563,7 @@ class Listener:
                 out = ask(text, context=memory.context(self.guid))
                 self.say(f"ai:{m['guid']}", out["text"][:300] or f"did: {', '.join(c['tool'] for c in out['calls']) or 'nothing'}")
             except Exception as e:  # noqa: BLE001
-                self.say(f"ai:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
+                self.say(f"ai-fail:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
             return
         cmd, score = hit
         log("chat", "COMMAND", by=hname(m["sender"]), command=cmd, score=score)
@@ -547,9 +585,19 @@ class Listener:
         else:
             self.say(f"res:{m['guid']}", str(out)[:300])
 
+    def beat(self) -> None:
+        """listen.json, whole or not at all (a temp file replaced): GET /chat never reads a half-written beat."""
+        hb, by = HEARTBEAT, self.armed_by
+        tmp = hb.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"t": time.time(), "guid": self.guid, "armed": self.armed, "armed_by": hname(by) if by else None,
+                                   "dry": self.dry, "pending": PENDING.exists(), "last_rowid": self.last}))
+        tmp.replace(hb)
+
+    def _beats(self, every: float, done: threading.Event) -> None:
+        while not done.wait(every):
+            self.beat()
+
     def poll(self) -> int:
-        HEARTBEAT.write_text(json.dumps({"t": time.time(), "guid": self.guid, "armed": self.armed, "armed_by": hname(self.armed_by) if self.armed_by else None,
-                                         "dry": self.dry, "pending": PENDING.exists(), "last_rowid": self.last}))
         if self.armed_by and not self.armed:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None
@@ -574,10 +622,21 @@ class Listener:
         return sorted(out, key=lambda m: m["rowid"])
 
     def run(self, every: float = 2.0, once: bool = False) -> None:
+        """Polls every `every` s. The heartbeat (listen.json: alive, armed, pending) is beat() once here, then every `every`
+        s from its own thread, the only writer, because a round (the walk, the looks, a 45 s hold) runs inside one poll()
+        and GET /chat reads a beat older than 10 s as "listener down". Known trade-off: the thread would keep beating if
+        the main thread wedged; every blocking call in a round has a timeout (the posts, the API, the follower's 180 s)."""
         log("chat", f"listen guid={self.guid}", oncall=self.oncall or "none", from_rowid=self.last, listen_s=self.listen_s, dry=self.dry,
             wake_phrases=len(wake_phrases()), commands=len(command_list()))
-        while True:
-            self.poll()
-            if once:
-                break
-            time.sleep(every)
+        self.beat()
+        done = threading.Event()
+        if not once:
+            threading.Thread(target=self._beats, args=(every, done), daemon=True).start()
+        try:
+            while True:
+                self.poll()
+                if once:
+                    break
+                time.sleep(every)
+        finally:
+            done.set()
