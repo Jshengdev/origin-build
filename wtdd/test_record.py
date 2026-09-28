@@ -185,6 +185,26 @@ class Unsigned(Guard):
         self.assertEqual((first[1]["kind"], first[1]["posted"]["rowid"]), ("sit", 70005))
         self.assertIn("no dog.look row", record.html(record.build(A, rows=_unreached(ledger.rows(), 22))))   # the page shows it FAILED
 
+    def test_the_followers_own_look_is_not_a_stop(self):
+        """Preflight: session._classify at a dot on blue between stops 10 and 22 (its level look tagged by "follow",
+        see()'s vision call and vision.check, route.decided classified) adds no stop and never lands its model or
+        sentence on stop 10. In memory; the ledger is untouched."""
+        m, rows = make_ledger_shift, ledger.rows()
+        i = [j for j, r in enumerate(rows) if r["tool"] == "dog.look"][1]
+        look = {**m.look("2026-09-25T22:01:00", "follow-dog", "level", 9002), "args": {"kind": "level", "by": "follow"}}
+        seen = m.row("2026-09-25T22:01:05", "follow-dog", "watch", "llm.generate", "openrouter", {"model": "a-follow-model"},
+                     {"model": "a-follow-model", "usage": {"total_tokens": 5}}, ms=5)
+        check = m.row("2026-09-25T22:01:05", "follow-dog", "watch", "vision.check", "openrouter", {"detector": None, "file": "look-level.jpg"},
+                      {"out_of_place": [], "person": True, "detector_check": None, "agree": None})
+        check["response_or_error"] = "a black office chair in the way"
+        decided = m.row("2026-09-25T22:01:06", "follow-dog", "dog", "route.decided", "map",
+                        {"at": 4, "action": "classified", "passed": [4], "label": "chair", "p": 0.84, "scene": "a black office chair in the way"},
+                        {"label": "chair", "p": 0.84, "passed": [4]})
+        stops = record.build(A, rows=rows[:i] + [look, seen, check, decided] + rows[i:], site=EMPTY_SITE)["stops"]
+        base = record.build(A, site=EMPTY_SITE)["stops"]
+        self.assertEqual([s["index"] for s in stops], [10, 22, 23])
+        self.assertEqual(stops, base)
+
     def test_page_renders_with_an_empty_map(self):
         h = record.html(record.build(A, site=EMPTY_SITE))
         self.assertIn("<svg", h)

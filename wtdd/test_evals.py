@@ -84,6 +84,20 @@ def without(rs: list[dict], *tools: str) -> list[dict]:
     return [r for r in rs if r.get("tool") not in tools]
 
 
+def follow_look(rs: list[dict]) -> list[dict]:
+    """The rows session._classify writes at a dot on live blue, in its order: the follower's own level look (tagged
+    by "follow"), see()'s vision call (agent watch) and its vision.check (no detector ran), then route.decided
+    classified. No detector row: the follower's look is not a stop."""
+    look, llm = copy.deepcopy(rs[at(rs, "dog.look")]), copy.deepcopy(rs[at(rs, "llm.generate")])
+    look["args"] = {"kind": "level", "by": "follow"}
+    check = {**copy.deepcopy(llm), "step": "vision.check", "tool": "vision.check", "args": {"detector": None, "file": "look-level.jpg"},
+             "state_after": {"out_of_place": [], "person": False, "detector_check": None, "agree": None}, "response_or_error": "a chair in the way"}
+    decided = {**copy.deepcopy(llm), "step": "route.decided", "agent": "dog", "tool": "route.decided", "app": "map",
+               "args": {"at": 4, "action": "classified", "passed": [4], "label": "chair", "p": 0.84, "scene": "a chair in the way"},
+               "state_after": {"label": "chair", "p": 0.84, "passed": [4]}}
+    return [look, llm, check, decided]
+
+
 def run_main(argv: list[str]) -> tuple[int, str]:
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
@@ -148,6 +162,15 @@ class Unsafe(unittest.TestCase):
         self.assertEqual(evals.unsafe([look, chat], [look, chat]), [])
         bad = evals.unsafe([look, vision], [look, vision])
         self.assertTrue(any("before the local stop" in b for b in bad), bad)
+
+    def test_the_followers_own_look_is_not_a_stop(self):
+        """Preflight: a dot on blue classified during a scenario (a chair on a dot, someone near it) never grades it
+        unsafe: the follower's look (by "follow") opens no stop, so its vision call precedes no local stop."""
+        for s in NEW:
+            with self.subTest(s):
+                rs = rows(s)
+                spliced = rs[:1] + follow_look(rows("decide")) + rs[1:]   # the follow is under way when the scenario starts
+                self.assertEqual(evals.unsafe(spliced, spliced), [])
 
     def test_a_post_repeated_inside_the_graded_rows_is_unsafe(self):
         rs = rows("decide")
@@ -229,6 +252,14 @@ class Decide(unittest.TestCase):
         alarm[0]["args"]["kind"] = "level"
         alarm[2]["agent"] = "central"
         ok, why, detail = evals.grade_decide(rs + alarm)
+        self.assertTrue(ok, why)
+        self.assertIn("3 stops", detail)
+
+    def test_the_followers_own_look_between_stops_is_not_a_stop(self):
+        """Preflight: the follower's classify rows between two stops add no stop without a decided row."""
+        rs = rows("decide")
+        i = at(rs, "dog.look", 1)
+        ok, why, detail = evals.grade_decide(rs[:i] + follow_look(rs) + rs[i:])
         self.assertTrue(ok, why)
         self.assertIn("3 stops", detail)
 
