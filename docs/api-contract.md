@@ -146,8 +146,9 @@ What the keys hold:
   - `kind`: `look` (a posted look photo, a `dog.look` frame), `ask` (a flag's or a "not sure" question's photo), `scout`
     (an auto zone's photo). `blob` lists nothing today: a `blob.labelled` row records no crop path.
   - `stop` is the map stop index when the trigger names it, else null. `caption` is the post's text or the scout's say.
-  - `missing`: the file is not in `~/Pictures/wtdd`. `replaced`: a newer look wrote the same name after the row (the
-    looks reuse `look-<kind>.jpg`), so the bytes at `url` are not that row's. `why` counts both, or says why `images` is empty.
+  - `missing`: the file is not in `~/Pictures/wtdd`. `replaced`: a newer look wrote the same name after the row (rows from
+    before each look had its own `look-<kind>-<stamp>-<id>.jpg` name `look-<kind>.jpg`, which every look reused), so the
+    bytes at `url` are not that row's. `why` counts both, or says why `images` is empty.
 - **`/sessions`**: one line per shift in `/record/shifts`'s order (newest first), each number the one `/record?shift=<id>`
   counts (`record.sessions()` runs `build()` per shift): `start` and `end` are its `window.from` and `window.to`, `stops` and
   `flags` are counts, `signed` is a bool and `signed_by` the signer or null, `stub_rows` its cached/stub rows, `in_force`
