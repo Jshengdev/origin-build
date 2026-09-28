@@ -13,7 +13,7 @@ import { HEAT_BINS, HEAT_FLOOR_TOKEN, LIDAR_TOKENS, MAP_ALERT, MAP_INK, MAP_INK_
 import { DeviceTip, MAP_TIP, MapPin } from "./map-pin";
 
 export type LayerKey = "grid" | "floorplan" | "zones" | "route" | "stops" | "lights" | "camera" | "dog" | "pins" | "scan" | "house"
-  | "heights" | "memory" | "decisions";
+  | "heights" | "memory" | "decisions" | "plan";
 type XY = [number, number];
 
 /**
@@ -145,7 +145,7 @@ export function TwinMap({
   const depth = live ? heightSpan(live.cells?.tops, live.heights?.segments, live.scanZ) : null;
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>(() => ({
     grid: true, floorplan: true, zones: true, route: true, stops: true, lights: true, camera: true, dog: true, pins: true,
-    scan: true, house: true, heights: false, memory: true, decisions: true,   // Johnny, 14:50: memory vs live "which he likes and wants on"; 2.5D stays his switch
+    scan: true, house: true, heights: false, memory: true, decisions: true, plan: true,   // plan: Johnny, 19:2x, "just showing the obstacles and ... how the wall would be drawn"   // Johnny, 14:50: memory vs live "which he likes and wants on"; 2.5D stays his switch
     ...initialLayers,
     ...(live && !initialLayers ? savedLayers() : {}),
   }));
@@ -339,7 +339,7 @@ export function TwinMap({
     { key: "grid", label: "Grid" }, { key: "floorplan", label: "Floor plan" }, { key: "zones", label: "Zones" },
     { key: "route", label: "Route" }, { key: "stops", label: "Stops" }, { key: "lights", label: "Lights" },
     { key: "camera", label: "Camera" }, { key: "dog", label: "Dog" }, { key: "pins", label: "Pins" },
-    ...(live ? [{ key: "scan" as const, label: "Live scan" }, { key: "house" as const, label: "House plan" },
+    ...(live ? [{ key: "plan" as const, label: "Walls and obstacles" }, { key: "scan" as const, label: "Live scan" }, { key: "house" as const, label: "House plan" },
       { key: "heights" as const, label: "2.5D heights" }, { key: "memory" as const, label: "Memory vs live" },
       { key: "decisions" as const, label: "Decisions" }] : []),
   ];
@@ -383,7 +383,7 @@ export function TwinMap({
           })()}
 
 
-          {layers.floorplan && floorPlan?.segments.map(([x1, y1, x2, y2], i) => {
+          {layers.floorplan && !planOn(live, layers, depth) && floorPlan?.segments.map(([x1, y1, x2, y2], i) => {
             const [a, b] = P([x1, y1]), [c, d] = P([x2, y2]), top = live?.heights?.segments[i];
             return <line key={i} x1={a} y1={b} x2={c} y2={d} style={{ stroke: top != null && depth ? rampCss(rampT(top, depth)) : MAP_INK }} strokeWidth={2} strokeLinecap="round" />;
           })}
@@ -656,6 +656,8 @@ export function TwinMap({
       {live ? (
         <div data-map-ui className="pointer-events-auto flex min-w-64 flex-1 flex-col gap-1 font-mono text-[11px]" style={{ color: MAP_INK_MUTED }}>
           {layers.heights && !relief && <span>2.5D · heights not served{live.cells?.topsWhy ? ` · ${live.cells.topsWhy}` : ""}</span>}
+          {planOn(live, layers, depth) && <span className="flex items-center gap-1.5">walls <span className="size-2.5 rounded-sm" style={{ background: MAP_INK, opacity: 0.85 }} /> · obstacles, by their measured height:</span>}
+          {layers.plan && !live.classCells && <span>walls and obstacles · no floor plan served yet, so the memory is drawn</span>}
           {layers.memory && (depth
             ? <span className="flex items-center gap-1.5">depth {depth[0].toFixed(2)} m <span className="h-2 w-16 rounded-sm" style={{ background: `linear-gradient(to right, ${LIDAR_TOKENS.map((t) => `var(${t})`).join(", ")})` }} /> {depth[1].toFixed(2)} m</span>
             : <span>depth · heights not served</span>)}
@@ -808,6 +810,11 @@ function dither(ctx: CanvasRenderingContext2D, glyph: "+" | "x" | "both", densit
   patterns.set(key, p);
   return p;
 }
+/** "Walls and obstacles" draws when its switch is on, a floor plan's cells are served and the 2.5D relief is not drawing;
+ *  with no floor plan yet, the memory draws as before, so the map is never empty. */
+function planOn(live: LiveLayers | undefined, layers: Record<LayerKey, boolean>, depth: [number, number] | null) {
+  return !!(live && layers.plan && live.classCells && !reliefOn(live, layers, depth));
+}
 /** 2.5D's relief: a served height drawn at this share of its true height, so a 1 m top rises 0.3 m of plan (the head). */
 const RELIEF = 0.3;
 /** The relief is drawn when the 2.5D switch is on and at least one memory cell has a served top at a served scale. */
@@ -846,7 +853,8 @@ function drawLive(ctx: CanvasRenderingContext2D, css: CSSStyleDeclaration, live:
     const w = cell * view.s, h = w / 2;
     cells.forEach(([x, y], i) => { paint(i); ctx.fillRect(x * view.s + view.tx - h, y * view.s + view.ty - h, w, w); });
   };
-  if (live.cells && layers.grid && !reliefOn(live, layers, depth)) {
+  const plan = planOn(live, layers, depth);
+  if (live.cells && layers.grid && !reliefOn(live, layers, depth) && !plan) {
     const { cells, cell, hits } = live.cells, color: Record<string, string> = {};
     const one = css.getPropertyValue(HEAT_FLOOR_TOKEN).trim();
     if (layers.memory) {
@@ -880,6 +888,18 @@ function drawLive(ctx: CanvasRenderingContext2D, css: CSSStyleDeclaration, live:
       ctx.fillStyle = side.get(c) ?? side.set(c, mix(c, base, 0.45)).get(c)!; ctx.fillRect(X - half, Y + half - h, w, h);   // the side
       ctx.fillStyle = c; ctx.fillRect(X - half, Y - half - h, w, w);                                                         // the top
     }
+  } else if (plan) {
+    // Johnny, 19:2x: "just showing the obstacles and showing how the wall would be drawn and defined". The floor plan's own
+    // cells, solid: its wall cells in ink (the walls as it defined them), every other class (low, slab, tall: the obstacles)
+    // on the depth ramp by its served top (muted ink with none). No raw memory, no fitted runs, no dither.
+    const { cell, byClass } = live.classCells!, tops = live.heights?.classes ?? {};
+    for (const [cls, pts] of Object.entries(byClass)) {
+      const groups = new Map<string, XY[]>();
+      pts.forEach((p, i) => { const t = tops[cls]?.[i], c = cls === "wall" ? MAP_INK : t != null && depth ? ramp(t) : MAP_INK_MUTED; (groups.get(c) ?? groups.set(c, []).get(c)!).push(p); });
+      ctx.globalAlpha = cls === "wall" ? 0.85 : 0.9;
+      for (const [c, group] of groups) { ctx.fillStyle = c; square(group, cell, () => {}); }
+    }
+    ctx.globalAlpha = 1;
   } else if (live.classCells && layers.floorplan) {
     // the furniture, dithered: the canvas colour under it (so the grid's squares do not show through), then the glyphs
     const { cell, byClass } = live.classCells, tops = live.heights?.classes ?? {};
