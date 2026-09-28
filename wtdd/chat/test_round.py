@@ -152,8 +152,8 @@ class Round(unittest.TestCase):
         sends(self, "ok, standing down")
         self.l.post = cli.post
         self._stops([5])
-        replies = [[msg("thats just teri", "R1", 2)]]
-        for p in (mock.patch.object(L.db, "max_rowid", return_value=0), mock.patch.object(self.l, "read", lambda: replies.pop(0) if replies else []),
+        replies = [lambda: [msg("thats just teri", "R1", 2)]]   # stamped when read: the clock-fault check is to the second
+        for p in (mock.patch.object(L.db, "max_rowid", return_value=0), mock.patch.object(self.l, "read", lambda: replies.pop(0)() if replies else []),
                   mock.patch.dict(SEEN, decision={"label": "box", "p": 0.4, "needs_person": True, "model": "stub", "action": "ask"})):
             self.enterContext(p)
         self.round([state(3), state(5, stopped_at=5), state(len(PATH) - 1, active=False, done=True)])
