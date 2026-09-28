@@ -7,9 +7,11 @@
   GET /sessions (wtdd/api.py)                                 sessions(): one line per shift, build()'s numbers, newest first
 
 On the page: the stops (each look, what the detector and the model said, whether a person was pinged, the post that
-confirmed it, the correction that fixes it), the flags with who resolved what and when (the newest intruder.verdict for
+confirmed it, the correction that fixes it), the flags (every escalate post and every stop's "not sure: ..." question,
+decide.ask_line, which is also its stop's ping) with who resolved what and when (the newest intruder.verdict for
 the flag: a hold then "handled" reads handled, a hold then its expiry reads expired; the first reply's acked_ms, the
-close's closed_ms; or "unanswered"), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
+close's closed_ms; or "unanswered"; who is its args.by, the listener's HOUSEMATES first name or "a member", else, on
+a row from before S10, the raw handle args.from), the corrections, every refusal and every failure, the map with its labeled shapes (rooms, zones, lights,
 the path, the shift's planned stops), and the signature line: "unsigned" until an ok record.signed {by, at, shift_id}
 row exists (item 03, `python -m wtdd record_sign`), then the name and the time. Every number is counted from rows,
 nothing is typed by hand. It reads the ledger through ledger.rows() (so WTDD_LEDGER is honoured) and ui/map.json; it
@@ -27,9 +29,12 @@ takes the next one's looks.
 
 A stop is a dog.look row plus the rows up to the next look (so a look pressed by hand shows too); its post is the
 listener's say:<wake>:<n> (the map index is its n) or, pressed by hand, dog_say's say-<epoch> (kind remote, no map
-index; dog_say raises before it posts when its look fails, so a say- post always follows its own look), its model call
+index; dog_say raises before it posts when its look fails, so a say- post always follows its own look; its "not sure:"
+question, say-<epoch>:decide, is that look's ping, not a second say), its model call
 is the llm.generate of agent watch (dog_say's; a chat turn after the round is agent central and never lands on the
-last stop), and a correction joins it when its args.corrects.at is that post's ledger ts. A say post with no dog.look
+last stop), and a correction joins it when its args.corrects.at is that post's ledger ts. The follower's own look at
+a dot on blue (args.by "follow", session._classify) is no stop: it closes the stop before it, so its vision call and
+vision.check land on no stop, and its route.decided classified row is in the ledger, not the stops. A say post with no dog.look
 of its own before it (the stop before already has its post, or there is no stop yet) is a look that never reached the
 dog (README: "the dog drops or is unreachable ... the look posts the error"; the API is down, so no dog.look row
 exists): it opens its own stop, ok false, kind none, its error the post's text, never joined to the stop before. Its
@@ -136,6 +141,9 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
     def late(r: dict) -> bool:   # dog_say or intruder_alarm fired after signing with WTDD_SHIFT still set: its look is outside the window
         return sig is not None and ok(r, "chat.post") and r["ts"] > sig["ts"]
 
+    def asks(a: dict) -> bool:   # a person asked: an escalate post ("who dis?!", a heads up) or the stop's "not sure:" (decide.ask_line)
+        return a.get("kind") == "escalate" or str(a.get("text") or "").startswith("not sure:")
+
     def stop(r: dict, **kv: Any) -> dict:
         stops.append({"n": len(stops) + 1, "index": None, "ts": r["ts"], "kind": None, "ok": False, "fired": None, "pitch_deg": None, "error": None,
                       "classes": None, "sentence": None, "person": None, "out_of_place": None, "detector_check": None,
@@ -144,10 +152,11 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
 
     for r in members:
         a, after = r.get("args") or {}, r.get("state_after") or {}
-        say = ok(r, "chat.post") and str(a.get("trigger") or "").startswith(("say:", "say-"))   # the listener's, dog_say's by hand
+        trig = str(a.get("trigger") or "")
+        say = ok(r, "chat.post") and trig.startswith(("say:", "say-")) and not trig.endswith(":decide")   # the listener's, dog_say's by hand
         if r.get("tool") == "dog.look":
-            cur = stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"), pitch_deg=after.get("pitch_deg"),
-                       error=None if r.get("ok") else r.get("response_or_error"))
+            cur = None if a.get("by") == "follow" else stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"),
+                                                             pitch_deg=after.get("pitch_deg"), error=None if r.get("ok") else r.get("response_or_error"))
             continue
         if late(r):   # any kind: a say would open a stop with no look, an escalate would ping the last signed stop
             after_sig.append({"ts": r["ts"], "trigger": a.get("trigger"), "rowid": after.get("rowid")})
@@ -166,19 +175,19 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         elif say:
             cur.update(index=_index(a["trigger"]), posted={"rowid": after.get("rowid"), "ts": after.get("ts"), "file": a.get("file")},
                        correction=next((c["text"] for c in corrections if c["at"] == r["ts"]), None))
-        elif r["tool"] == "chat.post" and a.get("kind") == "escalate":
+        elif r["tool"] == "chat.post" and asks(a):
             cur["pinged"] = True
 
     verdicts = [r for r in members if ok(r, "intruder.verdict")]
     flags = []
     for r in members:
         a = r.get("args") or {}
-        if ok(r, "chat.post") and a.get("kind") == "escalate" and not late(r):   # a flag after the signature is listed, not counted
+        if ok(r, "chat.post") and asks(a) and not late(r):   # a flag after the signature is listed, not counted
             vs = [x for x in verdicts if x["args"].get("asked") == a.get("trigger")]   # a hold, then handled or expired: the newest is the outcome
             v = vs[-1] if vs else None
             flags.append({"ts": r["ts"], "trigger": a.get("trigger"), "stop": _index(a.get("trigger")), "to": a.get("guid"),
                           "text": a.get("text"), "file": a.get("file"),
-                          "resolved": v and {"by": v["args"].get("from"), "text": v["args"].get("text"),
+                          "resolved": v and {"by": v["args"].get("by") or v["args"].get("from"), "text": v["args"].get("text"),
                                              "verdict": (v.get("state_after") or {}).get("verdict"), "acked_ms": vs[0]["args"].get("acked_ms"), "ts": v["ts"],
                                              **({"closed_ms": v["args"]["closed_ms"]} if v["args"].get("closed_ms") is not None else {})}})
     acked = [a["acked_ms"] for r in members for a in [r.get("args") or {}]

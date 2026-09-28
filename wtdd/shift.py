@@ -5,7 +5,10 @@
   start(name)     name "morning" or "night": shift.json = {"shift_id": "<YYYY-MM-DD>-<name>", "started": <iso>}, written
                   atomically (a temp file renamed over it) inside one shift.started row: args {name, shift_id} (the new
                   run's id, so the row opens its record), state_before and state_after the read() before and after (the
-                  after is the read-back); returns the file. POST /shift {name}; the remote's two buttons.
+                  after is the read-back); returns the file. POST /shift {name}; the remote's two buttons. A second
+                  start of the same run that day (a retake, a rehearsal) gets <YYYY-MM-DD>-<name>-2, -3, ...: the first
+                  id no shift.started row in the ledger carries, so its record never merges with the take before it and
+                  a rehearsal's signature never closes it.
 The file is <repo>/shift.json, beside the ledger (WTDD_LEDGER moves both, so a test's scratch ledger never reads the live
 run). A shift.json that does not parse or has no non-empty string shift_id is a ValueError naming the file, never a
 fallback to the env or the date: fix or delete it. Any other name is a ValueError on a FAILED shift.started row and the
@@ -21,7 +24,7 @@ import os
 import time
 
 from . import config
-from .ledger import LEDGER, step
+from .ledger import LEDGER, rows, step
 
 FILE = LEDGER.with_name("shift.json")
 NAMES = ("morning", "night")
@@ -50,7 +53,10 @@ def start(name: str) -> dict[str, str]:
         if name not in NAMES:
             raise ValueError(f"no run named {name!r}: start a morning or a night run")
         now = time.localtime()
-        run = {"shift_id": time.strftime("%Y-%m-%d-", now) + name, "started": time.strftime("%Y-%m-%dT%H:%M:%S", now)}
+        base = time.strftime("%Y-%m-%d-", now) + name
+        used = {(x.get("args") or {}).get("shift_id") for x in rows() if x.get("tool") == "shift.started"}
+        sid = base if base not in used else next(f"{base}-{k}" for k in range(2, 10**6) if f"{base}-{k}" not in used)
+        run = {"shift_id": sid, "started": time.strftime("%Y-%m-%dT%H:%M:%S", now)}
         r["args"]["shift_id"] = run["shift_id"]
         tmp = FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(run) + "\n")

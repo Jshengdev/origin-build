@@ -15,8 +15,9 @@ only a reply read as stranger sounds light_alarm (wtdd/chat/listen.py look_and_s
 Vision: OPENROUTER_VISION_MODEL (x-ai/grok-4.20, about 1 s on a dog frame), the JSON prompt below, the frame (and the
 tidy baseline when one exists) downscaled to 640 px wide and sent as base64 JPEG. The reply must be JSON with say,
 person and out_of_place, or the call raises (no canned sentence, CLAUDE.md section 2); say over 140 characters is cut
-at a word with a WARN. One llm.generate row (agent watch) per look. A tilt that did not fire (fired=False, IMU-checked
-in wtdd/dog/session.py) still yields a real frame and a real sentence; the result says so."""
+at a word with a WARN. One llm.generate row (agent watch) and one vision.check row per look (args.detector the labels,
+None when the detector did not run, and then detector_check and agree None: nothing was checked). A tilt that did not
+fire (fired=False, IMU-checked in wtdd/dog/session.py) still yields a real frame and a real sentence; the result says so."""
 ARGS = {"look": {"type": "string", "default": "tilt", "doc": "tilt | level | sit"},
         "trigger": {"type": "string", "default": None, "doc": "idempotence key of the post; defaults to say-<epoch>"},
         "baseline": {"type": "boolean", "default": False, "doc": "true = capture this look as the tidy reference, no post"},
@@ -107,12 +108,13 @@ def see(file: str, baseline: str | None = None, file_down: str | None = None, la
         text = text[:MAX_SAY].rsplit(" ", 1)[0]
     ms = round((time.perf_counter() - t0) * 1000)
     log("watch", f"saw: {text}", person=person, out_of_place=len(items), pick=pick, why=why, check=check, baseline=bool(baseline), model=out["model"], ms=ms)
-    if labels is not None:   # the second opinion as its own receipt: what the detector said vs what the model saw
-        from ..ledger import append
-        append({"step": "vision.check", "agent": "watch", "tool": "vision.check", "app": "openrouter", "ok": True,
-                "args": {"detector": labels, "file": file.split("/")[-1]},
-                "state_before": None, "state_after": {"out_of_place": items, "person": person, "detector_check": check, "agree": check.lower() == "agree"},
-                "response_or_error": text, "latency_ms": ms})
+    from ..ledger import append   # every look's receipt, the second opinion in it when the detector ran (labels None: it did not)
+    ran = labels is not None
+    append({"step": "vision.check", "agent": "watch", "tool": "vision.check", "app": "openrouter", "ok": True,
+            "args": {"detector": labels, "file": file.split("/")[-1]},
+            "state_before": None, "state_after": {"out_of_place": items, "person": person, "detector_check": check if ran else None,
+                                                  "agree": check.lower() == "agree" if ran else None},
+            "response_or_error": text, "latency_ms": ms})
     return {"text": text, "person": person, "out_of_place": items, "pick": pick, "why": why, "detector_check": check, "model": out["model"], "ms": ms}
 
 

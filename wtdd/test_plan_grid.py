@@ -698,6 +698,18 @@ class OnBlue(_Harness):
         self.assertEqual(c[0]["args"]["label"], "person")
         self.assertEqual(c[0]["args"]["say"], "There's a person on dot 5. I'm waiting here until you press resume.")
 
+    def test_the_followers_own_look_is_tagged_so_no_reader_takes_it_for_a_stop(self):
+        """Preflight: _look_at's dog.look row carries by "follow", so evals.unsafe, grade_decide and record.build never
+        read the classify look as a stop (a stop's look, the listener's through dog_say, carries no by). The real facing,
+        look and sentence run here: the body's commands and the vision model are faked."""
+        from wtdd.tools import dog_say
+        del self.s._look_at
+        self.s.body.cmd, self.s.body.frame, self.s.body.raw = mock.AsyncMock(), mock.AsyncMock(), lambda: {}
+        with mock.patch.object(dog_say, "see", return_value={"text": "a black office chair in the way", "person": False}):
+            sight = self.s.run(self.s._look_at(ROUTE[4]))
+        self.assertIn("office chair", sight["text"])
+        self.assertEqual([r["args"] for r in rows_since(self.n0, "dog.look")], [{"kind": "level", "by": "follow"}])
+
     def test_a_failed_look_is_a_failed_row_and_the_follow_moves_on(self):
         self.s._look_at = mock.AsyncMock(side_effect=RuntimeError("no camera frame in 5 s"))
         fs, _ = self.follow_blob()

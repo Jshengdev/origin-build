@@ -136,6 +136,13 @@ class Unsigned(Guard):
         self.assertEqual(self.rec["acked_ms"], [14000, 556000])
         self.assertEqual(self.rec["acked_median_ms"], 285000)
 
+    def test_a_flag_is_resolved_by_the_housemates_name_when_the_listener_wrote_one(self):
+        """Preflight: with HOUSEMATES filled the listener writes the answerer's first name to intruder.verdict args.by;
+        the record's resolved.by is that name, and the raw handle (args.from) only when no name was written."""
+        rows = [{**r, "args": {**r["args"], "by": "Teri"}} if r["tool"] == "intruder.verdict" else r for r in ledger.rows()]
+        self.assertEqual(record.build(A, rows=rows, site=EMPTY_SITE)["flags"][0]["resolved"]["by"], "Teri")
+        self.assertEqual(self.rec["flags"][0]["resolved"]["by"], "+15550002222")
+
     def test_refusals_and_failures_are_listed_not_hidden(self):
         ref, bad = self.rec["refusals"], self.rec["failures"]
         self.assertEqual([x["tool"] for x in ref], ["chat.claim"])
@@ -184,6 +191,26 @@ class Unsigned(Guard):
         self.assertEqual(first[0]["posted"]["rowid"], 70003)
         self.assertEqual((first[1]["kind"], first[1]["posted"]["rowid"]), ("sit", 70005))
         self.assertIn("no dog.look row", record.html(record.build(A, rows=_unreached(ledger.rows(), 22))))   # the page shows it FAILED
+
+    def test_the_followers_own_look_is_not_a_stop(self):
+        """Preflight: session._classify at a dot on blue between stops 10 and 22 (its level look tagged by "follow",
+        see()'s vision call and vision.check, route.decided classified) adds no stop and never lands its model or
+        sentence on stop 10. In memory; the ledger is untouched."""
+        m, rows = make_ledger_shift, ledger.rows()
+        i = [j for j, r in enumerate(rows) if r["tool"] == "dog.look"][1]
+        look = {**m.look("2026-09-25T22:01:00", "follow-dog", "level", 9002), "args": {"kind": "level", "by": "follow"}}
+        seen = m.row("2026-09-25T22:01:05", "follow-dog", "watch", "llm.generate", "openrouter", {"model": "a-follow-model"},
+                     {"model": "a-follow-model", "usage": {"total_tokens": 5}}, ms=5)
+        check = m.row("2026-09-25T22:01:05", "follow-dog", "watch", "vision.check", "openrouter", {"detector": None, "file": "look-level.jpg"},
+                      {"out_of_place": [], "person": True, "detector_check": None, "agree": None})
+        check["response_or_error"] = "a black office chair in the way"
+        decided = m.row("2026-09-25T22:01:06", "follow-dog", "dog", "route.decided", "map",
+                        {"at": 4, "action": "classified", "passed": [4], "label": "chair", "p": 0.84, "scene": "a black office chair in the way"},
+                        {"label": "chair", "p": 0.84, "passed": [4]})
+        stops = record.build(A, rows=rows[:i] + [look, seen, check, decided] + rows[i:], site=EMPTY_SITE)["stops"]
+        base = record.build(A, site=EMPTY_SITE)["stops"]
+        self.assertEqual([s["index"] for s in stops], [10, 22, 23])
+        self.assertEqual(stops, base)
 
     def test_page_renders_with_an_empty_map(self):
         h = record.html(record.build(A, site=EMPTY_SITE))
@@ -271,6 +298,65 @@ class Signed(Guard):
         h = record.html(rec)
         self.assertIn("Flags (1)", h)
         self.assertIn("1 post stamped after the signature, not on the record", h)
+
+
+class Asked(Guard):
+    """Preflight: a stop's "not sure: ..." question (decide.ask_line) is that stop's ping and a flag, answered or not,
+    like "who dis?!". The listener posts it as kind listen under decide:<wake>:<n>; dog_say pressed by hand posts it
+    under say-<epoch>:decide, which is its look's question, never a second say. Shift A's stop 10 asks and a housemate
+    answers, in memory; the ledger is untouched."""
+    ASK = "not sure: out of place at 55 percent. what is it?"
+
+    def asked(self, trigger: str, say: str | None = None) -> dict:
+        m, rows = make_ledger_shift, ledger.rows()
+        if say:   # stop 10 looked by hand: dog_say's say-<epoch> post, then its ask
+            rows = [{**r, "args": {**r["args"], "trigger": say}} if r["tool"] in ("chat.claim", "chat.post")
+                    and r["args"].get("trigger") == "say:WAKE-A:10" else r for r in rows]
+        i = next(i for i, r in enumerate(rows) if r["tool"] == "chat.post" and r["args"]["trigger"] == (say or "say:WAKE-A:10"))
+        ask = [m.claim("2026-09-25T22:00:51", "fixA-chat", trigger),
+               m.post("2026-09-25T22:00:52", "fixA-chat", GROUP, "listen", trigger, self.ASK, "look-down-boxed.jpg", A, 70100, "2026-09-26 05:00:51"),
+               m.row("2026-09-25T22:01:02", "fixA-chat", "central", "intruder.verdict", "imessage",
+                     {"from": m.HOUSEMATE, "text": "its teris cup, leave it", "guid": "REPLY-A9", "asked": trigger, "acked_ms": 10000,
+                      "shift_id": A, "chat": GROUP}, {"verdict": "known"})]
+        return record.build(A, rows=rows[:i + 1] + ask + rows[i + 1:], site=EMPTY_SITE)
+
+    def test_the_listeners_not_sure_question_is_the_stops_ping_and_a_flag(self):
+        rec = self.asked("decide:WAKE-A:10")
+        self.assertEqual([(s["index"], s["pinged"]) for s in rec["stops"]], [(10, True), (22, True), (23, False)])
+        self.assertEqual([(f["stop"], f["text"]) for f in rec["flags"]], [(10, self.ASK), (22, "who dis?!")])
+        r = rec["flags"][0]["resolved"]
+        self.assertEqual((r["text"], r["verdict"], r["acked_ms"]), ("its teris cup, leave it", "known", 10000))
+
+    def test_dog_says_not_sure_by_hand_is_its_looks_question_not_a_second_stop(self):
+        rec = self.asked("say-1790400000:decide", say="say-1790400000")
+        self.assertEqual([(s["kind"], s["pinged"]) for s in rec["stops"]], [("tilt", True), ("sit", True), ("tilt", False)])
+        self.assertFalse([s["error"] for s in rec["stops"] if "no dog.look row" in str(s["error"])])
+        self.assertEqual([f["text"] for f in rec["flags"]], [self.ASK, "who dis?!"])
+
+
+class DetectorFailed(Guard):
+    def test_what_it_saw_is_the_sentence_when_the_detector_failed(self):
+        """Preflight: watch.boxes failed at stop 10 (the YOLO process errored), so see() had no labels. It still writes
+        its vision.check row (detector None, and no check on a detector that never ran), so the stop's "what it saw" is
+        the sentence the group got, never blank. The vision model is faked and the row is caught, not appended."""
+        from PIL import Image
+        from wtdd.tools import dog_say
+        frame = _TMP / "look-tilt.jpg"
+        Image.new("RGB", (64, 48), (40, 40, 40)).save(frame, "JPEG")
+        said = {"say": "a mug on the floor by the couch", "person": False, "out_of_place": ["mug"], "pick": 2, "why": "the mug"}
+        caught: list[dict] = []
+        with mock.patch("wtdd.llm.generate", return_value={"text": json.dumps(said), "model": "a-vision-model"}), \
+                mock.patch.object(ledger, "append", caught.append):
+            dog_say.see(str(frame))
+        self.assertEqual([r["tool"] for r in caught], ["vision.check"])
+        self.assertIsNone(caught[0]["args"]["detector"])
+        self.assertEqual((caught[0]["state_after"]["detector_check"], caught[0]["state_after"]["agree"]), (None, None))
+        rows = ledger.rows()
+        b, c = (next(j for j, r in enumerate(rows) if r["tool"] == t) for t in ("watch.boxes", "vision.check"))   # stop 10's
+        rows[b] = {**rows[b], "ok": False, "state_after": None, "response_or_error": "RuntimeError: detector rc=1: Traceback"}
+        rows[c] = {**rows[c], **caught[0]}
+        s10 = record.build(A, rows=rows, site=EMPTY_SITE)["stops"][0]
+        self.assertEqual((s10["index"], s10["classes"], s10["sentence"], s10["person"]), (10, None, "a mug on the floor by the couch", False))
 
 
 class ByHand(Guard):

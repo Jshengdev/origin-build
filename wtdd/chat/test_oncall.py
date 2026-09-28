@@ -65,6 +65,14 @@ def _fixture_rows() -> list[dict]:
     return [json.loads(l) for l in FIXTURE.read_text().splitlines() if l.strip()]
 
 
+def _not_sure(shift_id: str) -> dict:
+    """A stop's "not sure:" question (decide.ask_line), posted by the listener as kind listen and read back."""
+    return {"step": "chat.post", "agent": "central", "tool": "chat.post", "app": "imessage", "ok": True,
+            "args": {"guid": GROUP, "kind": "listen", "trigger": "decide:w1:1", "text": "not sure: chair at 40 percent. what is it?",
+                     "file": None, "shift_id": shift_id},
+            "state_before": None, "state_after": {"rowid": 9}, "response_or_error": None, "latency_ms": 0}
+
+
 def _members(guid: str) -> list[str]:
     """Stand-in for chat.db's chat_handle_join: the on-call 1:1 exists with exactly the on-call handle; nothing else does."""
     return [HANDLE] if guid == ONCALL else []
@@ -587,6 +595,13 @@ class Sign(unittest.TestCase):
     def test_unsigned_shift_is_none(self):
         self.assertIsNone(_oncall().signed("1999-01-01"))
 
+    def test_a_not_sure_question_is_a_flag_of_the_signed_row(self):
+        # Preflight: the record and grade_escalate count a stop's "not sure:" question as a flag; the signature must too
+        ledger.append(_not_sure("2026-10-02"))
+        out = tools.call("record_sign", by=NAME, shift_id="2026-10-02")
+        self.assertEqual(out["flags"], 1)
+        self.assertEqual(ledger.rows()[-1]["state_before"]["flags"], 1)
+
 
 class Numbers(unittest.TestCase):
     """python -m wtdd.numbers reports, per shift, the acked_ms values and whether the shift is signed, read from rows."""
@@ -601,6 +616,10 @@ class Numbers(unittest.TestCase):
 
     def test_no_rows_is_no_shifts(self):
         self.assertEqual(numbers.shifts([]), [])
+
+    def test_a_not_sure_question_is_a_flag(self):
+        # Preflight: the README and Devpost numbers count flags the way the record does, "not sure:" included
+        self.assertEqual(numbers.shifts([_not_sure("2026-10-02")])[0]["flags"], 1)
 
     def test_block_reports_shifts_from_the_ledger_env(self):
         # The command is `python -m wtdd.numbers` (the goal's `python -m wtdd numbers` is not a tool: KeyError). Its block

@@ -10,7 +10,9 @@ The scratch ledger is set through WTDD_LEDGER before wtdd.ledger is imported; sh
 these checks never read or write <repo>/shift.json. WTDD_SHIFT is set to "", never popped (docs/gotchas/02-2). Run in one
 process with another test module, the ledger is whichever module imported wtdd.ledger first (docs/gotchas/10-2), so FILE
 is taken from ledger.LEDGER, a child is handed that ledger, and each check deletes shift.json and restores WTDD_SHIFT
-after itself: no module after this one finds a run started here."""
+after itself: no module after this one finds a run started here. Each check also appends to a fresh ledger of its own
+beside shift.json (ledger.LEDGER patched, nothing deleted), so its first start is the day's first press: a second press
+of the same run gets its own id (<date>-<name>-2), which the pins below would otherwise see from an earlier check."""
 from __future__ import annotations
 import json
 import os
@@ -53,6 +55,9 @@ class Clean(unittest.TestCase):
     def setUp(self):
         FILE.unlink(missing_ok=True)
         self.addCleanup(FILE.unlink, missing_ok=True)
+        led = mock.patch.object(ledger, "LEDGER", FILE.with_name(f"ledger-{time.time_ns()}.jsonl"))   # no run started yet today
+        led.start()
+        self.addCleanup(led.stop)
         env = mock.patch.dict(os.environ, {"WTDD_SHIFT": ""})
         env.start()
         self.addCleanup(env.stop)
@@ -112,6 +117,14 @@ class Start(Clean):
         second = _shift().start("night")
         row = _started()[-1]
         self.assertEqual((row["state_before"]["shift_id"], row["state_after"]["shift_id"]), (first["shift_id"], second["shift_id"]))
+
+    def test_a_second_start_of_the_same_run_the_same_day_gets_its_own_id(self):
+        """Preflight: a retake (Start night run pressed again that day) is its own run, so its record never lists the
+        first take's stops and flags, and a signed rehearsal never closes it."""
+        ids = (_shift().start("night")["shift_id"], _shift().start("night")["shift_id"])
+        self.assertEqual(ids, (f"{_today()}-night", f"{_today()}-night-2"))
+        self.assertEqual(_started()[-1]["args"]["shift_id"], ids[1])
+        self.assertEqual(_shift().current(), ids[1])
 
     def test_a_bad_name_is_a_failed_row_and_no_file_change(self):
         _shift().start("morning")
