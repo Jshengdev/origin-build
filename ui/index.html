@@ -221,7 +221,7 @@ function App() {
   const readShift = () => fetch(`${API}/shift`).then(r => r.json()).then(setShiftNow).catch(e => setShiftNow({ error: `GET /shift failed: ${e}` }));
   useEffect(() => { readShift(); }, []);
   const startRun = name => post("/shift", { name }).then(r => r.json()).then(o => { setShiftOut(o); readShift(); }).catch(e => setShiftOut({ ok: false, error: `POST /shift failed: ${e}` }));
-  const lookShot = async kind => { markIf(kind, true); const out = await run("dog_look", { look: kind }); if (out.ok) setPhoto({ url: `${API}/pictures/look-${kind}.jpg?t=${out.result.pitch_deg}-${Math.floor(performance.now())}`, down: out.result.file_down ? `${API}/pictures/look-down.jpg?t=${Math.floor(performance.now())}` : null, file: out.result.file, pitch: out.result.pitch_deg, pitchDown: out.result.pitch_down_deg, kind }); };
+  const lookShot = async kind => { markIf(kind, true); const out = await run("dog_look", { look: kind }); if (out.ok) setPhoto({ url: `${API}/pictures/${out.result.file.split("/").pop()}?t=${out.result.pitch_deg}-${Math.floor(performance.now())}`, down: out.result.file_down ? `${API}/pictures/${out.result.file_down.split("/").pop()}?t=${Math.floor(performance.now())}` : null, file: out.result.file, pitch: out.result.pitch_deg, pitchDown: out.result.pitch_down_deg, kind }); };
   const key = (k, label) => html`<button class="small" onPointerDown=${() => press(k)} onPointerUp=${() => release(k)} onPointerLeave=${() => release(k)}>${label}</button>`;
 
   // ---------- the run: the API walks the entity (wtdd/field.py) and drives the real lights; this page only draws GET /field
@@ -410,8 +410,8 @@ function App() {
                 : html`<div class="mono" style=${{ margin: "0 0 var(--gap-group)" }}>detector off · python -m wtdd.watch</div>`}
               ${seen ? html`<div class="row" style=${{ alignItems: "flex-start" }}>
                 <div style=${{ display: "flex", gap: 6 }}>
-                  ${look?.state_after?.file_down && html`<div><img src=${`/pictures/look-down.jpg?t=${seen.ts}`} style=${{ width: 120, borderRadius: 8, outline: said?.pick === 1 ? "3px solid var(--live, #0b0dc4)" : "none" }}/><div class="mono">1 floor${said?.pick === 1 ? " · sent" : ""}</div></div>`}
-                  <div><img src=${`/pictures/look-tilt.jpg?t=${seen.ts}`} style=${{ width: 120, borderRadius: 8, outline: said?.pick !== 1 ? "3px solid var(--live, #0b0dc4)" : "none" }}/><div class="mono">2 room${said?.pick !== 1 ? " · sent" : ""}</div></div>
+                  ${look?.state_after?.file_down && html`<div><img src=${`/pictures/${look.state_after.file_down.split("/").pop()}?t=${seen.ts}`} style=${{ width: 120, borderRadius: 8, outline: said?.pick === 1 ? "3px solid var(--live, #0b0dc4)" : "none" }}/><div class="mono">1 floor${said?.pick === 1 ? " · sent" : ""}</div></div>`}
+                  ${look?.state_after?.file && html`<div><img src=${`/pictures/${look.state_after.file.split("/").pop()}?t=${seen.ts}`} style=${{ width: 120, borderRadius: 8, outline: said?.pick !== 1 ? "3px solid var(--live, #0b0dc4)" : "none" }}/><div class="mono">2 room${said?.pick !== 1 ? " · sent" : ""}</div></div>`}
                 </div>
                 <div style=${{ flex: 1, minWidth: 180 }}>
                   <div>${said ? said.say : seen.response_or_error}</div>
