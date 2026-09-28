@@ -1,4 +1,4 @@
-import { LayoutGrid, Inbox, Route, FileSignature, ListChecks, Settings, Radio, Gamepad2, Users, type LucideIcon } from "lucide-react";
+import { LayoutGrid, Inbox, Route, FileSignature, ListChecks, Settings, Radio, Gamepad2, Users, Image as ImageIcon, type LucideIcon } from "lucide-react";
 
 export interface NavEntry { href: string; label: string; icon: LucideIcon; key: string; faded?: boolean }
 
@@ -11,6 +11,7 @@ export const NAV: NavEntry[] = [
   { href: "/", label: "Overview", icon: LayoutGrid, key: "O" },
   { href: "/paths", label: "Paths", icon: Route, key: "T" },
   { href: "/routines", label: "Routines", icon: ListChecks, key: "U" },
+  { href: "/images", label: "Images", icon: ImageIcon, key: "I" },   // live on GET /images (Johnny: "that should be wired")
   { href: "/waiting", label: "Waiting", icon: Inbox, key: "W" },
   { href: "/record", label: "Record", icon: FileSignature, key: "R" },
   { href: "/people", label: "People", icon: Users, key: "P" },   // live on GET /people (Johnny: "let's keep people")
@@ -24,7 +25,7 @@ export const NAV: NavEntry[] = [
  */
 export const SAMPLES: NavEntry[] = [
   // Johnny: "driving can be faded and live can be faded": their live parts are on Overview (the camera, the drive switch).
-  // Monitoring is live inside Settings, Sessions inside Record, and the photos inside Routines and Waiting.
+  // Monitoring is live inside Settings, Sessions inside Record; Images is its own tab again.
   { href: "/live", label: "Live", icon: Radio, key: "L", faded: true },
   { href: "/driving", label: "Driving", icon: Gamepad2, key: "D", faded: true },
 ];

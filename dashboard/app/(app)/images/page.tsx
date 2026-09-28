@@ -1,6 +1,12 @@
-import { redirect } from "next/navigation";
+import { PageHeader } from "@/components/shell/page-header";
+import { ImagesLive } from "@/components/images/images-live";
 
-/** The photos live where they were taken now: a run's looks on Routines, an ask's photo on Waiting (GET /images, #73). */
-export default function Page() {
-  redirect("/routines");
+/** Images reads GET /sessions and GET /images (components/images/images-live.tsx): a run's photos, by stop. */
+export default function ImagesPage() {
+  return (
+    <>
+      <PageHeader crumbs={[{ label: "Images" }]} />
+      <ImagesLive />
+    </>
+  );
 }
