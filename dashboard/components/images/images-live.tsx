@@ -46,7 +46,7 @@ export function ImagesLive() {
     <div className="flex flex-col gap-4">
       <PageActions>
         <Select value={shift ?? ""} onValueChange={setPicked} disabled={!sessions.data?.length}>
-          <SelectTrigger aria-label="Run" className="h-9 w-[220px] border-input bg-card text-[13px] shadow-none"><SelectValue placeholder={sessions.error ? "runs · FAILED" : "No runs yet"} /></SelectTrigger>
+          <SelectTrigger aria-label="Run" className="h-9 w-[220px] border-input bg-card text-[13px] shadow-none"><SelectValue placeholder={sessions.error ? "runs · FAILED" : sessions.data ? "No runs yet" : "reading runs"} /></SelectTrigger>
           <SelectMenu>
             {(sessions.data ?? []).map((s) => <SelectItem key={s.shift_id} value={s.shift_id} className="text-[13px]">{s.shift_id}{s.in_force ? " · in force" : ""}</SelectItem>)}
           </SelectMenu>
@@ -54,8 +54,9 @@ export function ImagesLive() {
         {sessions.error && <SignalChip tone="alert">Runs · FAILED {redact(sessions.error)}</SignalChip>}
       </PageActions>
       <Module title={shift ? `Photos · ${shift}` : "Photos"} meta={imgs.data ? `${imgs.data.n} ${imgs.data.n === 1 ? "photo" : "photos"}` : undefined} size="auto"
-        loading={!!shift && !imgs.data && !imgs.error} error={imgs.error ? `FAILED GET /images · ${redact(imgs.error)}` : undefined}>
-        {!shift ? <p className="text-[13px] text-muted-foreground">{sessions.data ? "No run has a stamped row yet." : ""}</p>
+        loading={(!shift && !sessions.data && !sessions.error) || (!!shift && !imgs.data && !imgs.error)}
+        error={imgs.error ? `FAILED GET /images · ${redact(imgs.error)}` : !shift && sessions.error ? `FAILED GET /sessions · ${redact(sessions.error)}` : undefined}>
+        {!shift ? <p className="text-[13px] text-muted-foreground">No run has a stamped row yet.</p>
           : imgs.data && (list.length === 0 ? <p className="text-[13px] text-muted-foreground">{redact(imgs.data.why ?? "No photo in this run.")}</p> : (
           <div className="flex flex-col gap-6">
             {imgs.data.why && <span className="font-mono text-[12px] text-muted-foreground">{redact(imgs.data.why)}</span>}
