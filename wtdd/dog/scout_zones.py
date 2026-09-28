@@ -5,6 +5,13 @@ a named person's tap dismisses it. The walk and the follower read only the map (
 merges: on 07's base nothing calls refuse(), so an auto zone is written and drawn but refuses no walk or follow until
 then. The open-proposal path (confirm, a proposal's dismiss, state()'s proposals) is kept, but the feed opens none now.
 
+Off. WTDD_SCOUT_ZONES=0 (config.scout_zones(); unset or 1 = on, as above; anything else raises) turns the scout's zones
+off in one place, the top of the feed: 07's objects still come in and keep their pins and names, but no model is asked,
+no photo copied, no zone written and no zone.* row appended. One stderr line OFF when the store starts (or first reads
+the key) with it off, never per feed; GET /dog/scout serves auto_zones "off (WTDD_SCOUT_ZONES=0)" and why OFF, so an
+empty list never reads as nothing found. Its own key: WTDD_DECIDE_THRESHOLD is shared with the chat round's decide.
+A person's dismiss of an auto zone already on the map still works.
+
 Run. The API's dog session (wtdd/dog/session.py) owns one Proposals store; its 'objects' thread feeds it 07's objects
 after every detector window (session.scout_feed), GET /dog/scout reads it, POST /dog/scout {id, action: confirm |
 dismiss, by, _version} is the person's tap. Offline:
@@ -97,6 +104,7 @@ NUMBERS = ("zero one two three four five six seven eight nine ten eleven twelve 
 TABLE_KINDS, SHARP_KINDS = {"dining table", "bench", "chair"}, {"knife", "scissors"}
 PHOTOS = Path.home() / "Pictures" / "wtdd"
 CELL_RGB = (220, 38, 38)   # the replay PNG's zone cells
+OFF = "scout zones off (WTDD_SCOUT_ZONES=0): objects kept, no auto zone"   # the one stderr line and state()'s why
 PROPOSAL_KEYS = ("id", "object_id", "kind", "label", "p", "app", "cells", "cells_px", "poly", "thumb", "photo", "dist_m",
                  "area_m2", "ts")
 
@@ -274,6 +282,18 @@ class Proposals:
         self.error: str | None = None        # the last feed's raise, on the GET until a feed gets past the map read
         self._taking: dict | None = None     # the object this feed took last; a raise before its row lands names it in failed
         self._lock = threading.Lock()        # this store's own state; never held during the model call
+        self._off_said = False               # the OFF line is logged once per store, never per feed
+        with contextlib.suppress(ValueError):   # a bad value is raised by every feed and GET, not here: the session still starts
+            self.zones_off()
+
+    def zones_off(self) -> str | None:
+        """OFF when WTDD_SCOUT_ZONES=0 (config.scout_zones(), read at each use), else None; logs OFF once per store."""
+        if config.scout_zones():
+            return None
+        if not self._off_said:
+            self._off_said = True
+            log("scout", OFF)
+        return OFF
 
     def _map(self) -> Path:
         return self.map_path or field.MAP
@@ -311,6 +331,8 @@ class Proposals:
             self._taking = o
 
     def _feed(self, objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock) -> dict[str, int]:
+        if self.zones_off():   # THE gate: no model call, no photo, no zone, no zone.* row; 07's objects are not the scout's
+            return dict.fromkeys(("handled", "decided", "added", "failed", "deduped"), 0)
         t_all = time.perf_counter()
         with self._lock:   # a stale thing is not taken: 07 no longer sees it, so it never waits forever
             cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and not o.get("stale")
@@ -561,9 +583,11 @@ class Proposals:
         return self._tap("zone.dismissed", zid, by, time.perf_counter(), drop)
 
     def state(self) -> dict[str, Any]:
-        """The GET /dog/scout body (without `source`): {n, proposals, zones, _version, failed, why, error?}; zones are the
-        auto zones on the map and _version the map's (a dismiss sends it back); why names the reason whenever n is 0;
-        error is the last feed's raise until a feed gets past the threshold and the map (the page draws it red)."""
+        """The GET /dog/scout body (without `source`): {n, proposals, zones, auto_zones, _version, failed, why, error?};
+        zones are the auto zones on the map and _version the map's (a dismiss sends it back); auto_zones is "on" or
+        "off (WTDD_SCOUT_ZONES=0)"; why names the reason whenever n is 0 (OFF when off); error is the last feed's raise
+        until a feed gets past the threshold and the map (the page draws it red)."""
+        off = self.zones_off()
         mp = self._map()
         v = int(mp.stat().st_mtime)
         zones = [z for z in json.loads(mp.read_text()).get("zones", []) if z.get("source") == "scout" and z.get("by") == "auto"]
@@ -582,7 +606,9 @@ class Proposals:
                 parts += [f"{len(failed)} failed (listed)"] if failed else []
                 parts += [warned] if warned else []
                 why = "no open proposal: " + ", ".join(parts)
-        return {"n": len(props), "proposals": props, "zones": zones, "_version": v, "failed": failed, "why": why,
+            why = OFF if off else why
+        return {"n": len(props), "proposals": props, "zones": zones, "auto_zones": "off (WTDD_SCOUT_ZONES=0)" if off else "on",
+                "_version": v, "failed": failed, "why": why,
                 **({"error": error} if error else {})}
 
 

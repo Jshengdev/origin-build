@@ -40,3 +40,14 @@ def get(key: str, default: str | None = None) -> str:
 def maybe(key: str) -> str | None:
     _load()
     return os.environ.get(key) or None
+
+
+def scout_zones() -> bool:
+    """WTDD_SCOUT_ZONES, the scout's own switch (wtdd/dog/scout_zones.py): unset, empty or 1 = on, the scout as it was
+    before the knob; 0 = off: it still receives 07's objects (their pins and names stay) but asks no model, writes no auto
+    zone and no zone.* row. Its own key so that turning zones off never moves WTDD_DECIDE_THRESHOLD, which the chat
+    round's decide shares. Read at each use; any other value is a ValueError (fail loud, never a guess)."""
+    v = (maybe("WTDD_SCOUT_ZONES") or "1").strip()
+    if v not in ("0", "1"):
+        raise ValueError(f"WTDD_SCOUT_ZONES={v!r} is not 0 (off) or 1 (on)")
+    return v == "1"
