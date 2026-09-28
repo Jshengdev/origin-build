@@ -2,7 +2,9 @@
 command list and run; "stop" disarms. Every wake, command, and ask is a ledger row (chat.wake / chat.command /
 chat.ask); every post goes through __main__.post keyed on the guid of the message that caused it
 (wake:/fire:/doin:/say:/alarm:/done:/ack:/res:/stop:/ai:<guid>, decide:<guid>:<stop> for a stop's question, and
-ok:/reask:/unread:/danger:<reply guid> for what a reply was read as), so a re-read message can never post twice.
+ok:/reask:/unread:/danger:<reply guid> for what a reply was read as), so a re-read message can never post twice. post()
+claims a key before it sends, so a send that fails has consumed its key: its error is posted under its own
+(say-fail:/fire-fail:/ai-fail:/escalate-fail:), never re-posted under the claimed one.
 
 Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once]
      python -m wtdd.chat simulate "what the dog doin" "lights off" "stop"   (dry-run posts, REAL commands)
@@ -205,7 +207,7 @@ class Listener:
             seen = look_and_see(look, stop=at)
             self.say(f"say:{k}", seen["text"], seen["file"])
         except Exception as e:  # noqa: BLE001
-            self.say(f"say:{k}", f"couldn't look: {type(e).__name__}: {str(e)[:100]}")
+            self.say(f"say-fail:{k}", f"couldn't look: {type(e).__name__}: {str(e)[:100]}")
             return
         if seen.get("person") and ask:   # the intruder check: someone in frame, flag the on-call person, hold here for their verdict
             try:
@@ -332,7 +334,7 @@ class Listener:
             pic = tools.call("dog_on_fire")
             self.say(f"fire:{m['guid']}", None, pic["file"])
         except Exception as e:  # noqa: BLE001
-            self.say(f"fire:{m['guid']}", f"couldn't make the picture: {type(e).__name__}: {str(e)[:100]}")
+            self.say(f"fire-fail:{m['guid']}", f"couldn't make the picture: {type(e).__name__}: {str(e)[:100]}")
         self.say(f"doin:{m['guid']}", "dog doin")
         walked: str | None = None
         stops: list[int] = []
@@ -507,7 +509,7 @@ class Listener:
             out = ask(text, context=memory.context(self.guid))
             self.say(f"ai:{m['guid']}", out["text"][:300] or f"did: {', '.join(c['tool'] for c in out['calls']) or 'nothing'}")
         except Exception as e:  # noqa: BLE001
-            self.say(f"ai:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
+            self.say(f"ai-fail:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
 
     def handle(self, m: dict[str, Any]) -> None:
         text = m["text"]
@@ -557,7 +559,7 @@ class Listener:
                 out = ask(text, context=memory.context(self.guid))
                 self.say(f"ai:{m['guid']}", out["text"][:300] or f"did: {', '.join(c['tool'] for c in out['calls']) or 'nothing'}")
             except Exception as e:  # noqa: BLE001
-                self.say(f"ai:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
+                self.say(f"ai-fail:{m['guid']}", f"couldn't: {type(e).__name__}: {str(e)[:120]}")
             return
         cmd, score = hit
         log("chat", "COMMAND", by=hname(m["sender"]), command=cmd, score=score)
