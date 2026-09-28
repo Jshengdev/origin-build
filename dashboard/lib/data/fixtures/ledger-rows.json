@@ -1,0 +1,307 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "ts": "2026-09-26T23:00:06Z",
+   "tool": "chat.wake",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1322,
+   "args": {
+    "text": "what the dog doin"
+   }
+  },
+  {
+   "ts": "2026-09-26T23:00:23Z",
+   "tool": "chat.post",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 694,
+   "args": {
+    "text": "dog doin"
+   }
+  },
+  {
+   "ts": "2026-09-26T23:00:35Z",
+   "tool": "lights.set",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1124,
+   "args": {
+    "id": "hue-3",
+    "bri": 180
+   }
+  },
+  {
+   "ts": "2026-09-26T23:00:41Z",
+   "tool": "dog.follow",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 344,
+   "args": {
+    "route": "taught"
+   },
+   "state_after": {
+    "wp": 6,
+    "of": 16
+   }
+  },
+  {
+   "ts": "2026-09-26T23:00:56Z",
+   "tool": "dog.look",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 461,
+   "stop": "s1",
+   "args": {
+    "kind": "level"
+   }
+  },
+  {
+   "ts": "2026-09-26T23:01:00Z",
+   "tool": "watch.boxes",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 298,
+   "stop": "s1",
+   "state_after": {
+    "boxes": [
+     [
+      "person",
+      0.87
+     ]
+    ]
+   }
+  },
+  {
+   "ts": "2026-09-26T23:01:05Z",
+   "tool": "vision.check",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 460,
+   "stop": "s1",
+   "state_after": {
+    "sentence": "Someone is standing just inside the front door.",
+    "person": true
+   }
+  },
+  {
+   "ts": "2026-09-26T23:01:19Z",
+   "tool": "decide",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 435,
+   "stop": "s1",
+   "state_after": {
+    "label": "person",
+    "p": 0.68,
+    "needs_person": true
+   },
+   "item": "02"
+  },
+  {
+   "ts": "2026-09-26T23:01:24Z",
+   "tool": "ask.send",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 988,
+   "stop": "s1",
+   "args": {
+    "to": "oncall",
+    "text": "Person at the front door. Who is it?",
+    "photo": "look_s1.svg"
+   },
+   "item": "03"
+  },
+  {
+   "ts": "2026-09-26T23:01:36Z",
+   "tool": "ask.ack",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1048,
+   "stop": "s1",
+   "state_after": {
+    "reply": "that's my roommate",
+    "acked_ms": 12000,
+    "read_as": {
+     "label": "known_person",
+     "p": 0.9
+    }
+   },
+   "item": "03/17"
+  },
+  {
+   "ts": "2026-09-26T23:01:43Z",
+   "tool": "dog.follow",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1307,
+   "state_after": {
+    "wp": 9,
+    "of": 16
+   }
+  },
+  {
+   "ts": "2026-09-26T23:01:57Z",
+   "tool": "dog.look",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 405,
+   "stop": "s2",
+   "args": {
+    "kind": "nod"
+   }
+  },
+  {
+   "ts": "2026-09-26T23:02:13Z",
+   "tool": "watch.boxes",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 431,
+   "stop": "s2",
+   "state_after": {
+    "boxes": [
+     [
+      "bird",
+      0.4
+     ]
+    ]
+   }
+  },
+  {
+   "ts": "2026-09-26T23:02:28Z",
+   "tool": "vision.check",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 244,
+   "stop": "s2",
+   "state_after": {
+    "sentence": "A pair of socks on the living room floor. The detector's 'bird' looks wrong.",
+    "out_of_place": [
+     "socks"
+    ]
+   }
+  },
+  {
+   "ts": "2026-09-26T23:02:42Z",
+   "tool": "decide",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1047,
+   "stop": "s2",
+   "state_after": {
+    "label": "out_of_place",
+    "p": 0.93,
+    "needs_person": false
+   },
+   "item": "02"
+  },
+  {
+   "ts": "2026-09-26T23:02:55Z",
+   "tool": "chat.post",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 567,
+   "stop": "s2",
+   "args": {
+    "text": "socks on the living room floor",
+    "photo": "look_s2.svg"
+   }
+  },
+  {
+   "ts": "2026-09-26T23:03:01Z",
+   "tool": "dog.look",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1442,
+   "stop": "s3",
+   "args": {
+    "kind": "nod"
+   }
+  },
+  {
+   "ts": "2026-09-26T23:03:19Z",
+   "tool": "vision.check",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1455,
+   "stop": "s3",
+   "state_after": {
+    "sentence": "Counter is clear.",
+    "out_of_place": []
+   }
+  },
+  {
+   "ts": "2026-09-26T23:03:22Z",
+   "tool": "decide",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 841,
+   "stop": "s3",
+   "state_after": {
+    "label": "clear",
+    "p": 0.96,
+    "needs_person": false
+   },
+   "item": "02"
+  },
+  {
+   "ts": "2026-09-26T23:03:40Z",
+   "tool": "dog.look",
+   "ok": false,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1500,
+   "stop": "s4",
+   "args": {
+    "kind": "nod"
+   },
+   "error": "follower timeout at waypoint 13 (30 s)"
+  },
+  {
+   "ts": "2026-09-26T23:03:55Z",
+   "tool": "chat.post",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 781,
+   "args": {
+    "text": "dog done. missed the hallway stop: timed out at waypoint 13."
+   }
+  },
+  {
+   "ts": "2026-09-26T23:13:55Z",
+   "tool": "chat.correction",
+   "ok": true,
+   "cached": true,
+   "source": "stub",
+   "latency_ms": 1116,
+   "args": {
+    "text": "that's socks, not a bird"
+   },
+   "state_after": {
+    "reply": "noted"
+   }
+  }
+ ]
+}
