@@ -7,6 +7,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ActionButton } from "@/components/wtdd";
 import { cn } from "@/lib/utils";
 import type { Device, FloorPlan, Grid, Look, Route, Stop, Zone } from "@/lib/data";
+import { Photo } from "@/components/live/photo";
+import type { RunImage } from "@/lib/data/api";
 import { HEAT_BINS, HEAT_FLOOR_TOKEN, LIDAR_TOKENS, MAP_ALERT, MAP_INK, MAP_INK_MUTED, heatToken, heightSpan, rampCss, rampT } from "./heat";
 import { DeviceTip, MAP_TIP, MapPin } from "./map-pin";
 
@@ -68,6 +70,9 @@ export interface LiveLayers {
   /** The map's own key lines beside its legend (the route's key while walking). Each layer's served status and FAILED are
    *  the page's to show, outside the map (useLiveMap's `notes`). */
   status?: React.ReactNode;
+  /** Each no-go zone's words and, for an auto zone, the scout's photo of it (by zone id): shown only in the hover card,
+   *  never on the map (Johnny: "when you hover over it it shows an image of what it sees ... it doesn't show on the map"). */
+  zoneInfo?: Record<string, { what: string; photo?: RunImage }>;
   /** Calibrate's "scale by a wall" (Johnny: "to scale it, i can grab the wall and align it to a drawn line"): press on the
    *  scan, drag to where it belongs on the plan, let go. Called once with the ratio of the two distances from the
    *  calibration tie (else the dog), which the page posts as the new scale. */
@@ -126,7 +131,8 @@ export function TwinMap({
   const [view, setView] = useState<View | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const [houseFailed, setHouseFailed] = useState(false);   // house.svg did not load: say so, never draw the broken image
-  const [houseLoaded, setHouseLoaded] = useState(false);   // fades in once its bytes are here, not as an empty frame
+  const [houseLoaded, setHouseLoaded] = useState(false);
+  const [hoverZone, setHoverZone] = useState<{ id: string; x: number; y: number } | null>(null);   // the no-go zone under the pointer   // fades in once its bytes are here, not as an empty frame
   // toggle B: the last scans, oldest first (a fading sweep); each keeps the scale it was projected at, so a frame from
   // before a scale change is not drawn after it
   const trail = useRef<Frame[]>([]);
@@ -383,7 +389,10 @@ export function TwinMap({
           })}
 
           {layers.zones && zones.map((z) => z.kind === "nogo" ? (
-            <polygon key={z.id} points={pts(z.polygon)} fill={`url(#${hatchId})`} fillOpacity={0.55} stroke={MAP_ALERT} strokeWidth={1.5} />
+            <polygon key={z.id} points={pts(z.polygon)} fill={`url(#${hatchId})`} fillOpacity={0.55} stroke={MAP_ALERT} strokeWidth={1.5}
+              style={{ pointerEvents: "visiblePainted", cursor: "help" }}
+              onMouseMove={(e) => { const r = wrapRef.current?.getBoundingClientRect(); if (r) setHoverZone({ id: z.id, x: e.clientX - r.left, y: e.clientY - r.top }); }}
+              onMouseLeave={() => setHoverZone(null)} />
           ) : (
             <polygon key={z.id} points={pts(z.polygon)} fill="var(--highlight)" fillOpacity={0.12} stroke="var(--highlight)" strokeWidth={1.5} strokeDasharray="5 4" />
           ))}
@@ -559,8 +568,8 @@ export function TwinMap({
             </div>
           ))}
 
-          {/* Zone names last, over the pins and the dog, so a zone's name and confidence are never covered (they take no taps). */}
-          {layers.zones && !compact && zones.map((z) => {
+          {/* A proposal's "Awaiting a tap" stays on the map (a person must act); a no-go zone's words are in its hover card only. */}
+          {layers.zones && !compact && zones.filter((z) => z.kind !== "nogo").map((z) => {
             const q = z.polygon.map(P), x = Math.min(...q.map((p) => p[0])), y = Math.min(...q.map((p) => p[1]));
             return (
               <span
@@ -575,6 +584,18 @@ export function TwinMap({
               </span>
             );
           })}
+
+          {hoverZone && layers.zones && (() => {
+            const z = zones.find((q) => q.id === hoverZone.id), info = live?.zoneInfo?.[hoverZone.id];
+            if (!z) return null;
+            return (
+              <div data-map-ui className="pointer-events-none absolute z-10 flex w-64 flex-col gap-2 rounded-md border border-border bg-card p-2.5 text-foreground shadow-[0_8px_24px_rgb(0_0_0/0.4)]"
+                style={{ left: Math.min(hoverZone.x + 14, size.w - 270), top: Math.min(hoverZone.y + 14, size.h - 250) }}>
+                <span className="text-[13px] font-medium">{info?.what ?? z.name}</span>
+                {info?.photo ? <Photo img={info.photo} /> : z.drawnBy === "dog" && <span className="font-mono text-[12px] text-muted-foreground">no photo served for this zone</span>}
+              </div>
+            );
+          })()}
 
           {focusPos && (() => {
             const [x, y] = P(focusPos.xy);

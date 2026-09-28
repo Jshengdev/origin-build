@@ -77,7 +77,7 @@ export interface MapJson {
   rooms?: Array<{ name: string; poly: XY[] }>;
   lights?: Array<{ id: string; kind: "dot" | "line"; pts: XY[]; label?: string; name?: string }>;
   /** 04's drawn zones; 19's scout zones add source "scout", `by` ("auto" or a person's name), and for an auto zone its label and p. */
-  zones?: Array<{ name: string; label?: string; poly: XY[]; nogo?: boolean; source?: string; by?: string; p?: number; app?: string }>;
+  zones?: Array<{ name: string; label?: string; poly: XY[]; nogo?: boolean; source?: string; by?: string; p?: number; app?: string; proposal?: string }>;
 }
 /** GET /dog/scout (19): the scout's auto zones and proposals, the map version they were served from, failed model calls. */
 export interface Scout {
