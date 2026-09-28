@@ -27,9 +27,11 @@ at GET /field and the remote draws the dot from it, whichever process runs the w
 means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved.
 One exception: a dog walk with the follower (the chat's round, the dashboard's dog walk) that finds the dashboard's Lights
 follow (source="dog", follower=False) live touches <repo>/field.yield (never field.stop, which the round reads as Stop
-pressed) and waits up to YIELD_S for its field.json to go: the lights walk ends at its next tick with "yielded to the
-round" and yielded=true in its row, drains its in-flight writes and skips its end dark (the taker's dark start follows at
-once), then the taker runs. Not yielded in YIELD_S (an API process on older code): refused as before. UNVERIFIED on the
+pressed) and waits up to YIELD_S for its field.json to be removed (not merely older than BUSY_S): the lights walk ends at
+its next tick with "yielded to the round" and yielded=true in its row, drains its in-flight writes, removes field.json and
+skips its end dark (the taker's dark start follows at once), then the taker runs. Still live after YIELD_S (an API process
+on older code): refused as before. Still there but stale after YIELD_S (a killed process's leftover, or a light write
+slower than YIELD_S, which can then land after the taker's dark start): a WARN, and the taker runs. UNVERIFIED on the
 real dog and lights: the hand-off with the lights walk in the API process and the round in the listener. Lights pressed
 during a round is still refused. Stops: map.json `stops` is a list
 of path point indices (double-click a path point on the remote); at each one the walk pauses and calls on_stop(index,
@@ -63,7 +65,7 @@ FIELD = ROOT / "field.json"   # the running walk: p, here, levels, s, total, sto
 STOP = ROOT / "field.stop"    # POST /field/stop touches it: the running walk ends at its next tick (lights off, row written)
 BUSY_S = 2.0                  # a field.json younger than this means a walk is live somewhere (the remote or the chat): refuse a second
 YIELD = ROOT / "field.yield"  # a round's walk touches it: a running lights-only walk (follower=False) ends at its next tick, lit
-YIELD_S = 5.0                 # how long that round waits for the lights walk's field.json to go before it is refused as busy
+YIELD_S = 5.0                 # how long that round waits for the lights walk's field.json to be removed; still live after it: refused as busy
 
 
 def inside(p, poly) -> bool:
@@ -212,10 +214,14 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     if live and live.get("follower") is False and source == "dog" and follower and not dry:   # Lights on, a round's walk: it takes over
         YIELD.write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")   # never STOP: the chat's round reads a STOP since its wake as Stop pressed
         t_y = time.monotonic()
-        while (live := _live()) and time.monotonic() - t_y < YIELD_S:
-            time.sleep(0.05)
-        YIELD.unlink(missing_ok=True)
-        log("field", "WARN the lights walk did not yield" if live else "the lights walk yielded", waited_s=round(time.monotonic() - t_y, 2))
+        try:
+            while FIELD.exists() and time.monotonic() - t_y < YIELD_S:   # gone, not merely stale: its last writes are drained
+                time.sleep(0.05)
+        finally:
+            YIELD.unlink(missing_ok=True)
+        gone, live = not FIELD.exists(), _live()   # still there but stale after YIELD_S: a killed process's leftover, or a write slower than YIELD_S
+        log("field", "the lights walk yielded" if gone else "WARN the lights walk did not yield" if live else
+            "WARN the lights walk's field.json outlived YIELD_S, going ahead", waited_s=round(time.monotonic() - t_y, 2))
     if live:   # another process's walk is live: refuse, never interleave
         raise RuntimeError(f"a walk is already running ({FIELD.name} written {round(live['age'], 1)} s ago)")
     STOP.unlink(missing_ok=True)
