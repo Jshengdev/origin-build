@@ -1,6 +1,6 @@
 """The dashboard's People, Monitoring and Integrations pages read real status, never a mock. Johnny, 2026-09-27, for the
 Loom walkthrough: "the people to show who we are texting. the monitoring and the integrations".
-GET /people is the group's name and the housemates' first names, never a handle. GET /integrations is one entry per
+GET /people is the group chat and one card per member of it plus me (chat.db, the ledger), never a handle. GET /integrations is one entry per
 integration (unitree, lidar, hue, tuya, imessage, jev, openrouter, ledger), each {name, ok: true | false | null, detail,
 as_of}, read from the dog session, the ledger's newest rows and the listener's heartbeat; a key is only ever a bool
 (key_set). Both are reads: no row, no network. The real handler on an ephemeral port in this process; the ledger is a
@@ -11,10 +11,13 @@ and the dog is a DogSession whose Body is a fake. Handles and keys are stand-ins
 from __future__ import annotations
 import json
 import os
+import re
+import sqlite3
 import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -22,8 +25,8 @@ from unittest import mock
 _TMP = Path(tempfile.mkdtemp(prefix="wtdd-status-test-"))
 os.environ["WTDD_LEDGER"] = str(_TMP / "ledger.jsonl")
 
-from wtdd import api, ledger  # noqa: E402
-from wtdd.chat import housemates  # noqa: E402
+from wtdd import api, ledger, status  # noqa: E402
+from wtdd.chat import db, housemates  # noqa: E402
 from wtdd.dog import session  # noqa: E402
 
 PHONE, EMAIL, PHONE2, PHONE3 = "+15550003333", "sam@example.com", "+15550004444", "+15550005555"
@@ -72,32 +75,114 @@ class Api(unittest.TestCase):
         return text, json.loads(text)
 
 
-class People(Api):
-    def setUp(self):
-        self.enterContext(mock.patch.dict(os.environ, {"WTDD_CHAT_NAME": "THE CASTLE"}))
+GUID = "any;+;0000feed0000feed0000feed0000feed"
+HANDLE_SHAPES = re.compile(r"\+?\d{7,15}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")   # a phone (with or without +) or an email
 
-    def test_names_only_never_a_handle(self):
-        with mock.patch.dict(housemates.HOUSEMATES, {PHONE: "Sam", EMAIL: "Sam", PHONE2: "Alex", PHONE3: PHONE3}, clear=True):
-            text, body = self.get("/people")
-        self.assertEqual(body["group"], "THE CASTLE")
-        self.assertEqual(body["people"], [{"name": "Sam"}, {"name": "Alex"}, {"name": "a member"}],
-                         "one entry per person (two handles, one name), a handle typed in as a name reads a member")
-        self.assertNotIn("why", body)
+
+def _apple(t: float) -> int:
+    return int((t - 978307200) * 1_000_000_000)   # message.date: nanoseconds since 2001-01-01
+
+
+def plant_chat_db(path: Path, now: float) -> dict[str, float]:
+    """The Messages schema subset GET /people reads: THE CASTLE with 3 members (PHONE, EMAIL, PHONE2 by handle ROWID) and
+    me; PHONE3 only in a 1:1 (never a card). Returns each sender's newest message time."""
+    c = sqlite3.connect(path)
+    c.executescript("""
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, display_name TEXT);
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, handle_id INTEGER, is_from_me INTEGER,
+                              date INTEGER, associated_message_type INTEGER DEFAULT 0);
+        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);""")
+    c.executemany("INSERT INTO chat VALUES (?, ?, ?)", [(1, GUID, "THE CASTLE"), (2, "any;-;" + PHONE3, "")])
+    c.executemany("INSERT INTO handle VALUES (?, ?)", [(1, PHONE3), (2, PHONE), (3, EMAIL), (4, PHONE2)])
+    c.executemany("INSERT INTO chat_handle_join VALUES (?, ?)", [(1, 2), (1, 3), (1, 4), (2, 1)])
+    msgs = [  # (chat, handle_id, from_me, seconds ago, tapback)
+        (1, 0, 1, 300, 0), (1, 0, 1, 120, 0),                                  # me: 2 in 24 h
+        (1, 2, 0, 3000, 0), (1, 2, 0, 2000, 0), (1, 2, 0, 60, 0), (1, 2, 0, 2 * 86400, 0), (1, 2, 0, 30, 2000),   # PHONE: 3 + one old + a tapback
+        (1, 3, 0, 5000, 0),                                                   # EMAIL: 1
+        (2, 1, 0, 10, 0),                                                     # PHONE3, in the 1:1 only
+    ]
+    for i, (chat, h, me, ago, tb) in enumerate(msgs, 1):
+        c.execute("INSERT INTO message VALUES (?, ?, ?, ?, ?, ?, ?)", (i, f"MSG-{i}", "hi", h, me, _apple(now - ago), tb))
+        c.execute("INSERT INTO chat_message_join VALUES (?, ?)", (chat, i))
+    c.commit()
+    c.close()
+    return {"me": now - 120, PHONE: now - 30, EMAIL: now - 5000}
+
+
+def _reply(tool, frm, guid):
+    r = _row("2026-09-27T20:01:00", tool, "imessage")
+    r["args"] = {"from": frm, "text": "thats my friend", "guid": guid, "chat": GUID}
+    return r
+
+
+class People(Api):
+    """GET /people: the group chat and one card per participant (chat.db's chat_handle_join for WTDD_CHAT_GUID) plus me,
+    counted from chat.db and the ledger; a label, never a handle, not even as an id. Johnny, 2026-09-27 19:5x: "for the
+    people tab show the group chat and each sub card with each individual in there"."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(dir=_TMP))
+        (self.root / "ui").mkdir()
+        self.now = int(time.time())
+        self.newest = plant_chat_db(self.root / "chat.db", self.now)
+        self.led = self.root / "ledger.jsonl"
+        self.led.write_text("".join(json.dumps(r) + "\n" for r in [
+            _reply("reply.decided", PHONE, "R-1"), _reply("intruder.verdict", PHONE, "R-1"),   # one reply, two rows
+            _reply("intruder.verdict", PHONE, "R-2"),
+            _reply("chat.wake", EMAIL, "W-1"),                                                 # a wake, not a reply
+            _reply("intruder.verdict", PHONE3, "R-3"),                                        # not in the group
+            _reply("intruder.verdict", "", "R-4"),                                            # me (a from-me row has no handle)
+        ]))
+        self.enterContext(mock.patch.dict(os.environ, {"WTDD_CHAT_NAME": "THE CASTLE", "WTDD_CHAT_GUID": GUID}))
+        self.enterContext(mock.patch("wtdd.status.ROOT", self.root))
+        self.enterContext(mock.patch.object(db, "CHAT_DB", self.root / "chat.db"))
+        self.enterContext(mock.patch.object(ledger, "LEDGER", self.led))
+        self.enterContext(mock.patch.dict(housemates.HOUSEMATES, {}, clear=True))   # empty: anyone in the group (unchanged)
+
+    def assert_no_handle(self, text: str):
         for private in (PHONE, PHONE[1:], EMAIL, "example.com", PHONE2, PHONE2[1:], PHONE3, PHONE3[1:]):
             self.assertNotIn(private, text)
+        self.assertEqual(HANDLE_SHAPES.findall(text), [], "no phone or email shape anywhere in the body")
 
-    def test_no_housemates_is_empty_with_why(self):
-        with mock.patch.dict(housemates.HOUSEMATES, {}, clear=True):
-            _, body = self.get("/people")
-        self.assertEqual(body["people"], [])
-        self.assertEqual(body["why"], "HOUSEMATES is empty: fill it locally (never committed)")
+    def test_the_group_and_one_card_per_member_plus_me(self):
+        text, body = self.get("/people")
+        self.assertEqual(body["group"], {"name": "THE CASTLE", "members": 3, "last_ts": status._at(self.newest[PHONE])})
+        at = lambda k: status._at(self.newest[k])   # noqa: E731
+        self.assertEqual(body["people"], [
+            {"id": "me", "label": "you", "is_me": True, "messages_24h": 2, "last_ts": at("me"), "replies_to_dog": 1},
+            {"id": "m1", "label": "member 1", "is_me": False, "messages_24h": 3, "last_ts": at(PHONE), "replies_to_dog": 2},
+            {"id": "m2", "label": "member 2", "is_me": False, "messages_24h": 1, "last_ts": at(EMAIL), "replies_to_dog": 0},
+            {"id": "m3", "label": "member 3", "is_me": False, "messages_24h": 0, "last_ts": None, "replies_to_dog": 0},
+        ], "a tapback and a 2-day-old message are not in messages_24h; one reply read twice (reply.decided + verdict) is 1")
+        self.assert_no_handle(text)
 
-    def test_no_group_name_is_null_with_why(self):
-        with mock.patch.dict(os.environ, {"WTDD_CHAT_NAME": ""}), mock.patch.dict(housemates.HOUSEMATES, {PHONE: "Sam"}, clear=True):
-            _, body = self.get("/people")
-        self.assertIsNone(body["group"])
-        self.assertIn("WTDD_CHAT_NAME is not set", body["group_why"])
-        self.assertEqual(body["people"], [{"name": "Sam"}])
+    def test_a_local_names_file_labels_a_member_and_no_handle_leaks_before_redact(self):
+        (self.root / "ui" / "people-names.json").write_text(json.dumps({EMAIL: "Teri"}))
+        text, body = self.get("/people")
+        self.assertEqual([p["label"] for p in body["people"]], ["you", "member 1", "Teri", "member 3"])
+        self.assert_no_handle(text)
+        self.assert_no_handle(json.dumps(status.people()))   # the dict itself, not only what redact() lets through
+
+    def test_a_read_writes_no_row(self):
+        before = self.led.read_bytes()
+        self.get("/people")
+        self.assertEqual(self.led.read_bytes(), before)
+
+    def test_no_chat_db_is_a_500_naming_it_never_nobody(self):
+        with mock.patch.object(db, "CHAT_DB", self.root / "missing" / "chat.db"):
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                self.get("/people")
+        self.assertEqual(e.exception.code, 500)
+        self.assertIn("chat.db", json.loads(e.exception.read())["error"])
+
+    def test_a_group_guid_not_in_chat_db_is_a_500(self):
+        with mock.patch.dict(os.environ, {"WTDD_CHAT_GUID": "any;+;nope"}):
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                self.get("/people")
+        self.assertEqual(e.exception.code, 500)
+        self.assertIn("WTDD_CHAT_GUID", json.loads(e.exception.read())["error"])
 
 
 class Integrations(Api):
@@ -255,7 +340,6 @@ class Integrations(Api):
         self.plant(_row("2026-09-27T20:02:00", "lights.set", "hue"))
         before = self.led.read_bytes()
         self.status()
-        self.get("/people")
         self.assertEqual(self.led.read_bytes(), before)
 
 
