@@ -17,6 +17,7 @@
                                   force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
   GET  /images?shift=<id>&trigger=<t>&kind=<k>   the photos a run's rows name {shift, images: [{file, url, ts, kind, stop, ...}], n, why?} (wtdd/images.py; /record's default and 404; no bytes; a read, no row)
+  GET  /sessions                  [{shift_id, start, end, rows, stops, flags, signed, signed_by, stub_rows, in_force}] newest first: record.sessions(), build()'s numbers (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   GET  /routines | POST /routines {action: save | load | delete, name}   named routes: the map's path, stops and actions kept by name and loaded back (wtdd/routines.py)
   POST /field/stop                end the running walk (any source) at its next tick
@@ -80,7 +81,7 @@ from .ledger import log, rows
 from .chat.housemates import PRIVATE
 
 UI = ROOT / "ui"
-PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger", "/people", "/integrations", "/images")   # B10: what they answer passes through redact()
+PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger", "/people", "/integrations", "/images", "/sessions")   # B10: what they answer passes through redact()
 
 
 def redact(x):
@@ -185,6 +186,9 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/images":   # the photos a run's rows name (wtdd/images.py), a read (no row); the bytes stay behind /pictures/<name>
             from . import images
             return self._json(*images.get(parse_qs(u.query), PICTURES))
+        if u.path == "/sessions":   # every run's line of the record (record.sessions), newest first, a read (no row); signed_by passes redact()
+            from . import record
+            return self._json(200, record.sessions(rows(), shift.current()))
         if u.path == "/dog/state":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().state())
