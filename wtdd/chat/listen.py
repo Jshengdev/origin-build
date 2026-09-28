@@ -103,7 +103,7 @@ chat.reply row {share, file, from (the raw handle: GET /images and /ledger
 redact it), text, ts (chat.db's, UTC), rowid, guid} (share_reply). Nothing is posted and no model is called. The dog's
 own posts never reach it (allowed(): its confirmed guids, and "from the dog's round", the default caption, among
 OWN_OPENERS). A reply opening like a correction ("that's ...", "its ...", "not ...") within CORRECTION_WINDOW_S of the
-dog's last posted look (the shared photo is one) is a correction and is acknowledged "noted: ...", never a reply. The
+dog's last posted look (a share post is not one: it opens no correction window) is a correction and is acknowledged "noted: ...", never a reply. The
 window ends at until, at the next share (a new trigger), or at POST /chat/reset (SHARE deleted). UNVERIFIED until the
 first live share: that a real reply in THE CASTLE lands in the window and is read here, and that SHARE_WINDOW_S (600 s)
 is the right length."""
@@ -442,7 +442,7 @@ class Listener:
             return False
         chat = m.get("chat") or self.guid   # a chat corrects the last photo it was shown (a row without a guid predates 03)
         looks = [r for r in ledger_rows() if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("file")
-                 and (r["args"].get("guid") or chat) == chat]
+                 and (r["args"].get("guid") or chat) == chat and r["args"].get("kind") != "share"]   # a share re-posts a photo: not the dog's look
         if not looks:
             return False
         last = looks[-1]
