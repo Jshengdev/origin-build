@@ -6,7 +6,9 @@ map with one tap. A routine is ui/map.json's path, stops and actions; nothing el
                     and actions are the map's now, or null (a page save that changes the route un-loads it). A read, no row.
   act(mp, body)     POST /routines {action: save | load | delete, name}: one routine.saved / routine.loaded /
                     routine.deleted row, ok or not, state_before and state_after {names, loaded, _version}, read back
-                    before the row says ok. Answers {ok, routines, loaded, _version}: the new list and the map's version.
+                    before the row says ok. Answers {ok, routines, loaded, _version, map}: the new list, the map's version
+                    and the map itself (GET /map's body). After a load the page replaces its copy with `map`; adopting
+                    _version alone keeps the old route drawn and lets the page's next save write it back over the routine.
     save            the map's route under the name, a name already saved replaced in place (the map is not written).
     load            the routine's route written into the map by field.write_map, POST /map's own write: every other key
                     (rooms, lights, zones, labels, policy) kept, the map it replaces kept as map.prev.json, _version the
@@ -32,7 +34,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .field import write_map
+from . import field
 from .ledger import log, step
 
 TOOLS = {"save": "routine.saved", "load": "routine.loaded", "delete": "routine.deleted"}
@@ -92,7 +94,7 @@ def act(mp: Path, body: dict[str, Any]) -> dict[str, Any]:
         if action == "load":
             m = json.loads(mp.read_text())
             want = dict(zip(ROUTE, _route(rs[names.index(name)])))
-            write_map(mp, {**m, **want})
+            field.write_map(mp, {**m, **want})
             if _route(json.loads(mp.read_text())) != tuple(want.values()):   # loaded when the map says so
                 raise RuntimeError(f"{mp} read back another route than {name!r}")
         else:
@@ -110,4 +112,5 @@ def act(mp: Path, body: dict[str, Any]) -> dict[str, Any]:
         after = r["state_after"] = _state(mp, _read(mp))
         if (name in after["names"]) != (action != "delete"):
             raise RuntimeError(f"{mp.with_name('routines.json')} read back {after['names']} after the {action} of {name!r}")
-    return {"ok": True, **listing(mp), "_version": after["_version"]}
+        served = {**json.loads(mp.read_text()), "_version": after["_version"]}   # the map to hold, read under the lock
+    return {"ok": True, **listing(mp), "_version": after["_version"], "map": served}
