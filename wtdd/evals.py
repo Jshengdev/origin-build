@@ -55,6 +55,8 @@ duplicate posts are checked over the whole --ledger file, the shipped rule.
 They are not in "all": they grade a ledger and drive nothing. --write refuses dry trials (SystemExit; README.md and
 evals.json untouched): the README's table is device grades only. evals.json is gitignored, so on a fresh clone merge()
 seeds from docs/evidence/trials-2026-09-13.json (same shape) and --write on the dog keeps the measured rows.
+No handle leaves the four: run_graded passes each trial's detail and why through housemates.PRIVATE (the API's redaction),
+so the replier and the 1:1 guid read their HOUSEMATES name or "a member" on stderr, in the table and in what --write writes.
 UNVERIFIED: no live ledger has been graded by the four; 02's decided, 03's and 04's route.refused shapes come from
 their code (merged: wtdd/decide.py, wtdd/chat/oncall.py, wtdd/nogo.py) and fixtures, never from a run on the dog."""
 from __future__ import annotations
