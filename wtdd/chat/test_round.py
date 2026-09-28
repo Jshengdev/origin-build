@@ -209,5 +209,34 @@ class Wake(unittest.TestCase):
         self.assertEqual(rounds, ["W1", "W3"])
 
 
+
+class Reply(unittest.TestCase):
+    """The group as its own on-call chat (S10, WTDD_ON_CALL_GUID = the group), a who_dis question open in it, the
+    replies read by the DEMO_CACHE stub (no JEV_API_KEY); tools.call patched, so no alarm light is written."""
+
+    def setUp(self):
+        self.posts: list[tuple[str, str | None]] = []
+        self.pend = _TMP / f"pending-{self._testMethodName}.json"
+        with mock.patch.dict(os.environ, {"WTDD_ON_CALL_GUID": GROUP}), mock.patch.object(L.db, "max_rowid", return_value=0):
+            self.l = L.Listener(GROUP, lambda g, k, kind, t, f: self.posts.append((k, t)), listen_s=60)
+        self.enterContext(mock.patch.object(L, "PENDING", self.pend))
+        self.enterContext(mock.patch("wtdd.tools.call"))
+        self.addCleanup(lambda: self.pend.unlink(missing_ok=True))
+
+    def _ask(self, trigger: str) -> None:
+        self.pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": "/tmp/look.jpg", "seconds": 5,
+                                         "trigger": trigger, "chat": GROUP, "question": "who dis?!"}))
+
+    # ask 3: one-word commands fuzzy-match one word of a sentence ("it" is sit at 0.8), so a real answer was dropped
+
+    def test_a_reply_with_a_command_word_in_it_is_read_and_a_bare_command_is_not(self):
+        self.assertTrue(self.l.group_oncall)
+        for text, read in (("it is teri", True), ("right, that's teri", True), ("hell no", True), ("looks like teri", True),
+                           ("sit", False), ("lights off", False)):
+            with self.subTest(text):
+                self._ask(f"alarm:{text}")
+                self.assertEqual(self.l.verdict(msg(text, f"R-{text}")), read, "a bare command is the group's; anything else is an answer")
+
+
 if __name__ == "__main__":
     unittest.main()
