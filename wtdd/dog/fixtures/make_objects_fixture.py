@@ -81,7 +81,7 @@ def write() -> list[Path]:
                      "message_source": "stub", "thumb": thumb(img, b["xyxy"]), "box": list(b["xyxy"]),
                      "bearing_deg": deg, "hit_m": b["hit_m"], "dist_m": dist, "pos_px": [round(px), round(py)], "why": None,
                      "first_seen": TS, "last_seen": "2026-09-26T03:00:02" if stale else "2026-09-26T03:00:05",
-                     "windows_unseen": 9 if stale else 0, "stale": stale})
+                     "windows_unseen": 9 if stale else 0, "stale": stale, "depth_cam_m": None, "placed_by": "first lidar hit"})
     OBJECTS_JSON.write_text(json.dumps({"n": len(objs), "objects": objs, "windows": 12, "fov_deg": FOV_DEG,
                                         "source": "wtdd/dog/fixtures/objects.json", "why": None}, indent=1) + "\n")
     return [FRAME, WATCH_JSON, OBJECTS_JSON]
