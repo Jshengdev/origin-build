@@ -16,7 +16,8 @@ Where each photo is named (read from the writers):
   res:); dog.look state_after.file and file_down (wtdd/dog/session.py _look: the room frame, a tilt's floor frame).
 - ask: chat.post args.file of a question: args.kind "escalate" (the flag to the on-call chat: alarm:, decide:,
   intruder-), or a decide: or :decide trigger (the "not sure" line posted to the group with the photo).
-- scout: zone.confirmed state_before.photo.path, ok or not (wtdd/dog/scout_zones.py copies the frame once per zone).
+- scout: zone.confirmed state_before.photo.path, ok or not (wtdd/dog/scout_zones.py copies the frame once per zone),
+  and zone.person state_after.photo.path (a person zone's photo, copied once when the zone appears).
 - blob: none today. A blob.labelled row records only crop_sha: the crop goes to the model as a data URL, never a file.
 The wake show's fire: post is not listed: dog_on_fire draws flames over a dog.ceo photo, so the dog never took it. A
 post with no file is not a photo.
@@ -62,7 +63,8 @@ def _named(r: dict) -> list[tuple[str, str, str | None, Any]]:
     if tool == "dog.look":
         after = r.get("state_after") or {}
         return [(after[k], "look", None, None) for k in ("file", "file_down") if after.get(k)]
-    photo = (r.get("state_before") or {}).get("photo") if tool == "zone.confirmed" else None
+    photo = ((r.get("state_before") or {}).get("photo") if tool == "zone.confirmed" else
+             (r.get("state_after") or {}).get("photo") if tool == "zone.person" else None)   # a person zone's photo
     return [(photo["path"], "scout", None, r.get("response_or_error"))] if photo and photo.get("path") else []
 
 

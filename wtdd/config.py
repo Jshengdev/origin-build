@@ -42,12 +42,14 @@ def maybe(key: str) -> str | None:
     return os.environ.get(key) or None
 
 
-def scout_zones() -> bool:
-    """WTDD_SCOUT_ZONES, the scout's own switch (wtdd/dog/scout_zones.py): unset, empty or 1 = on, the scout as it was
-    before the knob; 0 = off: it still receives 07's objects (their pins and names stay) but asks no model, writes no auto
-    zone and no zone.* row. Its own key so that turning zones off never moves WTDD_DECIDE_THRESHOLD, which the chat
-    round's decide shares. Read at each use; any other value is a ValueError (fail loud, never a guess)."""
+def scout_zones() -> str:
+    """WTDD_SCOUT_ZONES, the scout's own switch (wtdd/dog/scout_zones.py), read at each use: unset, empty or 1 = "on"
+    (both kinds: person zones and the strict hazard zones); person = "person" (person zones only: no hazard zone and no
+    confirm call, the filming setting); 0 = "off" (07's objects and pins stay; no model call, no zone, no zone.* row).
+    Its own key so that turning zones off never moves WTDD_DECIDE_THRESHOLD, which the chat round's decide shares. Any
+    other value is a ValueError (fail loud, never a guess)."""
     v = (maybe("WTDD_SCOUT_ZONES") or "1").strip()
-    if v not in ("0", "1"):
-        raise ValueError(f"WTDD_SCOUT_ZONES={v!r} is not 0 (off) or 1 (on)")
-    return v == "1"
+    modes = {"1": "on", "person": "person", "0": "off"}
+    if v not in modes:
+        raise ValueError(f"WTDD_SCOUT_ZONES={v!r} is not 1 (on), person (person zones only) or 0 (off)")
+    return modes[v]

@@ -792,8 +792,9 @@ class DogSession:
 
     # ---- the scout (wtdd/dog/scout_zones.py): each placed object asked once; a hazard at p >= the threshold is on the map at once, a named tap dismisses it
     def scout_state(self) -> dict[str, Any]:
-        """GET /dog/scout: {n, proposals, zones, _version, failed, why, source: "session"}. A read, no row."""
-        return {**self.scout.state(), "source": "session"}
+        """GET /dog/scout: {n, proposals, zones, auto_zones, gates, _version, failed, why, source: "session"}; person
+        zones are projected through the calibration in force now. A read, no row."""
+        return {**self.scout.state(self.cal), "source": "session"}
 
     def scout_feed(self) -> None:
         """The objects thread's hook: 07's objects (under the objects lock) and the newest detector frame to the scout,
@@ -807,7 +808,20 @@ class DogSession:
         frame = json.loads(objects.WATCH.read_text())
         with self._objects_lock:
             objs = self.objects.to_list()
-        self.scout.feed(objs, frame, pose, self.grid, self.cal, float(fov) if fov else None, grid_lock=self._grid_lock)
+        self.scout.feed(objs, frame, pose, self.grid, self.cal, float(fov) if fov else None, grid_lock=self._grid_lock,
+                        live=self._live_m())
+
+    def _live_m(self):
+        """The scout's live view: the newest LiDAR window's band (after lidar.keep's surface filter, which the body
+        applies) in corrected odometry metres, the grid's frame; None with no body or stream, a window older than
+        LIVE_MAX_AGE_MS, or a window that saw no floor (as _live_px). No log line: per window."""
+        lp = self.body.lidar_points() if self.body else {}
+        if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
+            return None
+        f = lp.get("fill") or {}
+        if f.get("surfaces") == "on" and f.get("free") == 0:
+            return None
+        return localize.apply_points(self.corr, localize.band(lp["points"]))
 
     # ---- where it thinks it is (wtdd/dog/nav.py)
     def map_pose(self, st: dict[str, Any] | None = None) -> dict[str, Any] | None:
