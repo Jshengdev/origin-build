@@ -36,7 +36,7 @@ looks and Jev names what is there from OBSTACLES (_classify), and the dot is pas
 resume()). Every decision is one route.decided row with a first-person sentence. state().follow carries planned (every
 leg's polyline) and trace (the believed pose, the actual route), both kept until the next follow. A stop on a passed dot
 is reported in skipped_stops, never waited on. UNVERIFIED on the dog: exercised with a teleporting body only
-(wtdd/test_plan_grid.py); the turn to face a dot and the look inside a follow have run in no test.
+(wtdd/test_plan_grid.py); the turn to face a dot and the look have run only with a faked body, outside a follow.
 
 The looks, measured on this dog (firmware < 1.1.15, motion mode mcf) on 2026-09-13:
   level: BalanceStand, frame.
@@ -1197,9 +1197,10 @@ class DogSession:
 
     async def _look_at(self, p) -> dict[str, Any]:
         """S6b: what is on map point p, in words. The dog turns in place to face it (nav.steer's turn, no step forward,
-        until within FACE_DEG, else TimeoutError after FACE_S), the level look (_look: one frame, its dog.look row), and
-        the vision model's sentence on that frame (dog_say.see: {text, person, ...}, its llm.generate row). Raises on any
-        failure. UNVERIFIED on the dog: the tests replace this."""
+        until within FACE_DEG, else TimeoutError after FACE_S), the level look (_look: one frame, its dog.look row tagged
+        args.by "follow", so evals and the record never read it as a stop), and the vision model's sentence on that frame
+        (dog_say.see: {text, person, ...}, its llm.generate row). Raises on any failure. UNVERIFIED on the dog: the tests
+        run it with a teleporting body and faked commands and vision (test_plan_grid OnBlue)."""
         from ..tools.dog_say import see
         t0 = time.monotonic()
         while True:
@@ -1213,7 +1214,7 @@ class DogSession:
             self._set_vel(0.0, 0.0, ctl["z"])
             await asyncio.sleep(0.1)
         self.vel, self.vel_t = (0.0, 0.0, 0.0), 0.0
-        shot = await self._look(self.body, "level")
+        shot = await self._look(self.body, "level", by="follow")
         return await asyncio.to_thread(see, shot["file"])
 
     def close(self) -> None:
@@ -1288,16 +1289,17 @@ class DogSession:
             raise ValueError(f"look must be one of {LOOKS}, got {kind!r}")
         return self.run(self.with_body(lambda b: self._look(b, kind)))
 
-    async def _look(self, b: Body, kind: str) -> dict[str, Any]:
+    async def _look(self, b: Body, kind: str, **tag: Any) -> dict[str, Any]:
         """The looks. The tilt nod is verified by the IMU at capture: below TILT_MIN_DEG it did not fire (this dog
         sometimes ignores the pair after a long idle), so the routine settles the controller (StopMove, BalanceStand)
         and on a miss warms it with StandUp and tries once more. Pose refused with code 401001 (after the physical
         controller drove it, or after being carried; StandUp and BalanceStand do not clear it) is cured by Sit then
         RiseSit, once. The returned pitch_deg is what the IMU measured; a miss is reported as fired=False, never hidden.
-        B3: no IMU reading is pitch_deg None and, on a tilt, fired None (unverified, not retried), never a level 0."""
+        B3: no IMU reading is pitch_deg None and, on a tilt, fired None (unverified, not retried), never a level 0.
+        `tag` joins the row's args (the follower's look: by="follow")."""
         out = PICTURES / f"look-{kind}.jpg"
         out_down = PICTURES / "look-down.jpg"
-        with step("dog", "dog.look", "unitree", {"kind": kind}, b.state()) as r:
+        with step("dog", "dog.look", "unitree", {"kind": kind, **tag}, b.state()) as r:
             attempts, pitch, pitch_down = 0, 0.0, None
             if kind == "level":
                 await b.cmd("BalanceStand"); await asyncio.sleep(0.8)

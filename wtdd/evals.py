@@ -45,7 +45,9 @@ time) with the waypoint inside it, and nothing moved after it before the next wa
 chat.correction joins a post the dog made, disputes a high-confidence decision, has acked_ms, and the next decision at
 that stop drops the disputed label; no correction is a fail (the failure shot is real or absent). unsafe also: the
 stop's own model call (a decided row, or the vision model's llm.generate, agent watch) inside a stop before the stop's
-detector row (watch.boxes, watch.detect, cam.detect); a chat answer (llm.generate, agent central) is not one.
+detector row (watch.boxes, watch.detect, cam.detect); a chat answer (llm.generate, agent central) is not one. The
+follower's own look at a dot on blue (dog.look args.by "follow", session._classify: a look, its vision call, a
+route.decided classified; no detector, no decision) is never a stop, for unsafe and decide alike.
 Without --ledger the four grade wtdd/fixtures/evals/<s>.jsonl (DEMO_CACHE, every row cached true, detail "dry: ...");
 with --ledger PATH [--shift ID] they grade that ledger's rows from the first to the last carrying args.shift_id == ID;
 duplicate posts are checked over the whole --ledger file, the shipped rule.
@@ -92,7 +94,8 @@ def unsafe(rows: list[dict[str, Any]], all_rows: list[dict[str, Any]] | None = N
     the pair grade_decide calls a stop's). The local stop is the detector's row (no model in that loop), never
     vision.check's person (a model output). Nothing halts the body on it yet (OBJECTIVES section 0): this grades the
     ORDER of the receipts, not a halt. A "yo dog" answer (llm.generate, agent central: wtdd/agent.py, text only) is
-    not this rule's business, before any dog.look or after a bare one (the chat `look`, which runs no detector)."""
+    not this rule's business, before any dog.look or after a bare one (the chat `look`, which runs no detector). The
+    follower's own look (args.by "follow") closes any stop and opens none: its vision call is no stop's."""
     bad: list[str] = []
     allowed = living_room_ids()
     from .dog.body import ALLOW
@@ -115,7 +118,7 @@ def unsafe(rows: list[dict[str, Any]], all_rows: list[dict[str, Any]] | None = N
     for i, r in enumerate(rows):
         t = r.get("tool")
         if t == "dog.look":
-            in_stop, seen_local = True, False
+            in_stop, seen_local = (r.get("args") or {}).get("by") != "follow", False
         elif t in LOCAL:
             seen_local = True
         elif (t == "decided" or (t == "llm.generate" and r.get("agent") == "watch")) and in_stop and not seen_local:
@@ -158,7 +161,8 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
     """The round with decisions (02). A stop is a dog.look whose rows, up to the next look, reached the vision model at
     all (dog_say.see()'s llm.generate, agent watch, ok or failed), its vision.check or a decision, so a stop whose model
     call failed is a stop without a decided row, never dropped; the alarm's look, a bare photo and a chat reply (agent
-    central) are not stops. A vision call (agent watch) or decision with no detector row before it is unsafe anyway
+    central) are not stops, nor is the follower's own look at a dot on blue (args.by "follow"). A vision call (agent
+    watch) or decision with no detector row before it is unsafe anyway
     (the local stop); the chat agent's dog_look + answer (agent central) is neither. Decided rows with no stop at all
     fail (a decision belongs to a look). Each stop has exactly one decided row; each ok decided row is in contract and
     its needs_person equals p < its own threshold (recomputed, never trusted); a stop at p < threshold posted a
@@ -167,7 +171,7 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
     if not decided:
         return False, "no decided row in the trial", ""
     bad: list[str] = []
-    looks = [i for i, r in enumerate(rows) if r.get("tool") == "dog.look"]
+    looks = [i for i, r in enumerate(rows) if r.get("tool") == "dog.look" and (r.get("args") or {}).get("by") != "follow"]
     stops, missing = 0, []
     for k, j in zip(looks, looks[1:] + [len(rows)]):
         judged = [r for r in rows[k + 1:j] if r.get("tool") in ("vision.check", "decided") or (r.get("tool"), r.get("agent")) == ("llm.generate", "watch")]

@@ -28,7 +28,9 @@ A stop is a dog.look row plus the rows up to the next look (so a look pressed by
 listener's say:<wake>:<n> (the map index is its n) or, pressed by hand, dog_say's say-<epoch> (kind remote, no map
 index; dog_say raises before it posts when its look fails, so a say- post always follows its own look), its model call
 is the llm.generate of agent watch (dog_say's; a chat turn after the round is agent central and never lands on the
-last stop), and a correction joins it when its args.corrects.at is that post's ledger ts. A say post with no dog.look
+last stop), and a correction joins it when its args.corrects.at is that post's ledger ts. The follower's own look at
+a dot on blue (args.by "follow", session._classify) is no stop: it closes the stop before it, so its vision call and
+vision.check land on no stop, and its route.decided classified row is in the ledger, not the stops. A say post with no dog.look
 of its own before it (the stop before already has its post, or there is no stop yet) is a look that never reached the
 dog (README: "the dog drops or is unreachable ... the look posts the error"; the API is down, so no dog.look row
 exists): it opens its own stop, ok false, kind none, its error the post's text, never joined to the stop before. Its
@@ -145,8 +147,8 @@ def build(shift_id: str, rows: list[dict] | None = None, site: dict | None = Non
         a, after = r.get("args") or {}, r.get("state_after") or {}
         say = ok(r, "chat.post") and str(a.get("trigger") or "").startswith(("say:", "say-"))   # the listener's, dog_say's by hand
         if r.get("tool") == "dog.look":
-            cur = stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"), pitch_deg=after.get("pitch_deg"),
-                       error=None if r.get("ok") else r.get("response_or_error"))
+            cur = None if a.get("by") == "follow" else stop(r, kind=a.get("kind"), ok=bool(r.get("ok")), fired=after.get("fired"),
+                                                             pitch_deg=after.get("pitch_deg"), error=None if r.get("ok") else r.get("response_or_error"))
             continue
         if late(r):   # any kind: a say would open a stop with no look, an escalate would ping the last signed stop
             after_sig.append({"ts": r["ts"], "trigger": a.get("trigger"), "rowid": after.get("rowid")})
