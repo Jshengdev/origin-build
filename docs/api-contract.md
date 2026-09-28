@@ -73,6 +73,9 @@ their inconsistencies: a client builds against these, and a change to one is a c
 - **Five GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts` and
   `/ledger`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
   Keys and numbers are untouched, the ledger file keeps the raw values, and the other routes are not redacted.
+- **POST /chat/reset needs no listener running.** It drops `pending.json` and writes the flag `chat.reset`; the listener
+  acts on the flag at its next poll, or inside the hold it is in (disarmed, the hold ended, nothing posted), so GET
+  `/chat` reads `armed: false` within a beat (2 s) of that. The row's `state_before.armed` is the last beat's, `null` with none.
 - `_version` is `int(mtime)` of `ui/map.json`. Send it back on POST `/map` and `/dog/scout`, or the write is a 409.
 
 ## GET
@@ -153,6 +156,7 @@ What the keys hold:
 | POST | `/field/stop` | | `{ok}` | 500 | none (touches `field.stop`) |
 | POST | `/map/restore` | | `{ok, path_pts, stops}` | 500 | none (`map.prev.json` kept) |
 | POST | `/intruder` | `{on}` (default true) | `{ok, intruder}` | 500 | none (`intruder.on`) |
+| POST | `/chat/reset` | `{by}` | `{ok, dropped, pending_was}` (`pending_was`: the dropped question's `{trigger, kind}`, or `null`) | 500 (an unreadable `pending.json` or `listen.json`: nothing dropped) | `chat.reset`, ok or not (and the flag `chat.reset`; nothing is posted) |
 | POST | `/shift` | `{name: morning \| night}` | `{ok, shift_id, started}` | 400 bad name; 500 | `shift.started`, ok or not |
 | POST | `/map` | the map, plus `_version` | `{ok, _version}` | 409 stale `_version`; 400 unrunnable path (points named); 500 | none (`map.prev.json` kept) |
 | POST | `/dog/drive` | `{x, y, z}` | `{ok, vel, hold_s}` | 500 | none; **connects** |
