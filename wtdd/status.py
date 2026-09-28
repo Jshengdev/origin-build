@@ -11,7 +11,8 @@ works, from evidence already on this Mac. Reads only: no ledger row, no network 
                 back on; false when stale, avoidance not on, or the last connect failed (its reason, session._unreachable);
                 null when nothing has connected yet. as_of is the newest state sample.
     lidar       session.lidar() (GET /dog/lidar's reader): true when on and the newest frame is fresher than STALE_MS;
-                false when on and stale; null when not connected, switched off, or no frame yet.
+                false when on and stale, or on with no frame and frames rejected (decode errors); null when not
+                connected, switched off, or no frame yet and none rejected.
     hue, tuya   the newest lights.* row with that app (the alarm's "hue+tuya" counts for both): its ok and ts.
     imessage    <repo>/listen.json, the heartbeat GET /chat reads: true under ALIVE_S old, false older (the listener
                 stopped), null with no file (it has not run here); armed and dry in the detail, never armed_by.
@@ -103,8 +104,10 @@ def _lidar(s) -> dict[str, Any]:
     lp = s.lidar()
     if not lp["on"]:
         return {"ok": None, "detail": f"switched off, {lp['n']} frames this session", "as_of": None}
-    if lp["age_ms"] is None:
-        return {"ok": None, "detail": "on, no frame yet", "as_of": None}
+    if lp["age_ms"] is None:   # a frame that fails to decode counts in errors, never in n: on and nothing usable is red
+        err = lp.get("errors") or 0
+        return {"ok": False if err else None, "as_of": None,
+                "detail": "on, no frame yet" + (f", {err} frames rejected (decode errors)" if err else "")}
     fresh = lp["age_ms"] <= STALE_MS
     return {"ok": fresh, "as_of": _at(time.time() - lp["age_ms"] / 1000),
             "detail": f"on, {lp['n']} frames, the newest {lp['age_ms']} ms old" + ("" if fresh else f" (stale past {STALE_MS} ms)")
