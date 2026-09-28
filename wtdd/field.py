@@ -24,7 +24,14 @@ first halts the dog, before the dark: halt(), POST /dog/stop, one dog.stop row (
 alike; the error carries dog_halted so the chat does not halt twice). While it runs, <repo>/field.json
 holds the entity's position, room, levels and current stop (atomic writes at HZ, removed at the end); the API serves it
 at GET /field and the remote draws the dot from it, whichever process runs the walk; a field.json younger than BUSY_S
-means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved. Stops: map.json `stops` is a list
+means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved.
+One exception: a dog walk with the follower (the chat's round, the dashboard's dog walk) that finds the dashboard's Lights
+follow (source="dog", follower=False) live touches <repo>/field.yield (never field.stop, which the round reads as Stop
+pressed) and waits up to YIELD_S for its field.json to go: the lights walk ends at its next tick with "yielded to the
+round" and yielded=true in its row, drains its in-flight writes and skips its end dark (the taker's dark start follows at
+once), then the taker runs. Not yielded in YIELD_S (an API process on older code): refused as before. UNVERIFIED on the
+real dog and lights: the hand-off with the lights walk in the API process and the round in the listener. Lights pressed
+during a round is still refused. Stops: map.json `stops` is a list
 of path point indices (double-click a path point on the remote); at each one the walk pauses and calls on_stop(index,
 point, room), the lights hold, then it resumes. The chat's wake sequence passes its look-and-say as on_stop; with no
 stops on the map it looks once at the end of the path. source="dog" (WTDD_ROUND=dog in the chat): the entity is the
@@ -189,7 +196,8 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     POST /dog/resume), and the walk ends when the follower is done or failed (the error is in the row); a walk that
     raises in its loop halts the dog (halt()) before it goes dark.
     source="dog", follower=False: the lights simply follow the dog wherever it is driven (the controller, the keys),
-    no route and no stops, until POST /field/stop (or STOP appears); the row says how long and how many writes."""
+    no route and no stops, until POST /field/stop (or STOP appears), or until a dog walk with the follower asks it to
+    yield (YIELD appears: it ends lit, the taker's dark start is next); the row says how long, how many writes, yielded."""
     if source not in ("entity", "dog"):
         raise ValueError(f"source must be entity or dog, got {source!r}")
     m = json.loads(MAP.read_text())
