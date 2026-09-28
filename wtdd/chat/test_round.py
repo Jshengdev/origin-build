@@ -503,6 +503,27 @@ class Reset(unittest.TestCase):
         self.assertFalse(self.flag.exists())
         self.assertEqual(self.posts, [])
 
+    def test_a_press_between_the_check_and_the_read_never_ends_the_listener(self):
+        # The API unlinks pending.json from its own process: a press landing between PENDING.exists() and read_text()
+        # raised FileNotFoundError out of poll() (every 2 s) or verdict() (every message), and run() has no except
+        class Unlinked(type(self.pend)):
+            def exists(self, **kw):
+                return True   # there when checked ...
+
+            def read_text(self, *a, **kw):
+                raise FileNotFoundError(2, "No such file or directory", str(self))   # ... gone when read
+
+        with mock.patch.object(L, "PENDING", Unlinked(self.pend)), mock.patch.object(self.l, "read", return_value=[]):
+            try:
+                self.assertEqual(self.l.poll(), 0)
+            except FileNotFoundError:
+                self.fail("poll() raised: run() ends and GET /chat reads the listener as down")
+            try:
+                self.assertFalse(self.l.verdict(msg("yes", "V1", 4)), "no question open: no verdict")
+            except FileNotFoundError:
+                self.fail("verdict() raised: the reply's poll() ends the listener")
+        self.assertEqual(self.posts, [])
+
 
 if __name__ == "__main__":
     unittest.main()
