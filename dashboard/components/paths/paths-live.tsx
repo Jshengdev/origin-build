@@ -121,6 +121,17 @@ export function PathsLive() {
   };
   const walkRoute = useWalkRoute(field.data, setResult, setSaved);
   const walk = () => walkRoute.start("Walk the route", served);
+  // a stop's action, saved at once against the map as served (like Ask here): "Look up & down" and "Post to the group"
+  const setAction = async (i: number, what: string, patch: { look?: string; say?: boolean }) => {
+    if (!served) return;
+    const k = String(i), actions = { ...(served.actions ?? {}) };
+    actions[k] = { look: "tilt", ...(actions[k] ?? {}), ...patch };
+    setBusy(true);
+    const r = await post("/map", { ...served, actions });
+    setBusy(false);
+    setResult(r.ok ? { what, ok: true } : { what, ok: false, error: r.error });
+    if (r.ok) setSaved({ ...served, actions, _version: r._version as number | undefined });
+  };
 
   const d = dog.data;
   return (
@@ -185,14 +196,23 @@ export function PathsLive() {
             ) : (
               <ul className="flex flex-col">
                 {(served?.stops ?? []).map((i, n) => {
-                  const a = served?.actions?.[String(i)] ?? {};
+                  const entry = served?.actions?.[String(i)], a = entry ?? {};
+                  const look = (a.look ?? "tilt") === "tilt", say = a.say === true;   // no action saved: looks up and down, no post (the walk saves that first)
                   return (
-                    <li key={i} className="flex items-center gap-2 border-t border-border py-2 first:border-t-0 first:pt-0">
+                    <li key={i} className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0 first:pt-0">
                       <span className="text-[13px] font-medium">Stop {n + 1}</span>
-                      <span className="font-mono text-[12px] text-muted-foreground">dot {i + 1}{a.look ? ` · ${LOOK[a.look] ?? a.look}` : ""}{a.say ? " + report" : ""}</span>
-                      <ActionButton intent={a.ask ? "primary" : "secondary"} size="sm" className="ml-auto" aria-pressed={!!a.ask} disabled={busy || !!draft}
+                      <span className="font-mono text-[12px] text-muted-foreground">dot {i + 1} · {entry ? `${LOOK[a.look ?? "tilt"] ?? a.look}${say ? " + post" : ", no post"}` : "default: look up & down, no post"}</span>
+                      <span className="ml-auto flex items-center gap-1.5">
+                      <ActionButton intent={look ? "primary" : "secondary"} size="sm" aria-pressed={look} disabled={busy || !!draft}
+                        title={draft ? "Save or discard the edit first" : look ? "At this stop the dog looks down at the floor, then up at the room, and photographs. Tap for one level look instead." : "At this stop the dog takes one level look. Tap to look up and down."}
+                        onClick={() => setAction(i, look ? `Level look · stop ${n + 1}` : `Look up & down · stop ${n + 1}`, { look: look ? "level" : "tilt" })}>Look up & down</ActionButton>
+                      <ActionButton intent={say ? "primary" : "secondary"} size="sm" aria-pressed={say} disabled={busy || !!draft}
+                        title={draft ? "Save or discard the edit first" : say ? "The photo and a sentence go to the group chat. Tap to keep it on the page only." : "The photo stays on the page (Images). Tap to also post it to the group chat."}
+                        onClick={() => setAction(i, say ? `No post · stop ${n + 1}` : `Post to the group · stop ${n + 1}`, { say: !say })}>Post to the group</ActionButton>
+                      <ActionButton intent={a.ask ? "primary" : "secondary"} size="sm" aria-pressed={!!a.ask} disabled={busy || !!draft}
                         title={draft ? "Save or discard the edit first" : a.ask ? "If the dog sees a person here it asks the on-call person \"who dis?!\" and waits. Tap to stop asking here." : "The intruder check: if the dog sees a person here, it asks who it is and waits for the answer"}
                         onClick={() => askHere(i, n + 1, !a.ask)}>{a.ask ? "Asks here" : "Ask here"}</ActionButton>
+                      </span>
                     </li>
                   );
                 })}
