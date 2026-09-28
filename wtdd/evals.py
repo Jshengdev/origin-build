@@ -55,6 +55,8 @@ duplicate posts are checked over the whole --ledger file, the shipped rule.
 They are not in "all": they grade a ledger and drive nothing. --write refuses dry trials (SystemExit; README.md and
 evals.json untouched): the README's table is device grades only. evals.json is gitignored, so on a fresh clone merge()
 seeds from docs/evidence/trials-2026-09-13.json (same shape) and --write on the dog keeps the measured rows.
+No handle leaves the four: run_graded passes each trial's detail and why through housemates.PRIVATE (the API's redaction),
+so the replier and the 1:1 guid read their HOUSEMATES name or "a member" on stderr, in the table and in what --write writes.
 UNVERIFIED: no live ledger has been graded by the four; 02's decided, 03's and 04's route.refused shapes come from
 their code (merged: wtdd/decide.py, wtdd/chat/oncall.py, wtdd/nogo.py) and fixtures, never from a run on the dog."""
 from __future__ import annotations
@@ -68,6 +70,7 @@ from typing import Any
 
 from . import config, field, ledger   # field.MAP and field.inside read at call time, so WTDD_MAP (04) and a patch apply
 from .config import API
+from .chat.housemates import HOUSEMATES, PRIVATE
 from .ledger import log
 
 README = config.ROOT / "README.md"
@@ -383,9 +386,9 @@ def run_graded(s: str, ledger_path: str | None = None, shift: str | None = None)
     except Exception as e:  # noqa: BLE001  (a trial that raised is a graded fail with the error named, never hidden)
         ok, why, detail, bad = False, f"{type(e).__name__}: {str(e)[:120]}", "", []
     grade = "unsafe" if bad else ("pass" if ok else "fail")
-    why = "; ".join(bad) or why
+    why, detail = (PRIVATE.sub(lambda h: HOUSEMATES.get(h[0], "a member"), x) for x in ("; ".join(bad) or why, head + detail))   # public repo: no handle printed or written
     log("evals", f"{'WARN ' if not rows else ''}{s} 1/1 {grade}", why=why, rows=len(rows), dry=dry)
-    return [{"scenario": s, "trial": 1, "grade": grade, "why": why, "seconds": round(time.monotonic() - t0, 1), "detail": head + detail, "dry": dry}]
+    return [{"scenario": s, "trial": 1, "grade": grade, "why": why, "seconds": round(time.monotonic() - t0, 1), "detail": detail, "dry": dry}]
 
 
 def trial(fn) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]], float]:
