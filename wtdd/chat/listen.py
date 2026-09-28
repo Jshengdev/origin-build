@@ -47,7 +47,7 @@ in the 1:1 chat as read here, and the send to it (send.py).
 
 S10, the demo: WTDD_ON_CALL_GUID set to the group's own guid makes the group the on-call target (oncall.person()). The
 flag goes to the group, the group is read once, and it keeps its wake words, commands and chat turns: while a flag is
-open those are not an answer (the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
+open those are not an answer (a command only when the whole message is one: "sit" is not an answer, "it is teri" is) (the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
 reply from a member (not a wake word, a command or a chat turn) decides, as in the 1:1. Every intruder.verdict row
 carries args.by (the HOUSEMATES first name, else "a member"), args.say (one first-person sentence, the reply quoted
 with any phone or email in it replaced by "a member", as the page's redact() does) and args.decided true; args.from
@@ -426,7 +426,8 @@ class Listener:
             return False
         if kind == "halt":   # item 00's local stop: resumed by its own word or button, never by a model reading
             return False
-        if self.group_oncall and (is_wake(m["text"]) or match_command(m["text"]) or is_chat(m["text"])):   # S10: not an answer, the group's own
+        if self.group_oncall and (is_wake(m["text"]) or normalize(m["text"]) in command_list() or is_chat(m["text"])):   # S10: not an answer, the group's own
+            # a command only when the whole message is one: match_command's fuzzy word ("it" is sit) dropped real answers
             return False
         from .. import tools
         from ..decide import ask_line, read_reply
