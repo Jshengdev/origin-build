@@ -90,11 +90,17 @@ def check_path(path, rooms) -> list[str]:
 
 def write_map(mp: Path, m: dict[str, Any]) -> int:
     """mp rewritten with m, the file it replaces kept as map.prev.json (the previous route survives one overwrite); returns
-    the new _version, int(mtime), which a page sends back so a stale save is a 409. POST /map's write and a routine's load."""
+    the new _version, int(mtime), which a page sends back so a stale save is a 409. POST /map's write and a routine's load.
+    The version only goes up: a write in the second of the last one sets the mtime to the last version + 1, so a page that
+    read in that second is stale and its poll sees the change (a burst of writes can run the mtime a few seconds ahead)."""
+    old = -1
     if mp.exists():
+        old = int(mp.stat().st_mtime)
         mp.with_name("map.prev.json").write_text(mp.read_text())
     mp.write_text(json.dumps(m, indent=2) + "\n")
-    return int(mp.stat().st_mtime)
+    v = max(int(mp.stat().st_mtime), old + 1)
+    os.utime(mp, (v, v))
+    return v
 
 
 def score(light: dict[str, Any], p, ent: dict[str, Any], here: str | None) -> float:

@@ -18,8 +18,8 @@ map with one tap. A routine is ui/map.json's path, stops and actions; nothing el
 The file is routines.json beside the map (ui/routines.json; a WTDD_MAP scratch copy keeps its own), created by the first
 save and gitignored like ledger.jsonl: it is live data. One that does not parse is a ValueError naming it, never [].
 No follow code: POST /dog/follow and the chat round read ui/map.json at use, so they walk the route that was loaded.
-Known: _version is int(mtime), as POST /map's; a load in the same second as the page's last read leaves the number
-unchanged and that page's stale save is not refused. UNVERIFIED on the dog: a routine is map pixels, so it is walked
+_version is int(mtime), as POST /map's, moved strictly up by field.write_map: a load in the second of the page's last read
+still makes that page's save a 409. UNVERIFIED on the dog: a routine is map pixels, so it is walked
 under the calibration tie and scale in force at the walk, not the ones it was drawn or recorded under; the first live
 load then POST /dog/follow must show dog.follow's planned points equal to the routine's dots, from the same drop-off.
 Offline: python -m unittest wtdd.test_routines

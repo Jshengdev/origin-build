@@ -106,7 +106,8 @@ their inconsistencies: a client builds against these, and a change to one is a c
 
 What the keys hold:
 - **`/map`**: `ui/map.json` as saved, plus `_version`. The committed map also has `actions`, `zones`, `lights`, `labels`,
-  `policy`, `entity` and `note`; the page's save decides which keys exist.
+  `policy`, `entity` and `note`; the page's save decides which keys exist. `_version` only goes up: every write through
+  POST `/map` or a routine's load moves it at least 1 past the last, even within one second.
 - **`/routines`**: a named routine is the map's `path`, `stops` and `actions`, kept in `ui/routines.json` (beside the
   map, created by the first save, gitignored). `dots` is the path's point count, `stops` the stop indices. `loaded` is
   the first routine whose route is the map's now, or null. `{routines: [], loaded: null}` before any save. A load
