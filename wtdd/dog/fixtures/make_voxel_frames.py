@@ -85,12 +85,17 @@ def pack(vox: np.ndarray) -> bytes:
 
 def frame_bytes(k: int) -> bytes:
     """Frame k as one data-channel buffer (see the docstring: wire format)."""
-    raw = pack(rasterise(k))
+    return wire(rasterise(k), ORIGINS[k], STAMP0 + k)
+
+
+def wire(vox: np.ndarray, origin_xy, stamp: float) -> bytes:
+    """Any bool (D, H, W) window at origin (x, y, Z0) as one data-channel buffer (test_surfaces' scenes use it too)."""
+    raw = pack(vox)
     assert len(raw) == W * H * D // 8 == 77824, len(raw)
     block = lz4.block.compress(raw, store_size=False)
     hdr = {"type": "msg", "topic": "rt/utlidar/voxel_map_compressed",
-           "data": {"stamp": STAMP0 + k, "frame_id": FRAME_ID, "resolution": RES, "src_size": len(raw),
-                    "origin": [ORIGINS[k][0], ORIGINS[k][1], Z0], "width": [W, H, D]}}
+           "data": {"stamp": stamp, "frame_id": FRAME_ID, "resolution": RES, "src_size": len(raw),
+                    "origin": [origin_xy[0], origin_xy[1], Z0], "width": [W, H, D]}}
     j = json.dumps(hdr).encode()
     return struct.pack("<HH", 2, 0) + struct.pack("<I", len(j)) + struct.pack("<I", len(block)) + j + block
 
