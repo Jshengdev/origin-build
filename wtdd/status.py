@@ -1,11 +1,23 @@
 """What the dashboard's People, Monitoring and Integrations pages read: who the dog texts, and whether each integration
 works, from evidence already on this Mac. Reads only: no ledger row, no network call, never a handle or a key's value.
 
-  people()               GET /people {group, group_why?, people: [{name}], why?}. group is WTDD_CHAT_NAME, the one group the
-                         gate posts to (wtdd/chat/send.py), null with group_why when unset. people are the distinct first
-                         names in wtdd/chat/housemates.py HOUSEMATES (one person with two handles is one name), never a key;
-                         [] with why (a WARN) when it is empty. The API also passes /people through redact() (B10), so a
-                         handle typed in as a name reads "a member".
+  people()               GET /people {group: {name, members, last_ts}, group_why?, people: [{id, label, is_me,
+                         messages_24h, last_ts, replies_to_dog}], why?}. The group chat (chat.db's chat whose guid is
+                         WTDD_CHAT_GUID, read-only through wtdd/chat/db.py connect()) and one card per participant of it
+                         (chat_handle_join, by handle ROWID) after "you" (this Mac's account: its from-me rows). group.name
+                         is WTDD_CHAT_NAME (null with group_why when unset), members the participants (not you), last_ts the
+                         group's newest row. messages_24h counts that sender's messages in the group in the last 24 h
+                         (tapbacks dropped, as db.new_messages does); last_ts is their newest row there, a tapback included
+                         (activity); both are the ledger's local time format. replies_to_dog counts that sender's distinct
+                         replies (by message guid: one reply is a reply.decided row and an intruder.verdict row) in the
+                         ledger's reply.decided, intruder.verdict and chat.correction rows, matched on args.from inside this
+                         function (a from-me row's from is ""). label is "you", else the first name <repo>/people-names.json
+                         ({"<handle>": "Teri"}, local, gitignored, only people who agreed to appear) gives, else "member N".
+                         A handle is never in the answer, not even as an id: ids are "me", "m1".. in handle ROWID order, and
+                         a label that is a handle reads "a member". Never macOS Contacts, never HOUSEMATES (its allowlist is
+                         unchanged). chat.db unreadable (no Full Disk Access, missing) or the group not in it raises a
+                         RuntimeError naming it, which the API answers 500 {error} (B9): never [], which reads as nobody.
+                         No participants is a WARN with why. The ledger is read in full, only its reply lines parsed.
   integrations(session)  GET /integrations {checked_at, integrations: [{name, ok, detail, as_of, key_set?}]}, in this order:
     unitree     session.state(): true when connected, the state stream fresher than session.STALE_MS and avoidance read
                 back on; false when stale, avoidance not on, or the last connect failed (its reason, session._unreachable);
@@ -27,37 +39,93 @@ works, from evidence already on this Mac. Reads only: no ledger row, no network 
   a search of the whole file. An unreadable ledger is false on every integration that needed a row, and an integration
   whose reader raises is false with the error; the others are still answered. One stderr line per call with the counts
   and the latency, a WARN when any is false or none is ok.
-UNVERIFIED on the dog: unitree and lidar are read from a fake Body only (wtdd/test_status.py). The first live GET
-/integrations with the dog connected and the LiDAR on must read both true, and after a dog power cycle unitree must read
+UNVERIFIED on this Mac: people() ran on a planted chat.db only (wtdd/test_status.py); the first live GET /people must
+show THE CASTLE's members (8) plus you and no handle. UNVERIFIED on the dog: unitree and lidar are read from a fake Body
+only (wtdd/test_status.py). The first live GET /integrations with the dog connected and the LiDAR on must read both true, and after a dog power cycle unitree must read
 false ("stale") before the next dog command reconnects.
 """
 from __future__ import annotations
 import json
+import sqlite3
 import time
+from pathlib import Path
 from typing import Any
 
 from . import config, ledger
-from .chat.housemates import HOUSEMATES, PRIVATE
+from .chat import db
+from .chat.housemates import PRIVATE
 from .config import ROOT
 from .decide import JEV_APP
 
 TAIL = 10000     # newest ledger rows read per call (about 90-110 ms on the 25 MB ledger); older evidence is not searched
 ALIVE_S = 10     # GET /chat's alive: the listener writes listen.json every poll
 JEV_TOOLS = ("decided", "reply.decided", "zone.decided", "blob.labelled")
+REPLY_TOOLS = ("reply.decided", "intruder.verdict", "chat.correction")   # rows that record a member answering the dog
+NAMES = "people-names.json"   # local first names, {"<handle>": "Teri"}; gitignored, never committed, never in ui/ (served as-is)
+# One sender's rows in one chat: messages in the last 24 h (no tapbacks) and the newest row. {who} picks the sender.
+AGG_SQL = """SELECT COALESCE(SUM(m.associated_message_type = 0 AND m.date > :since), 0) AS n24, MAX(m.date) AS last
+FROM message m JOIN chat_message_join cmj ON cmj.message_id = m.ROWID WHERE cmj.chat_id = :chat AND {who}"""
 
 
 def _at(t: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))   # the ledger's ts format: local time, no zone
 
 
+def _apple_at(ns: int | None) -> str | None:
+    return None if ns is None else _at(ns / 1e9 + 978307200)   # message.date: nanoseconds since 2001-01-01
+
+
+def _replies() -> dict[str, set]:
+    """args.from -> the message guids it replied to the dog with; only lines naming a REPLY_TOOLS tool are parsed."""
+    by: dict[str, set] = {}
+    if not ledger.LEDGER.exists():
+        return by
+    with ledger.LEDGER.open() as f:
+        for line in f:
+            if any(t in line for t in REPLY_TOOLS) and (r := json.loads(line)).get("tool") in REPLY_TOOLS:
+                a = r.get("args") or {}
+                by.setdefault(a.get("from"), set()).add(a.get("guid") or line)
+    return by
+
+
 def people() -> dict[str, Any]:
-    names = list(dict.fromkeys(HOUSEMATES.values()))
-    out: dict[str, Any] = {"group": config.maybe("WTDD_CHAT_NAME"), "people": [{"name": n} for n in names]}
-    if not out["group"]:
+    t0 = time.perf_counter()
+    f = ROOT / NAMES
+    try:
+        names = json.loads(f.read_text()) if f.exists() else {}
+    except ValueError as e:
+        raise ValueError(f"{NAMES} is not JSON: {e}") from None
+    if not isinstance(names, dict):
+        raise ValueError(f"{NAMES} is not an object of handle to first name")
+    guid = config.get("WTDD_CHAT_GUID")
+    since = int((time.time() - 86400 - 978307200) * 1e9)
+    try:
+        with db.connect() as c:
+            chat = c.execute("SELECT ROWID FROM chat WHERE guid = ?", (guid,)).fetchone()
+            if chat is None:
+                raise RuntimeError("the group WTDD_CHAT_GUID names is not in chat.db (python -m wtdd.chat chats lists the guids)")
+            agg = lambda who, **kw: c.execute(AGG_SQL.format(who=who), {"chat": chat[0], "since": since, **kw}).fetchone()  # noqa: E731
+            group, me = agg("1"), agg("m.is_from_me = 1")
+            members = [(h["id"], agg("m.is_from_me = 0 AND m.handle_id = :h", h=h["ROWID"])) for h in c.execute(
+                "SELECT h.ROWID, h.id FROM chat_handle_join chj JOIN handle h ON h.ROWID = chj.handle_id"
+                " WHERE chj.chat_id = ? ORDER BY h.ROWID", (chat[0],))]
+    except sqlite3.Error as e:
+        raise RuntimeError(f"chat.db unreadable ({str(db.CHAT_DB).replace(str(Path.home()), '~')}: {e}): "
+                           "give this terminal Full Disk Access and restart the API") from None
+    replies = _replies()
+    card = lambda i, label, handle, a: {"id": i, "label": label, "is_me": i == "me", "messages_24h": a["n24"],  # noqa: E731
+                                        "last_ts": _apple_at(a["last"]), "replies_to_dog": len(replies.get(handle, ()))}
+    out: dict[str, Any] = {
+        "group": {"name": config.maybe("WTDD_CHAT_NAME"), "members": len(members), "last_ts": _apple_at(group["last"])},
+        "people": [card("me", "you", "", me)] + [card(f"m{n}", PRIVATE.sub("a member", str(names.get(h) or f"member {n}")), h, a)
+                                                 for n, (h, a) in enumerate(members, 1)]}
+    if not out["group"]["name"]:
         out["group_why"] = "WTDD_CHAT_NAME is not set in .env: the gate posts only to the default test group (wtdd/chat/send.py TARGET_NAME)"
-    if not names:
-        out["why"] = "HOUSEMATES is empty: fill it locally (never committed)"
-        ledger.log("status", "WARN people: HOUSEMATES is empty", group=out["group"])
+    if not members:
+        out["why"] = "the group has no other participants in chat.db"
+    ledger.log("status", f"{'WARN ' if not members else ''}people members={len(members)}",
+               named=sum(1 for h, _ in members if names.get(h)), replies=sum(p["replies_to_dog"] for p in out["people"]),
+               ms=round((time.perf_counter() - t0) * 1000))
     return out
 
 

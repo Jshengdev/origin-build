@@ -94,7 +94,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift (a plain sentence); 500 `{error}` |
 | GET | `/record/shifts` | | `{shifts, current}` | 500 `{error}` |
 | GET | `/routines` | | `{routines: [{name, dots, stops, saved_at}], loaded}` | 500 `{error}` (a malformed `ui/routines.json`, named) |
-| GET | `/people` | | `{group, people, group_why?, why?}` | 500 `{error}` |
+| GET | `/people` | | `{group: {name, members, last_ts}, people: [{id, label, is_me, messages_24h, last_ts, replies_to_dog}], group_why?, why?}` | 500 `{error}` (chat.db unreadable or the group not in it, named) |
 | GET | `/integrations` | | `{checked_at, integrations}` | 500 `{error}` |
 | GET | `/images` | `shift` (default: the run in force), `trigger`, `kind` (`look`, `ask`, `scout` or `blob`) | `{shift, images, n, why?}` | 404 `{error}` unknown shift, 400 `{error}` unknown kind (plain sentences); 500 `{error}` |
 | GET | `/sessions` | | `[{shift_id, start, end, rows, stops, flags, signed, signed_by, stub_rows, in_force}]` | 500 `{error}` |
@@ -129,8 +129,17 @@ What the keys hold:
 - **`/evals`**: `{}` with no `evals.json`. Otherwise `{written, rows: [{scenario, trial, grade, seconds, why, detail, ran}]}`.
 - **`/watch`**: `{intruder}` alone with no `watch.json`. Otherwise the detector's newest window plus `age_ms` and `intruder`.
 - **`/shift`**: `source` is `file`, `WTDD_SHIFT` or `date`.
-- **`/people`** (`wtdd/status.py`): `group` is `WTDD_CHAT_NAME`, or null with `group_why`. `people` is `[{name}]`, the
-  distinct first names in `HOUSEMATES` (`wtdd/chat/housemates.py`), never a handle; `[]` with `why` when it is empty.
+- **`/people`** (`wtdd/status.py`): the group chat and one card per person in it, read-only from chat.db (the chat
+  whose guid is `WTDD_CHAT_GUID`) and the ledger. `group` is `{name, members, last_ts}`: `name` is `WTDD_CHAT_NAME`
+  (null with `group_why` when unset), `members` the participants (`chat_handle_join`, not counting you), `last_ts` the
+  group's newest row. `people` is `you` first (`id` `me`, `is_me` true: this Mac's from-me rows), then each participant
+  in handle order (`id` `m1`, `m2`, ...). `label` is `you`, else the first name in the local, gitignored
+  `people-names.json` at the repo root, never in the served `ui/` (`{"<handle>": "Teri"}`, only people who agreed to appear), else `member N`. `messages_24h`:
+  their messages in the group in the last 24 h (tapbacks dropped); `last_ts`: their newest row there (local time, the
+  ledger's format), or null; `replies_to_dog`: their distinct replies (by message guid) in the ledger's `reply.decided`,
+  `intruder.verdict` and `chat.correction` rows. A handle is never in the body, not even as an id. Not macOS Contacts,
+  not `HOUSEMATES` (its allowlist is unchanged). chat.db unreadable (no Full Disk Access, missing) is a 500 naming it,
+  never `[]`; no participants is `why`.
 - **`/integrations`** (`wtdd/status.py`): `integrations` is `[{name, ok, detail, as_of, key_set?}]`, one each, in this
   order: `unitree`, `lidar`, `hue`, `tuya`, `imessage`, `jev`, `openrouter`, `ledger`. `ok` is true, false (failed or
   stale, `detail` says why) or null (unknown: never connected, switched off, no row, a stub row). `as_of` is when the
