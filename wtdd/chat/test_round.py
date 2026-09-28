@@ -4,7 +4,8 @@
 wake_show and field.walk run for real against a fake API: requests.get / requests.post are patched with Api below
 (POST /dog/follow, /dog/resume, /dog/stop; GET /dog/state plays a script of follower states, and a script entry that
 is an exception is raised as that read's failure, a callable is called first). Light writes are recorded, never sent
-(field._write); the look is stubbed (dog_say.look_and_see); posts are collected by the poster. Offline like test_chat:
+(field._write); the look is stubbed (dog_say.look_and_see); posts are collected by the poster, or go through the real
+chat.__main__.post with the send stubbed (sends(): chat.gate, chat.claim, chat.post rows, nothing sent). Offline like test_chat:
 WTDD_LEDGER / WTDD_MEMORY point at scratch files before the package is imported; field.MAP (a scratch copy of
 wtdd/fixtures/map_route.json, its first 11 dots), FIELD and STOP, and the listener's PENDING, STATE and HEARTBEAT are patched to scratch
 paths, so no check touches the checkout's map, its live walk file, a light, the dog or the chat. JEV_API_KEY and the
@@ -29,7 +30,7 @@ for _k in ("JEV_API_KEY", "JEV_MODEL", "JEV_LIVE", "WTDD_REPLY_THRESHOLD", "WTDD
 
 import requests  # noqa: E402
 from wtdd import config, field, ledger  # noqa: E402
-from wtdd.chat import listen as L  # noqa: E402
+from wtdd.chat import __main__ as cli, listen as L, send  # noqa: E402
 L.RESET = _TMP / "chat.reset"   # POST /chat/reset writes <repo>/chat.reset: no listener here reads or deletes the checkout's flag
 
 MAP = _TMP / "map.json"
@@ -49,6 +50,24 @@ def state(i: int, p=None, **follow) -> dict:
 def msg(text: str, guid: str = "W1", rowid: int = 1, sender: str = "+15550001111") -> dict:
     return {"rowid": rowid, "guid": guid, "text": text, "is_from_me": 0, "sender": sender,
             "ts_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), "attachments": [], "chat": GROUP}
+
+
+def sends(test: unittest.TestCase, *fail: str) -> None:
+    """The mouth stubbed under the real chat.__main__.post (its gate, claim and one chat.post row per send): a text
+    starting with one of `fail` raises as an unconfirmed send does, once each (the next send of those words goes through).
+    Nothing reaches osascript or chat.db."""
+    left = list(fail)
+
+    def _send(text: str | None) -> dict:
+        hit = next((f for f in left if (text or "").startswith(f)), None)
+        if hit is not None:
+            left.remove(hit)
+            raise RuntimeError("unconfirmed send: no from-me row above 0 within 10s (not retried)")
+        now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        return {"guid": f"P-{time.time_ns()}", "rowid": 1, "ts": now, "caption": {"guid": f"C-{time.time_ns()}", "ts": now}}
+    for p in (mock.patch.object(send, "gate", return_value="wtdd test"), mock.patch.object(send, "send_text", lambda g, t: _send(t)),
+              mock.patch.object(send, "send_file", lambda g, f, t=None: _send(t))):
+        test.enterContext(p)
 
 
 class Api:
@@ -118,13 +137,56 @@ class Round(unittest.TestCase):
         m["stops"] = stops
         MAP.write_text(json.dumps(m))
 
-    def round(self, states: list, **api) -> None:
+    def round(self, states: list, wake: str = "W1", **api) -> None:
         self.api = Api(states, self.events, **api)
         with mock.patch.object(requests, "get", self.api.get), mock.patch.object(requests, "post", self.api.post):
-            self.l.wake_show(msg("what the dog doin"))
+            self.l.wake_show(msg("what the dog doin", wake))
 
     def rows(self, tool: str) -> list[dict]:
         return [r for r in ledger.rows()[self.n0:] if r["tool"] == tool]
+
+    # the e2e audit (2026-09-27): a post that fails inside a hold ("ok, standing down") raised into walk()'s on_stop and
+    # halted the round: the dog stopped at the stop and the group read "dog done (couldn't walk the path: ...)"
+
+    def test_a_failed_post_inside_a_hold_never_halts_the_walk(self):
+        sends(self, "ok, standing down")
+        self.l.post = cli.post
+        self._stops([5])
+        replies = [lambda: [msg("thats just teri", "R1", 2)]]   # stamped when read: the clock-fault check is to the second
+        for p in (mock.patch.object(L.db, "max_rowid", return_value=0), mock.patch.object(self.l, "read", lambda: replies.pop(0)() if replies else []),
+                  mock.patch.dict(SEEN, decision={"label": "box", "p": 0.4, "needs_person": True, "model": "stub", "action": "ask"})):
+            self.enterContext(p)
+        self.round([state(3), state(5, stopped_at=5), state(len(PATH) - 1, active=False, done=True)])
+        posts = [(r["args"]["trigger"], r["ok"], r["args"]["text"]) for r in self.rows("chat.post")]
+        self.assertIn(("ok:R1", False, "ok, standing down"), posts, "the failed post is its FAILED chat.post row")
+        self.assertEqual(posts[-1], ("done:W1", True, "dog done"), "the round did not finish its walk")
+        self.assertNotIn(("POST", "/dog/stop"), self.events, "the dog was halted at the stop")
+        self.assertIn(("POST", "/dog/resume"), self.events)
+        self.assertEqual([r["state_after"]["verdict"] for r in self.rows("intruder.verdict")], ["known"])
+        self.assertEqual([r["ok"] for r in self.rows("listen.hold")], [False], "the hold that went on past it is one failed row")
+
+    # the same failure outside the hold: the stop's own post ("not sure: ..." for an ask, or the photo and its "couldn't
+    # look") raised out of look_and_say into walk()'s on_stop and halted the round the same way
+
+    def _failed_stop_post(self, wake: str, fail: tuple, decision: dict, failed: str) -> None:
+        """Its own wake guid: posts through the real chat post claim their triggers for good (never twice)."""
+        sends(self, *fail)
+        self.l.post = cli.post
+        self._stops([5])
+        self.enterContext(mock.patch.dict(SEEN, decision=decision))
+        self.round([state(3), state(5, stopped_at=5), state(len(PATH) - 1, active=False, done=True)], wake=wake)
+        posts = [(r["args"]["trigger"], r["ok"], r["args"]["text"]) for r in self.rows("chat.post")]
+        self.assertIn((failed, False), [p[:2] for p in posts], "the failed post is its FAILED chat.post row")
+        self.assertEqual(posts[-1], (f"done:{wake}", True, "dog done"), "the round did not finish its walk")
+        self.assertNotIn(("POST", "/dog/stop"), self.events, "the dog was halted at the stop")
+        self.assertIn(("POST", "/dog/resume"), self.events)
+        self.assertEqual([r["ok"] for r in self.rows("listen.stop")], [False], "the stop that went on past it is one failed row")
+
+    def test_a_failed_ask_at_a_stop_never_halts_the_walk(self):
+        self._failed_stop_post("WA", ("not sure",), {"label": "box", "p": 0.4, "needs_person": False, "model": "stub", "action": "ask"}, "decide:WA:5")
+
+    def test_a_failed_look_post_at_a_stop_never_halts_the_walk(self):
+        self._failed_stop_post("WL", ("a chair", "couldn't look"), SEEN["decision"], "say-fail:WL:5")
 
     # ask 1 = lights 1: the walk fails mid-round (one slow /dog/state read), the follower is still driving
 
@@ -274,6 +336,52 @@ class Wake(unittest.TestCase):
 
 
 
+class Survives(unittest.TestCase):
+    """The e2e audit, dry (2026-09-27): run() called poll() with no guard, so a post that failed (osascript rc=1, an
+    unconfirmed send) raised out of it and ended the listener process: here "dog done". Posts go through the real
+    chat.__main__.post with send stubbed (sends()); the walk is stubbed (no stops: the end look)."""
+
+    def test_a_failed_dog_done_never_ends_the_listener_and_the_next_wake_starts_a_round(self):
+        sends(self, "dog done")
+        n0 = len(ledger.rows())
+        with mock.patch.object(L.db, "max_rowid", return_value=100):
+            l = L.Listener(GROUP, cli.post, listen_s=60)
+        batches = [[msg("what the dog doin", "S1", 101)], [msg("what the dog doin", "S2", 102)], [msg("what the dog doin", "S3", 104)]]
+
+        class Over(BaseException):   # not an Exception: whatever catches a failed poll must let this (and Ctrl-C) through
+            pass
+
+        def read() -> list[dict]:
+            if not batches:
+                raise Over
+            return batches.pop(0)
+
+        for p in (mock.patch.object(L.db, "max_rowid", return_value=103),   # chat.db as S1's round ends: S2 was typed during it
+                  mock.patch.object(l, "read", read), mock.patch.object(L.time, "sleep"),
+                  mock.patch.dict(os.environ, {"WTDD_WAKE_SHOW": "1", "WTDD_ROUND": "entity"}),
+                  mock.patch.object(L, "HEARTBEAT", _TMP / "listen-survives.json"), mock.patch.object(L, "PENDING", _TMP / "pending-survives.json"),
+                  mock.patch.object(L, "STATE", _TMP / "state-survives.json"), mock.patch.object(field, "STOP", _TMP / "field.stop"),
+                  mock.patch.object(field, "walk", lambda **kw: {"seconds": 0.0, "writes": 0, "errors": 0, "rooms": [], "stops": []}),
+                  mock.patch("wtdd.tools.dog_say.look_and_see", return_value=dict(SEEN)),
+                  mock.patch("wtdd.tools.call", return_value={"file": "/tmp/fire.jpg"})):
+            self.enterContext(p)
+        try:
+            l.run(every=5.0)
+        except Over:
+            pass
+        except Exception as e:  # noqa: BLE001
+            self.fail(f"a failed post ended the listener: {type(e).__name__}: {e}")
+        rows = ledger.rows()[n0:]
+        self.assertEqual([(r["args"]["trigger"], r["ok"]) for r in rows if r["tool"] == "chat.post"],
+                         [("fire:S1", True), ("doin:S1", True), ("say:S1", True), ("done:S1", False),
+                          ("fire:S3", True), ("doin:S3", True), ("say:S3", True), ("done:S3", True)],
+                         "S2 was typed during S1's round and starts nothing; S3, typed after it, starts the next")
+        poll = [r for r in rows if r["tool"] == "listen.poll"]
+        self.assertEqual([r["ok"] for r in poll], [False], "the failed poll is one failed ledger row")
+        self.assertIn("unconfirmed send", poll[0]["response_or_error"])
+
+
+
 class Reply(unittest.TestCase):
     """The group as its own on-call chat (S10, WTDD_ON_CALL_GUID = the group), a who_dis question open in it, the
     replies read by the DEMO_CACHE stub (no JEV_API_KEY); tools.call patched, so no alarm light is written."""
@@ -380,7 +488,7 @@ class Heartbeat(unittest.TestCase):
             l = L.Listener(GROUP, lambda *a: None, listen_s=60)
         seen: list[dict] = []
 
-        class Over(Exception):
+        class Over(BaseException):   # run() outlives an Exception now: only this ends it
             pass
 
         def a_round(m: dict) -> None:   # the walk, then a question opened and its hold, all inside one poll()
