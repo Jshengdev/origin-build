@@ -16,6 +16,8 @@
  * listen.py's look_and_say reads at that stop (a person in frame: "who dis?!" and the round holds for the answer). It
  * saves at once through the same POST /map with the served map's _version (the 409 guard), keeps the stop's other keys
  * (look, say), shows the served state, and a refused save is the page's FAILED line. Not while an edit is unsaved.
+ * The Stops card, Save as routine and This run's looks are shared with Routines (components/live/stops-card.tsx,
+ * save-as-routine.tsx, looks-album.tsx; Johnny, 19:4x: parity). The map is a 2D drawing (mode plan2d, 19:5x).
  */
 import { useState } from "react";
 import { Input } from "@/components/ui/input";   // stock shadcn
@@ -27,13 +29,14 @@ import { useLiveMap, zoneName } from "@/components/twin/use-live-map";
 import { post, redact, usePoll, type MapJson, type Scout, type XY } from "@/lib/data/api";
 import { Results, useStop } from "@/components/live/stop";
 import { useWalkRoute, WalkProgress } from "@/components/live/walk-route";
+import { StopsCard } from "@/components/live/stops-card";
+import { SaveAsRoutine } from "@/components/live/save-as-routine";
+import { LooksAlbum } from "@/components/live/looks-album";
 
 type Tool = "dots" | "stops" | "zone";
 /** The chosen tool in ink, the rest on surface: stock "on" is accent, 1.2:1 on surface and the same as hover. */
 const TOOL_ON = "px-3 text-[13px] data-[state=on]:bg-primary data-[state=on]:text-primary-foreground";
 type Result = { what: string; ok: boolean; error?: string } | null;
-/** A stop's look in today's remote's words (ui/index.html's stop label). */
-const LOOK: Record<string, string> = { tilt: "nod", level: "level", sit: "look up" };
 
 const HINT: Record<Tool | "none", string> = {
   dots: "Tap the floor to add a dot at the end. Tap a dot to take it out.",
@@ -107,32 +110,8 @@ export function PathsLive() {
     setBusy(false);
     setZoneErr((e) => ({ ...e, [name]: r.ok ? "" : `dismiss ${r.error}` }));
   };
-  const askHere = async (i: number, n: number, on: boolean) => {   // saved at once, against the map as served
-    if (!served) return;
-    const k = String(i), actions = { ...(served.actions ?? {}) }, a = { ...(actions[k] ?? {}) };
-    if (on) actions[k] = { look: "tilt", ...a, ask: true };
-    else { delete a.ask; if (Object.keys(a).length) actions[k] = a; else delete actions[k]; }
-    const what = on ? `Ask here · stop ${n}` : `No ask · stop ${n}`;
-    setBusy(true);
-    const r = await post("/map", { ...served, actions });
-    setBusy(false);
-    setResult(r.ok ? { what, ok: true } : { what, ok: false, error: r.error });
-    if (r.ok) setSaved({ ...served, actions, _version: r._version as number | undefined });
-  };
   const walkRoute = useWalkRoute(field.data, setResult, setSaved);
   const walk = () => walkRoute.start("Walk the route", served);
-  // a stop's action, saved at once against the map as served (like Ask here): "Look up & down" and "Post to the group"
-  const setAction = async (i: number, what: string, patch: { look?: string; say?: boolean }) => {
-    if (!served) return;
-    const k = String(i), actions = { ...(served.actions ?? {}) };
-    actions[k] = { look: "tilt", ...(actions[k] ?? {}), ...patch };
-    setBusy(true);
-    const r = await post("/map", { ...served, actions });
-    setBusy(false);
-    setResult(r.ok ? { what, ok: true } : { what, ok: false, error: r.error });
-    if (r.ok) setSaved({ ...served, actions, _version: r._version as number | undefined });
-  };
-
   const d = dog.data;
   return (
     <div className="flex flex-col gap-4">
@@ -144,7 +123,7 @@ export function PathsLive() {
           {draft && <ActionButton intent="quiet" disabled={busy} onClick={() => { setDraft(null); setCorners([]); setTool(null); }}>Discard</ActionButton>}
           <ActionButton intent="secondary" disabled={busy || !draft} onClick={() => save(draft, "Save")}>Save</ActionButton>
           {stopButton}
-          <span className="text-[12px] text-muted-foreground">looks and photographs at each stop</span>
+          <span className="text-[12px] text-muted-foreground">looks and photographs at each stop · Stop between stops, not mid-look</span>
           <ActionButton intent="primary" disabled={busy || walkRoute.starting || !!draft || !d?.calibrated || walking || dots.length < 2}
             title={draft ? "Save first" : dog.error ? "The dog's state did not load" : !d?.calibrated ? "Place or drag the dog on Overview's map first" : dots.length < 2 ? "Draw at least two dots" : walking ? "Walking" : "POST /tools/walk_path: the route, a look at each stop, the lights following"}
             onClick={walk}>
@@ -190,35 +169,10 @@ export function PathsLive() {
             </div>
           </Module>
 
-          <Module title="Stops" size="auto" error={map.error && !draft ? `FAILED ${map.error}` : undefined} loading={!map.data && !map.error}>
-            {(served?.stops ?? []).length === 0 ? (
-              <p className="text-[15px] text-muted-foreground">No stops saved. Pick Stops, tap a dot, then save.</p>
-            ) : (
-              <ul className="flex flex-col">
-                {(served?.stops ?? []).map((i, n) => {
-                  const entry = served?.actions?.[String(i)], a = entry ?? {};
-                  const look = (a.look ?? "tilt") === "tilt", say = a.say === true;   // no action saved: looks up and down, no post (the walk saves that first)
-                  return (
-                    <li key={i} className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0 first:pt-0">
-                      <span className="text-[13px] font-medium">Stop {n + 1}</span>
-                      <span className="font-mono text-[12px] text-muted-foreground">dot {i + 1} · {entry ? `${LOOK[a.look ?? "tilt"] ?? a.look}${say ? " + post" : ", no post"}` : "default: look up & down, no post"}</span>
-                      <span className="ml-auto flex items-center gap-1.5">
-                      <ActionButton intent={look ? "primary" : "secondary"} size="sm" aria-pressed={look} disabled={busy || !!draft}
-                        title={draft ? "Save or discard the edit first" : look ? "At this stop the dog looks down at the floor, then up at the room, and photographs. Tap for one level look instead." : "At this stop the dog takes one level look. Tap to look up and down."}
-                        onClick={() => setAction(i, look ? `Level look · stop ${n + 1}` : `Look up & down · stop ${n + 1}`, { look: look ? "level" : "tilt" })}>Look up & down</ActionButton>
-                      <ActionButton intent={say ? "primary" : "secondary"} size="sm" aria-pressed={say} disabled={busy || !!draft}
-                        title={draft ? "Save or discard the edit first" : say ? "The photo and a sentence go to the group chat. Tap to keep it on the page only." : "The photo stays on the page (Images). Tap to also post it to the group chat."}
-                        onClick={() => setAction(i, say ? `No post · stop ${n + 1}` : `Post to the group · stop ${n + 1}`, { say: !say })}>Post to the group</ActionButton>
-                      <ActionButton intent={a.ask ? "primary" : "secondary"} size="sm" aria-pressed={!!a.ask} disabled={busy || !!draft}
-                        title={draft ? "Save or discard the edit first" : a.ask ? "If the dog sees a person here it asks the on-call person \"who dis?!\" and waits. Tap to stop asking here." : "The intruder check: if the dog sees a person here, it asks who it is and waits for the answer"}
-                        onClick={() => askHere(i, n + 1, !a.ask)}>{a.ask ? "Asks here" : "Ask here"}</ActionButton>
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Module>
+          <StopsCard served={served} locked={draft ? "Save or discard the edit first" : undefined}
+            error={map.error && !draft ? `FAILED ${map.error}` : undefined} loading={!map.data && !map.error}
+            empty="No stops saved. Pick Stops, tap a dot, then save." onResult={setResult} onSaved={setSaved} />
+          <SaveAsRoutine served={served} locked={draft ? "Save the edit first: a routine is the saved route" : undefined} onResult={setResult} />
 
           <Module title="Zones" size="auto" error={map.error && !draft ? `FAILED ${map.error}` : undefined} loading={!map.data && !map.error}
             actions={nogo.length > 0 ? <ActionButton intent="secondary" size="sm" disabled={busy} onClick={clearNogo}>Clear no-go</ActionButton> : undefined}>
@@ -261,6 +215,8 @@ export function PathsLive() {
           </Module>
         </div>
       </div>
+
+      <LooksAlbum />
     </div>
   );
 }
