@@ -16,7 +16,8 @@ works, from evidence already on this Mac. Reads only: no ledger row, no network 
     imessage    <repo>/listen.json, the heartbeat GET /chat reads: true under ALIVE_S old, false older (the listener
                 stopped), null with no file (it has not run here); armed and dry in the detail, never armed_by.
     jev         key_set: JEV_API_KEY set, a bool only; and the newest Jev row (decided, reply.decided, zone.decided,
-                blob.labelled).
+                blob.labelled) with app openrouter or stub: a row a Jev call wrote. A failed "name blobs" press that
+                never reached Jev (dog off: app unitree) is not one.
     openrouter  key_set: OPENROUTER_API_KEY set, a bool only; and the newest llm.generate row.
     ledger      the row count (newlines: append() writes one per row) and the newest row's ts; null with no rows (a WARN).
   A row from the stub (source or app "stub", DEMO_CACHE) is never a live ok: its integration is null and says stub. A
@@ -37,6 +38,7 @@ from typing import Any
 from . import config, ledger
 from .chat.housemates import HOUSEMATES
 from .config import ROOT
+from .decide import JEV_APP
 
 TAIL = 10000     # newest ledger rows read per call (about 60 ms on a 25 MB ledger); older evidence is not searched
 ALIVE_S = 10     # GET /chat's alive: the listener writes listen.json every poll
@@ -145,7 +147,8 @@ def integrations(session) -> dict[str, Any]:
 
     checks = {"unitree": lambda: _unitree(session), "lidar": lambda: _lidar(session), "hue": lights("hue"), "tuya": lights("tuya"),
               "imessage": _imessage,
-              "jev": lambda: _keyed("JEV_API_KEY", newest(lambda r: r.get("tool") in JEV_TOOLS), "Jev decision",
+              "jev": lambda: _keyed("JEV_API_KEY", newest(lambda r: r.get("tool") in JEV_TOOLS and r.get("app") in (JEV_APP, "stub")),
+                                    "Jev decision",
                                     "every decision runs on the stub (DEMO_CACHE)"),
               "openrouter": lambda: _keyed("OPENROUTER_API_KEY", newest(lambda r: r.get("tool") == "llm.generate"), "llm.generate",
                                            "every model call fails before it is sent"),
