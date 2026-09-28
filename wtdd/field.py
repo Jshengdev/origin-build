@@ -17,7 +17,9 @@ on the LAN, a Hue lamp through the cloud about 0.8 s), only when the level moved
 crossed zero, and is simply off below `floor`. The loop polls at HZ. Order: every light to 0 and wait for all of it (the
 room starts dark and the first latency of each light is measured), the walk in real time at speed_px_s, then every
 light to 0 again and wait. One field.walk ledger row with seconds, writes, errors, rooms crossed and the mean latency per
-light; every write is its own row, a failed write is counted and logged, never retried. While it runs, <repo>/field.json
+light; every write is its own row, a failed write is counted and logged, never retried. The end dark runs in a finally:
+a walk that raises (a failed /dog/state read, an on_stop that raises) or is interrupted (Ctrl-C) still drains its in-flight
+writes, puts every light to 0 and shuts its pool down before the error goes on. While it runs, <repo>/field.json
 holds the entity's position, room, levels and current stop (atomic writes at HZ, removed at the end); the API serves it
 at GET /field and the remote draws the dot from it, whichever process runs the walk; a field.json younger than BUSY_S
 means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved. Stops: map.json `stops` is a list
@@ -269,17 +271,17 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
             elif source == "entity" and s >= total:
                 break
             time.sleep(1 / HZ)
-        finally:
+        finally:                                         # a failed read or a Ctrl-C too: never leave a light lit
           _publish(None)
-        for lid, fut in list(inflight.items()):
-            settle(fut, lid)
-        for L in lights:                                 # ends dark, and wait for it
-            if not dry:
-                writes += 1
-                inflight[L["id"]] = pool.submit(_write, L, 0)
-        for lid, fut in inflight.items():
-            settle(fut, lid)
-        pool.shutdown(wait=True)
+          for lid, fut in list(inflight.items()):
+              settle(fut, lid)
+          for L in lights:                               # ends dark, and wait for it
+              if not dry:
+                  writes += 1
+                  inflight[L["id"]] = pool.submit(_write, L, 0)
+          for lid, fut in inflight.items():
+              settle(fut, lid)
+          pool.shutdown(wait=True)
         latency = {_label(L): round(1000 * sum(lat[L["id"]]) / len(lat[L["id"]])) if lat[L["id"]] else None for L in lights}
         out = {"seconds": round(time.monotonic() - t0, 1), "dark_ms": dark_ms, "writes": writes, "errors": errors,
                "rooms": rooms_seen, "stops": stops_done, "latency_ms": latency, "lights": [_label(L) for L in lights],
