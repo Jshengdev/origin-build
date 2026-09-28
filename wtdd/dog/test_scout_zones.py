@@ -12,21 +12,20 @@ FOV_DEG 90, make_scout_fixture's page bodies, wtdd/fixtures/evals/make_scout.py'
 real dog, a detector or a model. Expected cells are computed from the fixtures' declared world with the bound stated
 below, never from the module's own output; map pixels go through occupancy.to_map_px (01's proof against nav.to_map).
 
-The bound (the head's, roadmap 19 "Routing"): a blob is the 8-connected cells seen threshold+ times, flood-filled from
-07's hit cell, keeping a cell only when (1) its bearing from the dog lies inside the box's angular extent, the two edge
-bearings objects.bearing gives for the box's left and right columns, each widened by the half-cell angle
-atan(RES / 2 / d) at the cell's distance d (a cell is in when part of it can be; the lattice point alone would drop the
-edge cells on floating-point noise), and (2) its distance d from the dog is in [hit.dist_m - RES, hit.dist_m + DEPTH_M].
-Unbounded, the fill takes the whole connected wall (WALL_A: 108 cells). The polygon is the monotone-chain hull of the
-cells' corners (+-RES/2) in map px, padded PAD_PX on every side (the corners' hull grown by a PAD_PX square), so every
+Updated 2026-09-27 20:3x for the strict zones (wtdd/dog/test_strict_zones.py holds the new rules' own RED tests): a
+zone's cells are now the LIT CLUSTER (the newest window's live points within HAZARD_R_M of 07's pin, 8-connected;
+Base feeds the fixture's counted cells as that live view), not the cone-bounded flood fill over the accumulated grid,
+so class Blob and the dog-moved-cone tests are gone; Base.feed feeds HAZARD_SEEN_N windows 1 s apart (the repeat gate)
+with a confirm-model double saying yes, and raises the backpack's conf to 0.65 so both things still reach Jev. The
+polygon is the monotone-chain hull of the cells' corners (+-RES/2) in map px, padded PAD_PX on every side, so every
 cell centre sits at least PAD_PX inside it and 04's hit() (samples every STEP_PX = 10 px) cannot step over a
 one-cell-thin zone. The pad is a stated rule on points, drawn dashed; it is not geometry a model drew.
 
 The contract under test (wtdd/dog/scout_zones.py):
-  DEPTH_M = 1.0 · PAD_PX = 15 · SCOUT_LABELS = ["table", "sharp_object", "blocked_way", "not_a_hazard"] (no "opening":
+  HAZARD_P_MIN 0.6 · HAZARD_SEEN_N 4 · HAZARD_SPAN_S 3.0 · CONFIRM_P_MIN 0.8 · PAD_PX = 15 · SCOUT_LABELS = ["table", "sharp_object", "blocked_way", "not_a_hazard"] (no "opening":
   a hole has no COCO class and the grid's band has no floor) · JEV_URL · CELL_RGB (the replay PNG's cell colour)
   PROPOSAL_KEYS = id, object_id, kind, label, p, app, cells, cells_px, poly, thumb, photo, dist_m, area_m2, ts
-  blob(grid, pose, box, hit, frame_w, fov_deg, threshold=occupancy.THRESHOLD) -> [[x_m, y_m], ...] lattice points
+  lit(live, hit, r_m, grid, connected=True) -> ([[x_m, y_m], ...] lattice points, points in them)
   polygon(cells, cal, resolution) -> [[px, py], ...] ints, >= 3 points; no cells is a ValueError
   decide_stub(q) / decide_live(q) -> {label, p, probabilities, model, raw, app, cached}; q = {kind, conf, state, labels}
       stub (# DEMO_CACHE): dining table, bench, chair -> table; knife, scissors -> sharp_object; anything else ->
@@ -120,7 +119,6 @@ THR = 3
 PY = sys.executable
 LABELS = ["table", "sharp_object", "blocked_way", "not_a_hazard"]
 EVALS = ROOT / "wtdd" / "fixtures" / "evals"
-WALL_A_CELLS = (fx.WALL_A["y"][1] - fx.WALL_A["y"][0]) * (fx.WALL_A["x"][1] - fx.WALL_A["x"][0])   # 108: the whole wall
 NAME = "Sam Stand-in"
 _SCRATCH = Path(tempfile.mkdtemp(prefix="wtdd-scout-test-"))
 _patches: list = []
@@ -159,26 +157,6 @@ def frame() -> dict:
     d = json.loads(ofx.WATCH_JSON.read_text())
     d["file"] = str(ofx.FRAME)
     return d
-
-
-def edge(u: float) -> float:
-    return objects.bearing([u, 0, u, 0], W, FOV)
-
-
-def in_bound(cell, xyxy, hit, pose=POSE, tol: float = 0.0) -> bool:
-    """The stated bound, computed here from the pose and the box, independent of the module."""
-    x, y = cell
-    px, py = pose["position"]
-    d = math.hypot(x - px, y - py)
-    a = -((math.atan2(y - py, x - px) - pose["yaw"] + math.pi) % (2 * math.pi) - math.pi)   # camera-right positive
-    eps = math.atan(RES / 2 / d)
-    return (edge(xyxy[0]) - eps - tol <= a <= edge(xyxy[2]) + eps + tol
-            and hit["dist_m"] - RES - tol <= d <= hit["dist_m"] + scout_zones.DEPTH_M + tol)
-
-
-def wall_a_expected(xyxy, hit) -> set:
-    x = fx.WALL_A["x"][0] * RES
-    return {(round(x, 3), round(k * RES, 3)) for k in range(*fx.WALL_A["y"]) if in_bound((x, k * RES), xyxy, hit)}
 
 
 def as_set(cells) -> set:
@@ -238,7 +216,8 @@ def jev_reply(body: dict, choice: str, probabilities: dict, confidence: float = 
 
 class Constants(unittest.TestCase):
     def test_the_heads_bound_pad_and_labels(self):
-        self.assertEqual(scout_zones.DEPTH_M, 1.0)
+        self.assertEqual((scout_zones.HAZARD_P_MIN, scout_zones.HAZARD_SEEN_N, scout_zones.HAZARD_SPAN_S, scout_zones.CONFIRM_P_MIN),
+                         (0.6, 4, 3.0, 0.8))
         self.assertEqual(scout_zones.PAD_PX, 15)
         self.assertEqual(list(scout_zones.SCOUT_LABELS), LABELS)
         self.assertNotIn("opening", scout_zones.SCOUT_LABELS, "a hole is never proposed from a photo")
@@ -247,59 +226,13 @@ class Constants(unittest.TestCase):
         self.assertGreater(scout_zones.PAD_PX, nogo.STEP_PX)
 
 
-class Blob(unittest.TestCase):
-    def test_the_chair_blob_is_its_cone_on_the_wall_not_the_whole_wall(self):
-        g = accumulated()
-        hit = chair_hit(g)
-        self.assertEqual(hit["xy"], [2.0, 0.0])
-        cells = scout_zones.blob(g, POSE, CHAIR["xyxy"], hit, W, FOV, threshold=THR)
-        self.assertEqual(as_set(cells), wall_a_expected(CHAIR["xyxy"], hit))
-        self.assertEqual(len(cells), 11, "y -0.25..0.25 m: the chair's cone on WALL_A")
-        self.assertLess(len(cells), WALL_A_CELLS, "unbounded, the fill takes all 108 cells of the wall")
-
-    def test_the_backpack_blob_on_an_oblique_bearing(self):
-        g = accumulated()
-        hit = objects.nearest_blob(g, POSE["position"], POSE["yaw"] - objects.bearing(BACKPACK["xyxy"], W, FOV), THR)
-        self.assertEqual(hit["xy"], [2.0, -1.6])
-        cells = scout_zones.blob(g, POSE, BACKPACK["xyxy"], hit, W, FOV, threshold=THR)
-        self.assertEqual(as_set(cells), wall_a_expected(BACKPACK["xyxy"], hit))
-        self.assertEqual(len(cells), 7, "y -1.55..-1.85 m: nearer cells in the cone are before hit - RES")
-
-    def test_no_cell_is_outside_the_bound_or_below_the_threshold(self):
-        g = accumulated()
-        for box in (CHAIR, BACKPACK):
-            hit = objects.nearest_blob(g, POSE["position"], POSE["yaw"] - objects.bearing(box["xyxy"], W, FOV), THR)
-            for c in scout_zones.blob(g, POSE, box["xyxy"], hit, W, FOV, threshold=THR):
-                self.assertTrue(in_bound(c, box["xyxy"], hit, tol=1e-6), f"{box['name']}: {c} is outside the cone or depth")
-                self.assertGreaterEqual(g.cell(*c), THR, f"{c} was not seen {THR}+ times")
-
-    def test_depth_stops_the_fill_one_metre_behind_the_hit(self):
-        run = [[round(2.0 + i * RES, 6), 0.0] for i in range(41)]   # a line running away from the dog, 2.0..4.0 m
-        g = hand_grid(run)
-        hit = chair_hit(g)
-        self.assertEqual(hit["xy"], [2.0, 0.0])
-        cells = as_set(scout_zones.blob(g, POSE, CHAIR["xyxy"], hit, W, FOV, threshold=THR))
-        self.assertIn((2.0, 0.0), cells)
-        self.assertIn((2.95, 0.0), cells)
-        self.assertFalse({c for c in cells if c[0] >= 3.05}, "past hit + DEPTH_M the fill stops")
-        self.assertLessEqual(max(math.hypot(*c) for c in cells), 3.0 + 1e-6)
-
-    def test_the_fill_is_8_connected_from_the_hit_and_counts_only_walls(self):
-        line = [[2.0, round(k * RES, 6)] for k in range(-2, 3)]   # y -0.10..0.10 at x 2.0
-        corner = [[2.05, 0.15]]                                   # touches (2.0, 0.10) by a corner only
-        apart = [[2.5, round(k * RES, 6)] for k in range(-2, 3)]  # inside the cone and the depth, but not connected
-        g = hand_grid(line, corner, apart)
-        g.update(np.array([[2.0, -0.15]]))                        # adjacent to the line, seen once: not a wall
-        cells = as_set(scout_zones.blob(g, POSE, CHAIR["xyxy"], chair_hit(g), W, FOV, threshold=THR))
-        self.assertEqual(cells, as_set(line) | {(2.05, 0.15)})
-
-
 class Polygon(unittest.TestCase):
     def blobs(self):
         g = accumulated()
         for box in (CHAIR, BACKPACK):
             hit = objects.nearest_blob(g, POSE["position"], POSE["yaw"] - objects.bearing(box["xyxy"], W, FOV), THR)
-            yield box["name"], scout_zones.blob(g, POSE, box["xyxy"], hit, W, FOV, threshold=THR)
+            j, i = np.nonzero(g.counts >= THR)
+            yield box["name"], scout_zones.lit(np.column_stack([g.origin[0] + i * RES, g.origin[1] + j * RES]), hit["xy"], scout_zones.HAZARD_R_M, g)[0]
 
     def test_the_hull_contains_every_cell_centre_under_field_inside(self):
         for name, cells in self.blobs():
@@ -327,7 +260,9 @@ class Polygon(unittest.TestCase):
 
     def test_04s_hit_cannot_step_over_a_one_cell_thin_zone(self):
         g = accumulated()
-        cells = scout_zones.blob(g, POSE, CHAIR["xyxy"], chair_hit(g), W, FOV, threshold=THR)   # one row: one cell thin
+        j, i = np.nonzero(g.counts >= THR)
+        cells = scout_zones.lit(np.column_stack([g.origin[0] + i * RES, g.origin[1] + j * RES]), chair_hit(g)["xy"],
+                                scout_zones.HAZARD_R_M, g)[0]   # the chair's lit cluster on wall A: one cell thin
         zone = {"name": "nogo-1", "poly": scout_zones.polygon(cells, CAL, RES), "nogo": True}
         corners = occupancy.to_map_px([[x + sx * RES / 2, y + sy * RES / 2] for x, y in cells for sx in (-1, 1) for sy in (-1, 1)], CAL)
         (x0, y0), (x1, y1) = corners.min(0).tolist(), corners.max(0).tolist()
@@ -415,25 +350,47 @@ class Base(unittest.TestCase):
         self.pics = self.tmp / "pictures"
         self.rows: list = []
         self.g = accumulated()
+        j, i = np.nonzero(self.g.counts >= THR)   # the fixture world, every counted cell, as the newest window's live band
+        self.live = np.column_stack([self.g.origin[0] + i * RES, self.g.origin[1] + j * RES])
+        self.t, self.win = [1000.0], 0
         self.store = objects.Store(append=lambda r: None, draft=objects.draft_stub)
-        self.store.observe(frame(), POSE, self.g, CAL, FOV, threshold=THR)
+        fr = frame()
+        fr["boxes"][1]["conf"] = 0.65   # the backpack past gate 1 (HAZARD_P_MIN 0.6) too, so both things reach the model as before
+        self.store.observe(fr, POSE, self.g, CAL, FOV, threshold=THR)
         env = mock.patch.dict(os.environ, {"WTDD_DECIDE_THRESHOLD": "0.7", "WTDD_SHIFT": "2026-09-27",
                                            "WTDD_SCOUT_ZONES": ""})   # "" not a pop: a .env holding 0 would refill it (gotcha 02-2)
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
-    def props(self, decide=None):
-        return scout_zones.Proposals(append=self.rows.append, decide=decide or scout_zones.decide_stub, photo_dir=self.pics, map_path=self.map)
+    def props(self, decide=None, confirm=None):
+        return scout_zones.Proposals(append=self.rows.append, decide=decide or scout_zones.decide_stub, photo_dir=self.pics,
+                                     map_path=self.map, confirm=confirm or self.yes, clock=lambda: self.t[0])
 
-    def feed(self, p, objs=None, fr=None, lock=None):
-        return p.feed(self.store.to_list() if objs is None else objs, fr or frame(), POSE, self.g, CAL, FOV, threshold=THR, grid_lock=lock)
+    def feed(self, p, objs=None, fr=None, lock=None, n=scout_zones.HAZARD_SEEN_N, live=None):
+        """n detector windows 1 s apart (by default the repeat gate's HAZARD_SEEN_N over HAZARD_SPAN_S), the fixture's
+        counted cells as the live view; the last window's counts."""
+        out = None
+        for _ in range(n):
+            f = {**(fr or frame()), "t": self.win}
+            out = p.feed(self.store.to_list() if objs is None else objs, f, POSE, self.g, CAL, FOV, threshold=THR, grid_lock=lock,
+                         live=self.live if live is None else live)
+            self.win += 1
+            self.t[0] += 1.0
+        return out
+
+    @staticmethod
+    def yes(q):
+        """A confirm-model double (no network): yes, the detector's own name, p 0.9."""
+        return {"answer": "yes", "name": q["kind"], "p": 0.9, "model": "test/confirm-double", "raw": '{"double": true}',
+                "app": "openrouter", "cached": False}
 
     def tool(self, name) -> list:
         return [r for r in self.rows if r["tool"] == name]
 
     def chair_cells(self) -> set:
-        return wall_a_expected(CHAIR["xyxy"], chair_hit(self.g))
+        """The chair's lit cluster: the live points within HAZARD_R_M of 07's pin, 8-connected (gate 4)."""
+        return as_set(scout_zones.lit(self.live, chair_hit(self.g)["xy"], scout_zones.HAZARD_R_M, self.g)[0])
 
     def jev(self, p: float):
         """A Jev double (no network): the stub's label, answered live-shaped at p."""
@@ -471,7 +428,7 @@ class Feed(Base):
         self.feed(self.props())
         by = {r["args"]["object_id"]: r for r in self.tool("zone.decided")}
         self.assertEqual((by["o1"]["args"]["kind"], by["o1"]["args"]["label"], by["o1"]["args"]["p"]), ("chair", "table", CHAIR["conf"]))
-        self.assertEqual((by["o2"]["args"]["kind"], by["o2"]["args"]["label"], by["o2"]["args"]["p"]), ("backpack", "not_a_hazard", BACKPACK["conf"]))
+        self.assertEqual((by["o2"]["args"]["kind"], by["o2"]["args"]["label"], by["o2"]["args"]["p"]), ("backpack", "not_a_hazard", 0.65))   # Base raises it past gate 1
         for r in by.values():
             self.assertEqual((r.get("cached"), r.get("source")), (True, "stub"), "a DEMO_CACHE row never claims to be live")
 
@@ -493,8 +450,8 @@ class Feed(Base):
         self.assertFalse(self.tool("zone.proposed"), "no proposal state for a hazard")
         (r,) = self.tool("zone.confirmed")
         self.assertTrue(r["ok"])
-        self.assertEqual((r["agent"], r["args"]["id"], r["args"]["zone"], r["args"]["by"]), ("scout", "z1", "nogo-1", "auto (jev 0.84)"))
-        self.assertEqual(r["response_or_error"], "I added a no-go zone around the chair: Jev is 0.84 sure it's a hazard.")
+        self.assertEqual((r["agent"], r["args"]["id"], r["args"]["zone"], r["args"]["by"]), ("scout", "z1", "nogo-1", "auto (jev + test/confirm-double 0.84)"))
+        self.assertIn("and test/confirm-double says it's 'chair' at 0.90.", r["response_or_error"])
         self.assertEqual(r["state_after"]["zone"], z)
         self.assertIsNot(r.get("cached"), True)
         st = p.state()
@@ -534,12 +491,13 @@ class Feed(Base):
         self.assertEqual((z["label"], z["p"], z["by"], z["app"]), ("table", 0.71, "auto", "stub"), "DEMO_CACHE provenance on the map")
         (r,) = self.tool("zone.confirmed")
         self.assertEqual((r["args"]["by"], r.get("cached"), r.get("source")), ("auto (stub 0.71)", True, "stub"))
-        self.assertEqual(r["response_or_error"], "I added a no-go zone around the chair: the stub (DEMO_CACHE, not Jev) is 0.71 sure it's a hazard.")
+        self.assertIn("I added a no-go zone around the chair: seen 4 times over 3.0 s at p 0.71", r["response_or_error"])
+        self.assertIn(f"{len(self.chair_cells())} lit LiDAR points", r["response_or_error"])
         a = r["state_before"]
         self.assertEqual((a["id"], a["object_id"], a["kind"], a["label"], a["p"]), ("z1", "o1", "chair", "table", 0.71))
         self.assertEqual(as_set(a["cells"]), self.chair_cells())
-        self.assertEqual(len(a["cells"]), 11)
-        self.assertAlmostEqual(a["area_m2"], round(11 * RES * RES, 4))
+        self.assertGreaterEqual(len(a["cells"]), scout_zones.HAZARD_MIN_POINTS)
+        self.assertAlmostEqual(a["area_m2"], round(len(a["cells"]) * RES * RES, 4))
         self.assertAlmostEqual(a["dist_m"], 2.0, places=3)
         self.assertEqual(a["poly"], z["poly"])
         photo = Path(a["photo"]["path"])
@@ -603,7 +561,8 @@ class Feed(Base):
 
     def test_the_live_path_failing_end_to_end(self):
         with mock.patch.dict(os.environ, {"JEV_API_KEY": "test-key"}), mock.patch("requests.post", lambda *a, **k: Fake(401, "no auth")):
-            p = scout_zones.Proposals(append=self.rows.append, photo_dir=self.pics, map_path=self.map)   # decide=None: the key picks live
+            p = scout_zones.Proposals(append=self.rows.append, photo_dir=self.pics, map_path=self.map,
+                                      clock=lambda: self.t[0])   # decide=None: the key picks live
             self.feed(p)
         dec = self.tool("zone.decided")
         self.assertEqual(len(dec), 2)
@@ -702,7 +661,8 @@ class Feed(Base):
             if down["on"] and r["tool"] == "zone.decided":
                 raise OSError("disk full (test)")
             self.rows.append(r)
-        p = scout_zones.Proposals(append=append, decide=scout_zones.decide_stub, photo_dir=self.pics, map_path=self.map)
+        p = scout_zones.Proposals(append=append, decide=scout_zones.decide_stub, photo_dir=self.pics, map_path=self.map,
+                                  confirm=self.yes, clock=lambda: self.t[0])
         with self.assertRaises(OSError):
             self.feed(p)
         st = p.state()
@@ -716,76 +676,12 @@ class Feed(Base):
         self.assertEqual([(f["object_id"], "disk full" in f["error"]) for f in st["failed"]], [("o1", True)],
                          "the thing in flight when the feed raised stays named after the error clears; o2 was never reached")
 
-    def test_placed_objects_waiting_for_a_pose_say_so(self):
+    def test_placed_objects_waiting_for_a_calibration_say_so(self):
         p = self.props()
-        p.feed(self.store.to_list(), frame(), None, self.g, CAL, FOV, threshold=THR)
-        self.assertIn("no pose", p.state()["why"], "not 'no placed object yet': 07 placed two")
-
-    def test_a_dog_that_moved_since_07_placed_it_waits_and_is_asked_when_07_places_it_again(self):
-        # fix round 2: 07 placed both boxes from POSE, the scout is fed 0.1 m further on (the objects thread's draft call or
-        # a GET tick in between). The cone from where the dog is now misses 07's old hit: a wait, never a failure, and the
-        # thing is asked once 07 places it again from where the dog stands.
-        moved = {"position": [0.10, 0.0], "yaw": 0.0}
-        with mock.patch.dict(os.environ, {"JEV_API_KEY": ""}):   # decide=None: decider() picks the stub, and says so when called
-            p = scout_zones.Proposals(append=self.rows.append, photo_dir=self.pics, map_path=self.map)
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err):
-                for _ in range(2):   # two 4 Hz ticks before 07's next window
-                    p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
-            self.assertFalse([r for r in self.rows if r["tool"].startswith("zone.")], "a wait writes no row")
-            st = p.state()
-            self.assertEqual((st["n"], st["failed"]), (0, []), "not a failure: nothing was asked")
-            self.assertIn("waiting", st["why"])
-            self.assertIn("o1", st["why"], "the why names the waiting object")
-            self.assertEqual(err.getvalue().count("[wtdd:scout]"), 1, f"one WARN per change, no summary, no model picked: {err.getvalue()!r}")
-            self.assertIn("WARN", err.getvalue())
-            self.store.observe({**frame(), "t": 2.0}, moved, self.g, CAL, FOV, threshold=THR)   # 07 places them again from here
-            o1 = next(o for o in self.store.to_list() if o["id"] == "o1")
-            self.assertAlmostEqual(o1["dist_m"], 1.9, places=3)
-            p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
-        self.assertEqual(sorted(r["args"]["object_id"] for r in self.tool("zone.decided")), ["o1", "o2"])
-        (r,) = self.tool("zone.confirmed")
-        self.assertEqual((r["ok"], r["args"]["id"], r["state_before"]["object_id"], r["state_before"]["label"]), (True, "z1", "o1", "table"))
-        x = fx.WALL_A["x"][0] * RES
-        hit = {"xy": o1["hit_m"], "dist_m": o1["dist_m"]}
-        want = {(round(x, 3), round(k * RES, 3)) for k in range(*fx.WALL_A["y"]) if in_bound((x, k * RES), CHAIR["xyxy"], hit, pose=moved)}
-        self.assertTrue(want)
-        self.assertEqual(as_set(r["state_before"]["cells"]), want, "the cells the bound gives from where the dog stands, with 07's new hit")
-        st = p.state()
-        self.assertEqual((len(st["zones"]), st["failed"]), (1, []))
-
-    def test_a_waiting_thing_07_no_longer_sees_stops_waiting(self):
-        moved = {"position": [0.10, 0.0], "yaw": 0.0}
-        p = self.props()
-        p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
-        self.assertIn("waiting", p.state()["why"])
-        for t in range(objects.STALE_WINDOWS):   # the detector stops boxing them: 07 marks both stale, their old pins kept
-            self.store.observe({**frame(), "boxes": [], "t": 10.0 + t}, moved, self.g, CAL, FOV, threshold=THR)
-        self.assertTrue(all(o["stale"] and o["hit_m"] for o in self.store.to_list()))
-        p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
-        self.assertNotIn("waiting", p.state()["why"], "a thing no longer seen does not wait forever")
-        self.assertFalse(self.rows)
-
-    def test_a_waiting_thing_that_goes_stale_untaken_is_named_not_dropped_without_a_trace(self):
-        # review round 4: the feed after the stale windows cleared the waiting WARN with no line, and state()'s why said
-        # "no placed object yet" although 07 placed both. What went stale before the scout took it is one WARN and the why.
-        moved = {"position": [0.10, 0.0], "yaw": 0.0}
-        p = self.props()
-        p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
-        for t in range(objects.STALE_WINDOWS):
-            self.store.observe({**frame(), "boxes": [], "t": 10.0 + t}, moved, self.g, CAL, FOV, threshold=THR)
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            for _ in range(2):   # two ticks: the change is logged once
-                p.feed(self.store.to_list(), frame(), moved, self.g, CAL, FOV, threshold=THR)
-        why = p.state()["why"]
-        self.assertNotIn("no placed object yet", why, "07 placed two")
-        for name in ("o1", "o2", "stale"):
-            self.assertIn(name, why, "the why names what went stale un-proposed")
-        lines = [ln for ln in err.getvalue().splitlines() if ln.startswith("[wtdd:scout]")]
-        self.assertEqual(len(lines), 1, f"one WARN line for the change: {err.getvalue()!r}")
-        self.assertTrue(all(s in lines[0] for s in ("WARN", "o1", "o2", "stale")), lines[0])
-        self.assertFalse(self.rows, "nothing was asked, so no row")
+        for k in range(scout_zones.HAZARD_SEEN_N):   # past gates 1 and 2; the lit cluster needs the tie for its polygon
+            p.feed(self.store.to_list(), {**frame(), "t": k}, POSE, self.g, None, FOV, threshold=THR, live=self.live)
+            self.t[0] += 1.0
+        self.assertIn("no calibration", p.state()["why"], "not 'no placed object yet': 07 placed two")
 
 
 class ZonesOff(Base):
@@ -1045,8 +941,7 @@ class Fixture(unittest.TestCase):
         (z,) = d["proposals"]
         self.assertEqual(set(z), set(scout_zones.PROPOSAL_KEYS), "the fixture and the live store draw the same shape")
         self.assertEqual((z["kind"], z["label"], z["p"], z["app"]), ("chair", "table", CHAIR["conf"], "stub"))
-        g = accumulated()
-        self.assertEqual(as_set(z["cells"]), wall_a_expected(CHAIR["xyxy"], chair_hit(g)))
+        self.assertEqual(len(z["cells"]), 11, "the kept open-proposal shape (the feed opens none; its cells are the fixture's own)")
         with mock.patch.object(nav, "PX_PER_M", 108.5):   # scout.json was written at the default scale; a .env WTDD_PX_PER_M (87 live) must not move its pixels
             self.assertEqual(z["cells_px"], px_of(z["cells"]))
         for c in z["cells_px"]:
@@ -1068,21 +963,31 @@ class Fixture(unittest.TestCase):
 
 
 class Replay(unittest.TestCase):
-    def run_cli(self, pose, png, led):
-        return subprocess.run([PY, "-m", "wtdd.dog.scout_zones", "--replay", str(fx.NPZ), "--watch", str(ofx.WATCH_JSON), "--pose", pose,
+    def run_cli(self, pose, png, led, watch=ofx.WATCH_JSON):
+        return subprocess.run([PY, "-m", "wtdd.dog.scout_zones", "--replay", str(fx.NPZ), "--watch", str(watch), "--pose", pose,
                                "--fov", str(FOV), "--png", str(png), "--threshold", str(THR)], cwd=ROOT, capture_output=True, text=True,
                               timeout=90, env={**os.environ, "WTDD_LEDGER": str(led), "WTDD_DECIDE_THRESHOLD": "0.7"})
 
     def test_replay_draws_the_proposed_cells_and_writes_no_row(self):
         with tempfile.TemporaryDirectory() as tmp:
-            png, led = Path(tmp) / "scout.png", Path(tmp) / "ledger.jsonl"
-            r = self.run_cli("0,0,0", png, led)
+            png, led, w = Path(tmp) / "scout.png", Path(tmp) / "ledger.jsonl", Path(tmp) / "watch.json"
+            fr = frame()
+            fr["boxes"][0]["conf"] = 0.85   # the chair past the stub's confirm (its p is the detector's; CONFIRM_P_MIN 0.8)
+            w.write_text(json.dumps(fr))
+            r = self.run_cli("0,0,0", png, led, w)
             self.assertEqual(r.returncode, 0, r.stderr[-800:])
             self.assertIn("[wtdd:scout]", r.stderr)
             im = np.asarray(Image.open(png).convert("RGB"))
             self.assertFalse(led.exists(), "a replay of a fixture is not a step")
         n = int(np.all(im == np.array(scout_zones.CELL_RGB, dtype=np.uint8), axis=2).sum())
-        self.assertEqual(n, 11 * occupancy.PNG_SCALE ** 2, "the chair's 11 proposed cells, one PNG_SCALE square each")
+        self.assertEqual(n % occupancy.PNG_SCALE ** 2, 0, "whole cells, one PNG_SCALE square each")
+        self.assertGreaterEqual(n // occupancy.PNG_SCALE ** 2, scout_zones.HAZARD_MIN_POINTS, "the chair's lit cluster")
+
+    def test_the_fixture_chair_at_p_0_71_fails_the_stubs_confirm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self.run_cli("0,0,0", Path(tmp) / "scout.png", Path(tmp) / "ledger.jsonl")
+        self.assertEqual(r.returncode, 2, r.stderr[-800:])
+        self.assertIn("the confirm model said yes", r.stderr)
 
     def test_replay_with_nothing_proposed_warns_and_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:

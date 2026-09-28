@@ -1,72 +1,74 @@
-"""The scout's auto no-go zones: every thing 07 pins on the grid is asked once whether it is a hazard; a hazard at p >=
-the threshold is written at once into 04's `nogo: true` schema on ui/map.json, made of the LiDAR cells it sits on, with
-by "auto", the label and p (Johnny, 2026-09-27 04:14: "either drawn or auto classified with a jev confidence level");
-a named person's tap dismisses it. The walk and the follower read only the map (04's nogo.refuse(), untouched) once 04
-merges: on 07's base nothing calls refuse(), so an auto zone is written and drawn but refuses no walk or follow until
-then. The open-proposal path (confirm, a proposal's dismiss, state()'s proposals) is kept, but the feed opens none now.
+"""The scout's auto zones, two kinds (Johnny, 2026-09-27 20:23: "one is if it has a person and one is everything else").
 
-Off. WTDD_SCOUT_ZONES=0 (config.scout_zones(); unset or 1 = on, as above; anything else raises) turns the scout's zones
-off in one place, the top of the feed: 07's objects still come in and keep their pins and names, but no model is asked,
-no photo copied, no zone written and no zone.* row appended. One stderr line OFF when the store starts (or first reads
-the key) with it off, never per feed; GET /dog/scout serves auto_zones "off (WTDD_SCOUT_ZONES=0)" and why OFF, so an
-empty list never reads as nothing found. Its own key: WTDD_DECIDE_THRESHOLD is shared with the chat round's decide.
-A person's dismiss of an auto zone already on the map still works.
+PERSON. A thing 07's detector labels "person" (its own label, no model call) is a soft, temporary zone: its shape is the
+live LiDAR points within PERSON_R_M of 07's pin in the NEWEST window (in the dots' band, after lidar.keep's surface
+filter), their cells, projected through the calibration in force when GET /dog/scout is served (stored in odometry
+metres). No lit point there: no zone, and state()'s why says so. Refreshed at every window that sees them lit; gone
+PERSON_TTL_S after the last one. It carries the detection photo {file, url} (the frame copied once to ~/Pictures/wtdd,
+listed by GET /images?kind=scout from its zone.person row), or {missing: true, error} when the copy failed. It is NEVER
+written to ui/map.json, so nothing that plans or walks (04's refuse, the follower, the round) ever sees it. Rows: one
+zone.person when it appears, one zone.person_cleared when it expires; never per frame.
+
+HAZARD (everything else). Johnny, 20:26, after the scout stacked 41 auto zones in ten minutes: "only use high confidence
+repeat and picture confirmation ... be more strict". A hazard zone is written into 04's `nogo: true` schema on
+ui/map.json (by "auto") only when ALL four gates pass, each a named constant below, UNVERIFIED live:
+  1. HIGH CONFIDENCE: the detector's p >= HAZARD_P_MIN.
+  2. REPEAT: the same object (07's id, matched by 07's store) seen at HAZARD_P_MIN+ in >= HAZARD_SEEN_N separate
+     detector windows spanning >= HAZARD_SPAN_S. A one-off detection never makes a zone.
+  4. LIT CLUSTER (checked before any model call): the live points of the newest window within HAZARD_R_M of the pin,
+     8-connected on the grid's lattice from the point nearest the pin, >= HAZARD_MIN_POINTS of them. That cluster IS
+     the zone (polygon(): the cells' padded hull); the flood fill over the accumulated grid is gone. No lit cluster:
+     no zone, and the thing is considered again at the next window.
+  3. PICTURE CONFIRMATION: the object's crop from the detector frame goes to a vision model (confirm_live, the repo's
+     one OpenRouter path, llm.generate) with STRICT_QUESTION; a zone only if it answers yes AND p >= CONFIRM_P_MIN AND
+     the thing it names agrees with the detector's label class (agrees()). The model is WTDD_SCOUT_CONFIRM_MODEL,
+     default CONFIRM_MODEL (google/gemini-2.5-pro: a stronger vision model than OPENROUTER_VISION_MODEL's
+     x-ai/grok-4.20, which the repo picked for speed; UNVERIFIED live: its answers on the real frames). A failed,
+     timed-out or unparseable call is NO zone and one FAILED zone.confirm row (never a default yes, never retried).
+     With no OPENROUTER_API_KEY the DEMO_CACHE confirm_stub answers (below); its zone says app "stub".
+Before the confirm, Jev (TypeSafe System One, decide_live, or decide_stub with no JEV_API_KEY) still names WHAT it is
+(table, sharp_object, blocked_way, not_a_hazard: its own zone.decided row, threshold WTDD_DECIDE_THRESHOLD); its
+not_a_hazard or a p below that threshold also leaves the thing a pin. Each hazard zone carries its evidence on the map,
+on GET /dog/scout and on its zone.confirmed row: {p, seen_n, span_s, confirm: {model, answer, name, p}, points_n}, and
+its photo {file, url, path, sha256, bytes}. A thing that fails a gate is counted per reason (state()'s gates), and one
+stderr line every SUMMARY_S says how many were considered and why each was rejected; no zone added yet is a WARN.
+
+A thing is taken once (07's id) past gates 1, 2 and 4; a thing whose lit cells overlap an open proposal, a dismissed
+zone or a scout zone on the map is the same thing (logged, no call, no row). Every scout write to the map (_rewrite: an
+auto zone, confirm(id, by), dismiss(id, by)) follows POST /map's rules (a stale _version is 409, the previous map kept as
+map.prev.json) and nogo.zones() must accept the result; every refusal is a failed zone.* row before anything is written.
+dismiss() of an auto zone takes that one entry off the map and remembers its cells (no re-add this session); a zone a
+person drew (04) or confirmed is never the scout's to dismiss (404). The open-proposal path (confirm, a proposal's
+dismiss, state()'s proposals) is kept, but the feed opens none.
+
+Switch. WTDD_SCOUT_ZONES (config.scout_zones(), read at each use): unset or 1 = both kinds; person = person zones only
+(no hazard zone, no Jev and no confirm call: the filming setting); 0 = none (07's objects and pins stay; one OFF line per
+store). Anything else raises on every feed and GET. GET /dog/scout serves auto_zones "on" | "person only
+(WTDD_SCOUT_ZONES=person)" | "off (WTDD_SCOUT_ZONES=0)".
 
 Run. The API's dog session (wtdd/dog/session.py) owns one Proposals store; its 'objects' thread feeds it 07's objects
-after every detector window (session.scout_feed), GET /dog/scout reads it, POST /dog/scout {id, action: confirm |
-dismiss, by, _version} is the person's tap. Offline:
+and the newest LiDAR window's band (session._live_m) after every detector window, GET /dog/scout reads it through the
+calibration in force, POST /dog/scout {id, action: confirm | dismiss, by, _version} is the person's tap. Offline:
 
     python -m wtdd.dog.scout_zones --replay wtdd/dog/fixtures/voxel_frames.npz --watch wtdd/dog/fixtures/watch-frame.json \\
         --pose 0,0,0 --fov 90 --png /tmp/scout.png [--threshold N]
 
-builds the grid from the replayed frames, places the fixture's boxes with 07's store, asks the stub (never Jev, even with
-a key), adds its zones to a scratch map, and writes the occupancy PNG with every added zone's cell a PNG_SCALE square in
-CELL_RGB: one stderr line per row it would have written and a summary, exit 2 with a WARN when nothing is added. It
-writes no ledger row and never touches ui/map.json.
+builds the grid from the replayed frames, places the fixture's boxes with 07's store, feeds that one window
+HAZARD_SEEN_N times HAZARD_SPAN_S apart on a replay clock with the last frame's band as the live view (the repeat gate
+is exercised, not proven: it is one window), asks the stubs (never Jev or OpenRouter, even with a key), adds its zones
+to a scratch map and writes the occupancy PNG with every zone cell in CELL_RGB; exit 2 with a WARN when nothing is
+added. It writes no ledger row and never touches ui/map.json.
 
-How. blob(): the cells seen threshold+ times, flood-filled 8-connected from 07's hit cell, keeping a cell only when its
-bearing from the dog lies inside the box's angular extent (objects.bearing of the box's left and right columns, each
-widened by the half-cell angle atan(res / 2 / d) at the cell's distance d) and d lies in [hit - res, hit + DEPTH_M].
-Unbounded, the fill takes the whole wall the thing stands against. polygon(): the cells' corners (+-res/2) in map px
-through occupancy.to_map_px, each grown by a PAD_PX square (a Minkowski sum, so every edge moves out by PAD_PX and 04's
-hit(), which samples a route every STEP_PX = 10 px, cannot step over a one-cell-thin zone), then Andrew's monotone-chain
-hull. The pad is a stated rule on points, drawn dashed on the remote; it is not a shape any model drew. The question:
-one Jev (TypeSafe System One) Choice over SCOUT_LABELS with a words-only state (no digits: 02's rule), 02's _jev
-vendored as decide_live, or the DEMO_CACHE stub below when JEV_API_KEY is unset; the call runs outside every lock and is
-its own zone.decided row, ok or not (never `decided`: 11's grade_decide owns that name). A choice other than
-not_a_hazard at p >= WTDD_DECIDE_THRESHOLD (default 0.7) is the zone "z<n>", its photo the detector frame copied once to
-~/Pictures/wtdd with its sha256, written to the map at once by _add(), the code path confirm() uses (the rules below;
-the map read before the call is the version, so a map that changed meanwhile is 409, a failed row, not retried): one
-zone.confirmed row, by "auto (jev <p>)" and the say "I added a no-go zone around the <kind>: Jev is <p> sure it's a
-hazard." (a stub answer says stub, never Jev). Below the threshold, or not_a_hazard, nothing: the thing stays 07's pin.
-A thing is asked once (07's object id); a thing whose cells overlap an open proposal, a dismissed one or a scout zone
-already on the map is the same thing (logged, no call, no row). A failed call, an unreadable frame or a blob that raises is a failed row and a line in state()["failed"],
-never a canned label, never retried. An empty blob is a wait, not a failure: the cone from where the dog is now misses
-07's hit because the dog moved since 07 placed the thing, so no row, one WARN per change, named in state()'s why, and
-the thing is taken again by the next feed with the hit 07 refreshes each window; a stale thing (07 no longer sees it)
-is never taken, so nothing waits forever, and one WARN and state()'s why name each thing that went stale before a feed
-took it (asked if 07 sees it again). Every scout write to the map (_rewrite: an auto zone, confirm(id, by), dismiss(id,
-by)) follows POST /map's rules (a stale _version is 409, the previous map kept as map.prev.json) and nogo.zones() must
-accept the result first; every refusal is a failed zone.* row before anything is written. dismiss() of an auto zone
-takes that one entry off the map and remembers its cells (no re-add this session); a zone a person drew (04) or
-confirmed is never the scout's to dismiss (404). A zone from a stub answer keeps `app: "stub"` on its map entry (04
-ignores the key), so the remote says stub on the solid zone.
-
-UNVERIFIED on the real dog (the first live run must confirm): everything 07 lists (the camera's field of view, the
-bearing's sign, one odometry for the voxel frame and the pose); the cone uses the pose when the scout is fed and 07's
-hit the pose when 07 placed the window, neither the one when the frame was shot. The objects thread feeds right after
-its own tick, so the two are milliseconds apart; a window a GET /dog/objects tick placed is up to TICK_S apart, more
-while the scout's previous model call held the thread. A turn or a sideways step in that gap SHIFTS the cone, it does
-not empty it: in the fixture world a 3 degree turn takes 9 of the chair's 11 cells plus 2 wall cells beside it, 7
-degrees 6 of 11 plus 5, 0.1 m sideways 9 of 11 plus 2 (0.3 m back: all 11 plus 2), and that zone is added and the
-thing is never asked again; a turn from about 8 degrees or a step toward it (0.06 m) empties the cone and the thing
-waits (above). On the dog, check that the red cells sit on the table after driving up to it, not beside it;
-the photo is the newest watch frame, which the detector may already have replaced since the window 07 placed;
-a table touching a wall brings the wall's cells inside the cone along (no person sees them before the zone is on the
-map: the remote shows it, and a tap dismisses it); positive obstacles only: COCO has no hole or trench and the grid's z band has no floor, so
-an opening is always drawn by a person (04). The live Jev call has not been run with a key (02's own UNVERIFIED)."""
+UNVERIFIED on the real dog (the first live run must confirm): every constant below (p, repeat, span, radius, points,
+TTL) against a real table and a real person; that 07's pin (the first counted cell on the ray) sits inside the lit
+cluster of the thing, not on the wall behind it (a table against a wall brings the wall's lit points within
+HAZARD_R_M along; a person in front of a wall the LiDAR has not separated pins on the wall); the confirm model's live
+answers and latency (none has been made: tests stub it); the photo is the newest watch frame, which the detector may
+have replaced since the window 07 placed; positive obstacles only: COCO has no hole and the band has no floor, so an
+opening is always drawn by a person (04)."""
 from __future__ import annotations
 import argparse
+import base64
 import contextlib
 import hashlib
 import io
@@ -85,9 +87,23 @@ import requests
 
 from .. import config, field, nogo, shift
 from ..ledger import append as ledger_append, log
-from . import objects, occupancy
+from . import localize, objects, occupancy
 
-DEPTH_M = 1.0      # the fill stops this far behind 07's hit (the head's bound)
+HAZARD_P_MIN = 0.6       # gate 1: the detector's own p; below it a box stays 07's pin (41 zones in 10 min came from any p)
+HAZARD_SEEN_N = 4        # gate 2: separate detector windows the thing is seen in at HAZARD_P_MIN+ (one window at 4 Hz is a flicker)
+HAZARD_SPAN_S = 3.0      # gate 2: ...spanning at least this long, so four frames of one glance are not a repeat
+HAZARD_R_M = 0.5         # gate 4: live points this close to 07's pin are the thing's candidates (a table is about 1 m across)
+HAZARD_MIN_POINTS = 8    # gate 4: the lit cluster needs this many columns (0.4 m of lit edge at the 5 cm voxel): no stray return
+CONFIRM_P_MIN = 0.8      # gate 3: the confirm model's own confidence in its yes
+CONFIRM_MODEL = "google/gemini-2.5-pro"   # gate 3's default; WTDD_SCOUT_CONFIRM_MODEL overrides (UNVERIFIED live)
+CONFIRM_TIMEOUT_S = 30.0
+CROP_MARGIN = 0.25       # the confirm crop is the box grown by this fraction of its size on every side (the floor around it)
+STRICT_QUESTION = ("Is there a physical obstacle on the floor here that a small walking robot must go around? "
+                   'Answer only JSON: {"answer": "yes" or "no", "name": the object\'s name, "confidence": 0 to 1}.')
+PERSON = "person"        # 07's detector label (COCO) that makes a person zone
+PERSON_R_M = 0.6         # live points this close to a person's pin are the person (legs and body at the band's height)
+PERSON_TTL_S = 20.0      # a person zone is cleared this long after the last window that saw them lit
+SUMMARY_S = 30.0         # one gate summary line this often, never per frame
 PAD_PX = 15        # every side of the hull grows this much: > nogo.STEP_PX (10) so hit() cannot step over it
 SCOUT_LABELS = ["table", "sharp_object", "blocked_way", "not_a_hazard"]   # no "opening": a hole is never proposed from a photo
 CRITERIA = {"table": "a table, bench or chair standing where the dog or a person walks, something to bump into",
@@ -118,42 +134,32 @@ def _key(cells) -> set:
     return {(round(c[0], 3), round(c[1], 3)) for c in cells}
 
 
-def blob(grid: occupancy.Grid, pose: dict, box, hit: dict, frame_w: float, fov_deg: float,
-         threshold: int = occupancy.THRESHOLD) -> list[list[float]]:
-    """The thing's own counted cells as sorted lattice points [[x_m, y_m], ...] (see the module docstring for the
-    bound); [] when 07's hit cell itself falls outside it (the dog moved since the pin: the caller waits for 07's next
-    one). Pure: the caller holds the grid's lock."""
-    if threshold < 1:
-        raise ValueError(f"threshold must be at least 1 frame, got {threshold}")
-    lo = objects.bearing([box[0], 0, box[0], 0], frame_w, fov_deg)
-    hi = objects.bearing([box[2], 0, box[2], 0], frame_w, fov_deg)
-    res, (ox, oy), (px, py), yaw = grid.resolution, grid.origin, pose["position"][:2], pose["yaw"]
-    near, far = hit["dist_m"] - res, hit["dist_m"] + DEPTH_M
-    h, w = grid.counts.shape
-
-    def keep(i: int, j: int) -> bool:
-        if not (0 <= i < w and 0 <= j < h) or grid.counts[j, i] < threshold:
-            return False
-        dx, dy = ox + i * res - px, oy + j * res - py
-        d = math.hypot(dx, dy)
-        if d <= 0 or not near <= d <= far:
-            return False
-        b, eps = -_wrap(math.atan2(dy, dx) - yaw), math.atan(res / 2 / d)   # camera-right positive, as objects.bearing
-        return lo - eps <= b <= hi + eps
-
-    seed = (int(np.rint((hit["xy"][0] - ox) / res)), int(np.rint((hit["xy"][1] - oy) / res)))
-    if not keep(*seed):
-        return []
-    seen, stack = {seed}, [seed]
-    while stack:
-        i, j = stack.pop()
-        for di in (-1, 0, 1):
-            for dj in (-1, 0, 1):
-                n = (i + di, j + dj)
-                if n not in seen and keep(*n):
-                    seen.add(n)
+def lit(live, hit, r_m: float, grid: occupancy.Grid, connected: bool = True) -> tuple[list[list[float]], int]:
+    """The newest window's live points (odometry metres, (N, 2)) within r_m of 07's pin, on the grid's lattice (np.rint,
+    Grid.cell's rule): (sorted cells [[x_m, y_m], ...], the points in them). connected: only the cells 8-connected to
+    the one holding the point nearest the pin (a hazard's cluster); else every cell in the radius (a person's legs). No
+    live view or no point: ([], 0). Shapes come from these points only."""
+    pts = np.asarray(live if live is not None else [], dtype=np.float64).reshape(-1, 2)
+    d = np.hypot(pts[:, 0] - hit[0], pts[:, 1] - hit[1])
+    pts, d = pts[d <= r_m], d[d <= r_m]
+    if not len(pts):
+        return [], 0
+    res, (ox, oy) = grid.resolution, grid.origin
+    ij = [tuple(c) for c in np.rint((pts - [ox, oy]) / res).astype(int).tolist()]
+    count: dict[tuple, int] = {}
+    for c in ij:
+        count[c] = count.get(c, 0) + 1
+    keep = set(count)
+    if connected:
+        seed = ij[int(np.argmin(d))]
+        keep, stack = {seed}, [seed]
+        while stack:
+            i, j = stack.pop()
+            for n in ((i + di, j + dj) for di in (-1, 0, 1) for dj in (-1, 0, 1)):
+                if n in count and n not in keep:
+                    keep.add(n)
                     stack.append(n)
-    return sorted([round(ox + i * res, 6), round(oy + j * res, 6)] for i, j in seen)
+    return sorted([round(ox + i * res, 6), round(oy + j * res, 6)] for i, j in keep), sum(count[c] for c in keep)
 
 
 def polygon(cells, cal: dict, resolution: float) -> list[list[int]]:
@@ -236,6 +242,77 @@ def decide_threshold() -> float:
     return t
 
 
+CLASSES = {"table": ("table", "desk", "bench", "chair", "stool", "seat", "sofa", "couch"),
+           "sharp_object": ("knife", "scissors", "blade")}
+
+
+def klass(name: str) -> str:
+    """A thing's name -> its class (CLASSES' key when one of its words is in the name), else the name itself."""
+    n = " ".join(str(name).lower().replace("_", " ").split())
+    return next((k for k, ws in CLASSES.items() if any(w in n for w in ws)), n)
+
+
+def agrees(detected: str, named: str) -> bool:
+    """Gate 3's last clause: the confirm model's name is the detector's label class ("a wooden table" for "dining
+    table"; "backpack" inside "a black backpack")."""
+    a, b = klass(detected), klass(named)
+    return bool(a and b) and (a == b or a in b or b in a)
+
+
+def crop(data: bytes, box) -> str:
+    """The box grown by CROP_MARGIN on every side, cut from the detector frame at full resolution, as a JPEG data URL."""
+    from PIL import Image
+    im = Image.open(io.BytesIO(data)).convert("RGB")
+    x0, y0, x1, y1 = (float(v) for v in box)
+    mx, my = (x1 - x0) * CROP_MARGIN, (y1 - y0) * CROP_MARGIN
+    out = io.BytesIO()
+    im.crop((max(0, int(x0 - mx)), max(0, int(y0 - my)), min(im.width, int(x1 + mx)), min(im.height, int(y1 + my)))).save(out, "JPEG", quality=90)
+    return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+
+
+def confirm_model() -> str:
+    return config.maybe("WTDD_SCOUT_CONFIRM_MODEL") or CONFIRM_MODEL
+
+
+# DEMO_CACHE: gate 3's picture confirmation. What: no picture is looked at; "yes" for a COCO table/bench/chair or a
+# knife/scissors (else "no"), named the detector's label, p = the detector's own conf, model "stub". Why: no
+# OPENROUTER_API_KEY in a worktree or a replay, and a model that cannot see must not claim a confidence it does not
+# have (so only a detector p >= CONFIRM_P_MIN passes). Live: set OPENROUTER_API_KEY; confirmer() then picks
+# confirm_live, one vision call per thing past gates 1, 2 and 4. Its zone.confirm row says cached=true, source=stub,
+# and its zone keeps app "stub" on the map (the remote says stub).
+def confirm_stub(q: dict) -> dict[str, Any]:
+    yes = q["kind"] in TABLE_KINDS or q["kind"] in SHARP_KINDS
+    return {"answer": "yes" if yes else "no", "name": q["kind"], "p": float(q["conf"]), "model": "stub",
+            "raw": f"stub: {q['kind']} -> {'yes' if yes else 'no'} (p is the detector's conf; no picture was looked at)",
+            "app": "stub", "cached": True}
+
+
+def confirm_live(q: dict) -> dict[str, Any]:
+    """One llm.generate (agent scout, model q["model"]) with the crop and STRICT_QUESTION, JSON only. A non-200, a reply
+    that is not {answer: yes|no, name, confidence in [0, 1]} or a timeout raise: no retry, no default."""
+    from ..llm import generate
+    out = generate("scout", [{"role": "user", "content": [
+        {"type": "text", "text": f"A robot's detector boxed this as '{q['kind']}'. {STRICT_QUESTION}"},
+        {"type": "image_url", "image_url": {"url": q["image"]}}]}],
+        model_id=q["model"], max_tokens=120, temperature=0.0, response_format={"type": "json_object"}, timeout=CONFIRM_TIMEOUT_S)
+    text = out["text"].strip()
+    try:
+        j = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        answer, name, p = str(j["answer"]).strip().lower(), str(j["name"]).strip(), float(j["confidence"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise RuntimeError(f"confirm reply is not {{answer, name, confidence}} ({type(e).__name__}: {e}): {text[:200]!r}") from None
+    if answer not in ("yes", "no") or not 0.0 <= p <= 1.0:
+        raise RuntimeError(f"confirm answered out of contract: answer {answer!r}, confidence {p!r}")
+    return {"answer": answer, "name": name, "p": p, "model": str(out["model"]), "raw": text[:600], "app": "openrouter", "cached": False}
+
+
+def confirmer() -> Callable[[dict], dict]:
+    """confirm_live when OPENROUTER_API_KEY is set, else confirm_stub (read here, at the point of use; logged)."""
+    live = bool(config.maybe("OPENROUTER_API_KEY"))
+    log("scout", f"confirms {'live (' + confirm_model() + ', one vision call per thing past gates 1, 2 and 4)' if live else 'stub (DEMO_CACHE: no picture looked at, p = the detector conf; rows cached=true)'}")
+    return confirm_live if live else confirm_stub
+
+
 def shift_id() -> str:
     return shift.current()   # S11: the run in force (shift.json, else WTDD_SHIFT, else the date), as every stamp
 
@@ -264,11 +341,13 @@ class Refused(Exception):
 
 
 class Proposals:
-    """The scout's open proposals this session, insertion-ordered (see the module docstring for the rules)."""
+    """The scout's zones this session: open proposals (insertion-ordered), person zones, the hazard gates' sightings
+    (see the module docstring for the rules)."""
 
     def __init__(self, append: Callable[[dict], Any] = ledger_append, decide: Callable[[dict], dict] | None = None,
-                 photo_dir=None, map_path=None) -> None:
-        self.append, self.decide = append, decide
+                 photo_dir=None, map_path=None, confirm: Callable[[dict], dict] | None = None,
+                 clock: Callable[[], float] = time.time) -> None:
+        self.append, self.decide, self.confirm_fn, self.clock = append, decide, confirm, clock   # confirm_fn: gate 3's model (None: confirmer())
         self.photo_dir = Path(photo_dir) if photo_dir else None   # None: PHOTOS, read at the write
         self.map_path = Path(map_path) if map_path else None      # None: field.MAP, read at call time
         self.open: dict[str, dict[str, Any]] = {}
@@ -277,44 +356,55 @@ class Proposals:
         self.failed: list[dict[str, Any]] = []
         self.n_ids = 0
         self.counts = {"asked": 0, "added": 0, "confirmed": 0, "dismissed": 0, "deduped": 0}
+        self.sight: dict[str, dict[Any, float]] = {}   # gate 2: object id -> {detector window: clock} at HAZARD_P_MIN+
+        self.people: dict[str, dict[str, Any]] = {}    # object id -> its live person zone (never on the map)
+        self.gates = self._gates0()
+        self._t0 = self._sum_at = None       # the first feed's clock; the last gate summary's
+        self._person_why: str | None = None
         self.thr: float | None = None        # the threshold of the last feed, for state()'s why
-        self._warned: str | None = None     # what placed objects wait for (no pose, or a dog that moved), logged once per change
+        self._warned: str | None = None     # what placed objects wait for, logged once per change
         self.error: str | None = None        # the last feed's raise, on the GET until a feed gets past the map read
         self._taking: dict | None = None     # the object this feed took last; a raise before its row lands names it in failed
-        self._lock = threading.Lock()        # this store's own state; never held during the model call
+        self._lock = threading.Lock()        # this store's own state; never held during a model call
         self._off_said = False               # the OFF line is logged once per store, never per feed
         with contextlib.suppress(ValueError):   # a bad value is raised by every feed and GET, not here: the session still starts
-            self.zones_off()
+            self.mode()
 
-    def zones_off(self) -> str | None:
-        """OFF when WTDD_SCOUT_ZONES=0 (config.scout_zones(), read at each use), else None; logs OFF once per store."""
-        if config.scout_zones():
-            return None
-        if not self._off_said:
+    @staticmethod
+    def _gates0() -> dict[str, set]:
+        return {k: set() for k in ("considered", "low_p", "repeat", "no_lit", "deduped", "not_a_hazard", "confirm_no", "confirm_failed")}
+
+    def mode(self) -> str:
+        """config.scout_zones() ("on" | "person" | "off"), read at each use; logs OFF once per store."""
+        m = config.scout_zones()
+        if m == "off" and not self._off_said:
             self._off_said = True
             log("scout", OFF)
-        return OFF
+        return m
+
+    def zones_off(self) -> str | None:
+        return OFF if self.mode() == "off" else None
 
     def _map(self) -> Path:
         return self.map_path or field.MAP
 
     def _warn(self, *whys: str | None) -> None:
-        """One WARN line per change of what placed objects wait for or lost, kept for state()'s why; none: nothing did."""
+        """One WARN line per change of what placed objects wait for, kept for state()'s why; none: nothing does."""
         why = "; ".join(w for w in whys if w) or None
         if why and why != self._warned:
             log("scout", why)
         self._warned = why
 
     def feed(self, objs: list[dict], frame: dict, pose: dict | None, grid: occupancy.Grid | None, cal: dict | None,
-             fov_deg: float | None, threshold: int = occupancy.THRESHOLD, grid_lock=None) -> dict[str, int]:
-        """Every placed, not stale object not handled before is handled once, or waits (see the module docstring);
-        returns the counts. A raise (a bad WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a failed ledger write) is
-        kept as state()["error"] and re-raised for the objects thread's log; an object is taken when the loop reaches it,
-        so the one it was taking stays handled and is a line in state()["failed"] (its row is what may be missing), and
-        the objects it had not reached are taken by the next feed."""
+             fov_deg: float | None, threshold: int = occupancy.THRESHOLD, grid_lock=None, live=None) -> dict[str, int]:
+        """One detector window: person zones refreshed, made or expired; every hazard candidate through the gates (see
+        the module docstring); returns the counts. live: the newest LiDAR window's band in odometry metres ((N, 2)),
+        None with no live view. A raise (a bad WTDD_SCOUT_ZONES or WTDD_DECIDE_THRESHOLD, an unreadable ui/map.json, a
+        failed ledger write) is kept as state()["error"] and re-raised for the objects thread's log; the object it was
+        taking stays handled and is a line in state()["failed"]."""
         self._taking = None
         try:
-            return self._feed(objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock)
+            return self._feed(objs, frame, grid, cal, grid_lock, live)
         except Exception as e:
             err = f"feed: {type(e).__name__}: {e}"
             with self._lock:
@@ -330,25 +420,107 @@ class Proposals:
             self.handled.add(o["id"])
             self._taking = o
 
-    def _feed(self, objs, frame, pose, grid, cal, fov_deg, threshold, grid_lock) -> dict[str, int]:
-        if self.zones_off():   # THE gate: no model call, no photo, no zone, no zone.* row; 07's objects are not the scout's
-            return dict.fromkeys(("handled", "decided", "added", "failed", "deduped"), 0)
-        t_all = time.perf_counter()
-        with self._lock:   # a stale thing is not taken: 07 no longer sees it, so it never waits forever
-            cands = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and not o.get("stale")
-                     and o["id"] not in self.handled]
-            gone = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and o.get("stale")
-                    and o["id"] not in self.handled]   # placed, then stale before any feed took them: named, never dropped silently
-        gone_why = (f"WARN {len(gone)} placed object(s) went stale before the scout took them "
-                    f"({', '.join(o['id'] + ' ' + o['label'] for o in gone)}): asked if 07 sees them again") if gone else None
-        n = {"handled": 0, "decided": 0, "added": 0, "failed": 0, "deduped": 0}
-        if not cands:
-            self._warn(gone_why)
+    def _photo(self, data: bytes | None, name: str, err: str | None = None) -> dict[str, Any]:
+        """The detector frame copied once to the pictures folder: {file, url, path, sha256, bytes}; {missing: true,
+        error} when there are no bytes or the copy fails (never a made-up url)."""
+        if data is None:
+            return {"missing": True, "error": err or "no detector frame"}
+        try:
+            pdir = self.photo_dir or PHOTOS
+            pdir.mkdir(parents=True, exist_ok=True)
+            f = pdir / f"scout-{time.strftime('%Y%m%dT%H%M%S')}-{name}.jpg"
+            f.write_bytes(data)
+        except OSError as e:
+            return {"missing": True, "error": f"photo not written: {type(e).__name__}: {e}"}
+        return {"file": f.name, "url": f"/pictures/{f.name}", "path": str(f), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+
+    @staticmethod
+    def _at(t: float) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))
+
+    def _persons(self, seen: list[dict], data: bytes | None, derr: str | None, live, grid, now: float, wkey: Any) -> int:
+        """Every person 07 saw in this window: refreshed (cells, last seen) when lit, made when new and lit (one
+        zone.person row, the photo); then every person zone past PERSON_TTL_S is cleared (one zone.person_cleared row)."""
+        made, whys = 0, []
+        for o in (o for o in seen if o["label"] == PERSON):
+            name = f"person-{o['id'].lstrip('o')}"
+            z = self.people.get(o["id"])
+            if z and z["window"] == wkey:
+                continue
+            cells, pts = lit(live, o["hit_m"], PERSON_R_M, grid, connected=False) if grid is not None else ([], 0)
+            if not cells:
+                whys.append(f"{name} ({o['id']}) seen but {'no live LiDAR view' if live is None else f'no lit LiDAR point within {PERSON_R_M} m of the pin'}: no person zone")
+                continue
+            if z:
+                z.update(cells=cells, points_n=pts, last_seen=now, window=wkey, p=float(o["p"]))
+                continue
+            z = {"name": name, "object_id": o["id"], "p": float(o["p"]), "cells": cells, "points_n": pts, "res": grid.resolution,
+                 "photo": self._photo(data, name, derr), "first_seen": now, "last_seen": now, "window": wkey}
+            with self._lock:
+                self.people[o["id"]] = z
+            made += 1
+            self._row("zone.person", "map", {"zone": name, "object_id": o["id"], "p": z["p"], "points_n": pts, "ttl_s": PERSON_TTL_S},
+                      None, {"zone": name, "cells": cells, "expires_at": self._at(now + PERSON_TTL_S), "photo": z["photo"]}, True,
+                      f"a person ({o['id']}, p {z['p']:.2f}): a temporary zone of {pts} lit point(s), cleared {PERSON_TTL_S:.0f} s after last seen", 0)
+        self._person_why = "; ".join(whys) or None
+        for oid, z in list(self.people.items()):
+            if now >= z["last_seen"] + PERSON_TTL_S:
+                with self._lock:
+                    self.people.pop(oid, None)
+                self._row("zone.person_cleared", "map", {"zone": z["name"], "object_id": oid, "ttl_s": PERSON_TTL_S},
+                          {"zone": z["name"], "expires_at": self._at(z["last_seen"] + PERSON_TTL_S)}, None, True,
+                          f"{z['name']} cleared: not seen lit for {PERSON_TTL_S:.0f} s", 0)
+        return made
+
+    def _feed(self, objs, frame, grid, cal, grid_lock, live) -> dict[str, int]:
+        n = {"handled": 0, "decided": 0, "added": 0, "failed": 0, "deduped": 0, "people": 0}
+        mode = self.mode()
+        if mode == "off":   # THE gate: no model call, no photo, no zone, no zone.* row; 07's objects are not the scout's
             return n
-        missing = [k for k, v in (("pose", pose), ("grid", grid), ("calibration", cal), ("field of view", fov_deg)) if v is None]
-        if missing:   # taken again when they are back: 07 placed these, the scout cannot see them now
-            self._warn(f"WARN {len(cands)} placed object(s) waiting: no {', no '.join(missing)}", gone_why)
+        now, t_all = self.clock(), time.perf_counter()
+        self._t0 = now if self._t0 is None else self._t0
+        self._sum_at = now if self._sum_at is None else self._sum_at
+        wkey = frame.get("t") or frame.get("ts") or frame.get("file")   # the detector window's own stamp
+        placed = [o for o in objs if o.get("pos_px") is not None and o.get("hit_m") is not None and not o.get("stale")]
+        seen = [o for o in placed if o.get("windows_unseen", 0) == 0]
+        data, derr = None, None
+        if any(o["label"] == PERSON and o["id"] not in self.people for o in seen) or mode == "on":   # read only when a photo may be taken
+            try:
+                data = Path(frame["file"]).read_bytes()
+                from PIL import Image
+                Image.open(io.BytesIO(data)).verify()
+            except (OSError, KeyError, TypeError, SyntaxError) as e:
+                data, derr = None, f"frame unreadable, no photo and no question: {type(e).__name__}: {e} (watch.json file {frame.get('file')})"
+        n["people"] = self._persons(seen, data, derr, live, grid, now, wkey)
+        if mode == "person":   # the filming setting: no hazard zone, no Jev and no confirm call
             return n
+        g, cands = self.gates, []
+        with self._lock:
+            for o in placed:
+                if o["label"] == PERSON or o["id"] in self.handled:
+                    continue
+                g["considered"].add(o["id"])
+                s = self.sight.setdefault(o["id"], {})
+                if float(o["p"]) < HAZARD_P_MIN:   # gate 1
+                    g["low_p"].add(o["id"])
+                    continue
+                if o in seen:
+                    s[wkey] = now
+                span = max(s.values()) - min(s.values()) if s else 0.0
+                if len(s) < HAZARD_SEEN_N or span < HAZARD_SPAN_S:   # gate 2
+                    g["repeat"].add(o["id"])
+                    continue
+                cands.append((o, len(s), round(span, 1)))
+        if cands and (grid is None or cal is None):   # considered again when they are back
+            self._warn(f"WARN {len(cands)} hazard candidate(s) waiting: no {'grid' if grid is None else 'calibration'}")
+            cands = []
+        if cands:
+            n = self._hazards(cands, frame, data, derr, grid, cal, grid_lock, live, n)
+        self._gate_summary(now)
+        return self._summary(n, t_all) if n["handled"] or n["people"] else n
+
+    def _hazards(self, cands, frame, data, derr, grid, cal, grid_lock, live, n) -> dict[str, int]:
+        g = self.gates
         thr = self.thr = decide_threshold()
         mp = self._map()
         ver = int(mp.stat().st_mtime)   # the version this feed's writes check: a map changed during a model call is 409
@@ -356,38 +528,26 @@ class Proposals:
                   if z.get("source") == "scout" and z.get("cells")]   # the scout's zones already on the map
         with self._lock:
             self.error = None   # past the threshold and the map: this feed can ask
-        try:
-            data = Path(frame["file"]).read_bytes()
-            from PIL import Image
-            width = Image.open(io.BytesIO(data)).width
-        except (OSError, KeyError, TypeError) as e:
-            err = f"frame unreadable, no photo and no question: {type(e).__name__}: {e} (watch.json file {frame.get('file')})"
-            for o in cands:
-                self._take(o)
-                self._fail(o, "frame read", err)
-                self._row("zone.proposed", "map", {"object_id": o["id"], "kind": o["label"]}, None, None, False, err, 0)
-            n["handled"] = n["failed"] = len(cands)
-            self._warn(gone_why)
-            return self._summary(n, t_all)
-        fn, waiting = self.decide, []   # decider() is read when a call is about to be made, never on a tick that asks nothing
-        for o in cands:
+        fn, cfn, waiting = self.decide, self.confirm_fn, []   # the model paths are read when a call is about to be made
+        for o, seen_n, span_s in cands:
             t0 = time.perf_counter()
-            try:
+            try:   # gate 4, before any model call: the lit cluster around the pin in the newest window
                 with grid_lock or contextlib.nullcontext():
                     res = grid.resolution
-                    cells = blob(grid, pose, o["box"], {"xy": o["hit_m"], "dist_m": o["dist_m"]}, width, fov_deg, threshold)
-                    poly = polygon(cells, cal, res) if cells else None
-            except Exception as e:  # noqa: BLE001  (a failed row and a failed line, never a zone of no cells)
-                cells, poly, err = [], None, f"blob FAILED: {type(e).__name__}: {e}"
-            else:
-                if not cells:   # the cone from here misses 07's hit: the dog moved since 07 placed it. A wait, not a failure:
-                    waiting.append(o)   # not taken: the next feed tries again, with the hit 07 refreshes from where the dog is then
-                    continue
+                    cells, pts = lit(live, o["hit_m"], HAZARD_R_M, grid)
+                    poly = polygon(cells, cal, res) if pts >= HAZARD_MIN_POINTS else None
                 err = None
+            except Exception as e:  # noqa: BLE001  (a failed row and a failed line, never a zone of no cells)
+                cells, pts, poly, err = [], 0, None, f"lit cluster FAILED: {type(e).__name__}: {e}"
+            if not err and poly is None:   # a wait, not a failure: the thing is considered again at the next window
+                g["no_lit"].add(o["id"])
+                waiting.append(f"{o['id']} {o['label']} ({'no live view' if live is None else f'{pts} lit point(s) < {HAZARD_MIN_POINTS}'})")
+                continue
             self._take(o)
             n["handled"] += 1
-            if err:
-                self._fail(o, "cells", err)
+            if err or data is None:
+                err = err or derr
+                self._fail(o, "cells" if data is not None else "frame read", err)
                 self._row("zone.proposed", "map", {"object_id": o["id"], "kind": o["label"]}, None, None, False, err,
                           round((time.perf_counter() - t0) * 1000))
                 n["failed"] += 1
@@ -399,6 +559,7 @@ class Proposals:
                         or next((f"{name} on the map" for name, c in on_map if key & c), None))
                 if same:
                     self.counts["deduped"] += 1
+                    g["deduped"].add(o["id"])
             if same:
                 log("scout", f"{o['id']} is the same thing as {same}: no call, no row", kind=o["label"], cells=len(cells))
                 n["deduped"] += 1
@@ -408,13 +569,13 @@ class Proposals:
             q = {"kind": o["label"], "conf": o["p"], "state": None, "labels": list(SCOUT_LABELS)}
             fn = fn or decider()
             t1 = time.perf_counter()
-            try:   # outside every lock: a model call can take seconds
+            try:   # outside every lock: a model call can take seconds. Jev names WHAT it is; the gates decide WHETHER
                 q["state"] = words(o["label"], o["p"], o["dist_m"], o.get("bearing_deg"), area)
-                d, derr = fn(q), None
+                d, derr2 = fn(q), None
                 if d["label"] not in SCOUT_LABELS or not 0.0 <= float(d["p"]) <= 1.0:
                     raise ValueError(f"decision out of contract: label {d['label']!r}, p {d['p']!r}")
-            except Exception as e:  # noqa: BLE001  (its own failed zone.decided row, no proposal, never retried)
-                d, derr = None, f"{type(e).__name__}: {e}"
+            except Exception as e:  # noqa: BLE001  (its own failed zone.decided row, no zone, never retried)
+                d, derr2 = None, f"{type(e).__name__}: {e}"
             ms = round((time.perf_counter() - t1) * 1000)
             stub = bool(d["cached"]) if d else fn is decide_stub
             app = d["app"] if d else ("stub" if fn is decide_stub else "openrouter")
@@ -422,59 +583,96 @@ class Proposals:
             self._row("zone.decided", app, {"object_id": o["id"], "kind": o["label"], "labels": list(SCOUT_LABELS), **got,
                                             "probabilities": d["probabilities"] if d else None, "threshold": thr},
                       {"state": q["state"], "labels": list(SCOUT_LABELS)}, got if d else None, d is not None,
-                      d["raw"] if d else derr, ms, stub)
+                      d["raw"] if d else derr2, ms, stub)
             if d is None:
-                self._fail(o, None, derr)
+                self._fail(o, None, derr2)
                 n["failed"] += 1
                 continue
             n["decided"] += 1
             with self._lock:
                 self.counts["asked"] += 1
             if d["label"] == "not_a_hazard" or float(d["p"]) < thr:
+                g["not_a_hazard"].add(o["id"])
                 log("scout", f"{o['id']} stays a pin: {d['label']} at p {float(d['p']):.2f} (threshold {thr})", kind=o["label"])
+                continue
+            cfn = cfn or confirmer()   # gate 3: the picture, a stronger vision model
+            cq = {"kind": o["label"], "conf": float(o["p"]), "model": confirm_model(), "image": None}
+            t3 = time.perf_counter()
+            try:
+                cq["image"] = crop(data, o["box"])
+                c, cerr = cfn(cq), None
+                if c["answer"] not in ("yes", "no") or not 0.0 <= float(c["p"]) <= 1.0:
+                    raise ValueError(f"confirm out of contract: answer {c['answer']!r}, p {c['p']!r}")
+            except Exception as e:  # noqa: BLE001  (NO zone and one FAILED row: never a default yes, never retried)
+                c, cerr = None, f"{type(e).__name__}: {e}"
+            cstub = bool(c["cached"]) if c else cfn is confirm_stub
+            conf = {"model": c["model"], "answer": c["answer"], "name": c["name"], "p": float(c["p"])} if c else None
+            passed = bool(c) and c["answer"] == "yes" and float(c["p"]) >= CONFIRM_P_MIN and agrees(o["label"], c["name"])
+            self._row("zone.confirm", (c["app"] if c else "stub" if cstub else "openrouter"),
+                      {"object_id": o["id"], "kind": o["label"], "model": c["model"] if c else cq["model"], "threshold": CONFIRM_P_MIN,
+                       **(conf or {"answer": None, "name": None, "p": None}), "passed": passed},
+                      {"question": STRICT_QUESTION, "kind": o["label"]}, conf, c is not None, c["raw"] if c else cerr,
+                      round((time.perf_counter() - t3) * 1000), cstub)
+            if c is None:
+                g["confirm_failed"].add(o["id"])
+                self._fail(o, "confirm", cerr)
+                n["failed"] += 1
+                continue
+            if not passed:
+                g["confirm_no"].add(o["id"])
+                log("scout", f"{o['id']} stays a pin: the confirm model said {c['answer']} ({c['name']!r}, p {float(c['p']):.2f}; "
+                             f"needs yes, p >= {CONFIRM_P_MIN}, the detector's {o['label']!r} class)", kind=o["label"])
                 continue
             with self._lock:
                 self.n_ids += 1
                 zid = f"z{self.n_ids}"
             t2 = time.perf_counter()
-            try:
-                pdir = self.photo_dir or PHOTOS
-                pdir.mkdir(parents=True, exist_ok=True)
-                f = pdir / f"scout-{time.strftime('%Y%m%dT%H%M%S')}-{zid}.jpg"
-                f.write_bytes(data)
-            except OSError as e:
-                err = f"photo not written, no zone: {type(e).__name__}: {e}"
-                self._fail(o, "photo write", err)
-                self._row("zone.proposed", "map", {"id": zid, "object_id": o["id"], "kind": o["label"]}, None, None, False, err, 0, stub)
+            photo = self._photo(data, zid)
+            if photo.get("missing"):
+                self._fail(o, "photo write", photo["error"])
+                self._row("zone.proposed", "map", {"id": zid, "object_id": o["id"], "kind": o["label"]}, None, None, False, photo["error"], 0, stub)
                 n["failed"] += 1
                 continue
-            z = {"id": zid, "object_id": o["id"], "kind": o["label"], "label": d["label"], "p": float(d["p"]), "app": app,
+            stub = stub or cstub
+            ev = {"p": float(o["p"]), "seen_n": seen_n, "span_s": span_s, "confirm": conf, "points_n": pts}
+            z = {"id": zid, "object_id": o["id"], "kind": o["label"], "label": d["label"], "p": float(d["p"]), "app": "stub" if stub else app,
                  "cells": cells, "cells_px": occupancy.to_map_px(cells, cal).tolist(), "poly": poly, "thumb": o.get("thumb"),
-                 "photo": {"path": str(f), "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)},
+                 "photo": {k: photo[k] for k in ("path", "sha256", "bytes", "file", "url")}, "evidence": ev,
                  "dist_m": o["dist_m"], "area_m2": area, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
-            by, before = f"auto ({'stub' if stub else 'jev'} {z['p']:.2f})", {k: v for k, v in z.items() if k != "thumb"}
+            by, before = f"auto ({'stub' if stub else 'jev + ' + c['model']} {z['p']:.2f})", {k: v for k, v in z.items() if k != "thumb"}
             try:   # on the map at once, by confirm's own path and rules
                 with self._lock:
-                    out, after = self._add(z, "auto", ver, "the scout read it before the model call; not retried")
+                    out, after = self._add(z, "auto", ver, "the scout read it before the model calls; not retried")
                     self.counts["added"] += 1
             except Exception as e:  # noqa: BLE001  (a stale map, a zone 04 refuses, an unwritable file: a failed row, never retried)
                 self._fail(o, "map write", f"{type(e).__name__}: {e}")
-                self._row("zone.confirmed", "map", {"id": zid, "zone": None, "by": by}, before, None, False,
+                self._row("zone.confirmed", "map", {"id": zid, "zone": None, "by": by, "evidence": ev}, before, None, False,
                           f"{type(e).__name__}: {e}", blob_ms + round((time.perf_counter() - t2) * 1000), stub)
                 n["failed"] += 1
                 continue
             ver = after["_version"]
             on_map.append((out["zone"]["name"], key))   # a second thing on these cells in this feed is the same thing
-            self._row("zone.confirmed", "map", {"id": zid, "zone": out["zone"]["name"], "by": by}, before, after, True,
-                      f"I added a no-go zone around the {o['label']}: {'the stub (DEMO_CACHE, not Jev)' if stub else 'Jev'} "
-                      f"is {z['p']:.2f} sure it's a hazard.",
-                      blob_ms + round((time.perf_counter() - t2) * 1000), stub)   # the cells, the photo, the write; the call is its own row's
+            self._row("zone.confirmed", "map", {"id": zid, "zone": out["zone"]["name"], "by": by, "evidence": ev}, before, after, True,
+                      f"I added a no-go zone around the {o['label']}: seen {seen_n} times over {span_s} s at p {o['p']:.2f}, "
+                      f"{pts} lit LiDAR points, and {'the stub (DEMO_CACHE, no picture looked at)' if cstub else c['model']} "
+                      f"says it's {c['name']!r} at {float(c['p']):.2f}.",
+                      blob_ms + round((time.perf_counter() - t2) * 1000), stub)   # the photo, the write; each call is its own row
             n["added"] += 1
         self._taking = None   # every row landed
-        names = ", ".join(f"{o['id']} {o['label']}" for o in waiting)
-        self._warn(f"WARN {len(waiting)} placed object(s) waiting ({names}): no counted cell in the box's cone from where the dog "
-                   f"is now (it moved since 07 placed them); asked when 07 places them again" if waiting else None, gone_why)
-        return self._summary(n, t_all) if n["handled"] else n
+        self._warn(f"WARN {len(waiting)} hazard candidate(s) past gates 1 and 2 waiting for a lit LiDAR cluster: {', '.join(waiting)}"
+                   if waiting else None)
+        return n
+
+    def _gate_summary(self, now: float) -> None:
+        """One line every SUMMARY_S: the things considered and the ones each gate rejected (distinct ids); no zone added
+        since the first feed is a WARN, never silence."""
+        if now - self._sum_at < SUMMARY_S:
+            return
+        g, added = self.gates, self.counts["added"]
+        log("scout", f"{'WARN ' if not added else ''}{added} hazard zone(s) in {(now - self._t0) / 60:.1f} min; the last {now - self._sum_at:.0f} s",
+            **{k: len(v) for k, v in g.items()}, people=len(self.people))
+        with self._lock:
+            self.gates, self._sum_at = self._gates0(), now
 
     def _summary(self, n: dict, t_all: float) -> dict[str, int]:
         log("scout", f"{'WARN ' if n['handled'] and not n['added'] else ''}feed", **n, open=len(self.open),
@@ -558,7 +756,8 @@ class Proposals:
                             "source": "scout", "cells": z["cells"], "proposal": z["id"], "by": by,
                             **({"app": "stub"} if z["app"] == "stub" else {})}   # DEMO_CACHE provenance survives; 04 ignores the key
             if by == "auto":   # a model's label and p, no person's name: the remote says "auto · <label> · <p>"
-                e.update(label=z["label"], p=z["p"])
+                e.update(label=z["label"], p=z["p"], kind="hazard", evidence=z.get("evidence"),
+                         photo={k: z["photo"][k] for k in ("file", "url")} if (z.get("photo") or {}).get("file") else None)
             return zones + [e]
         v = self._rewrite(version, "added" if by == "auto" else "confirmed", add, since)
         e = box["e"]
@@ -582,35 +781,48 @@ class Proposals:
             return {"ok": True, "dismissed": zid, "say": say}, after
         return self._tap("zone.dismissed", zid, by, time.perf_counter(), drop)
 
-    def state(self) -> dict[str, Any]:
-        """The GET /dog/scout body (without `source`): {n, proposals, zones, auto_zones, _version, failed, why, error?};
-        zones are the auto zones on the map and _version the map's (a dismiss sends it back); auto_zones is "on" or
-        "off (WTDD_SCOUT_ZONES=0)"; why names the reason whenever n is 0 (OFF when off); error is the last feed's raise
-        until a feed gets past the threshold and the map (the page draws it red)."""
-        off = self.zones_off()
+    def state(self, cal: dict | None = None) -> dict[str, Any]:
+        """The GET /dog/scout body (without `source`): {n, proposals, zones, auto_zones, gates, _version, failed, why,
+        error?}. zones: the hazard zones on the map (kind "hazard", by "auto", with their evidence and photo) then the
+        live person zones (kind "person", temporary, expires_at, photo, poly through cal, the calibration in force now;
+        poly None without one), none past its TTL. _version is the map's (a dismiss sends it back); gates counts the
+        things considered and rejected per gate since the last summary line; why names the reason whenever nothing is
+        served (OFF when off); error is the last feed's raise (the page draws it red)."""
+        mode = self.mode()
         mp = self._map()
         v = int(mp.stat().st_mtime)
-        zones = [z for z in json.loads(mp.read_text()).get("zones", []) if z.get("source") == "scout" and z.get("by") == "auto"]
+        zones = [{**z, "kind": z.get("kind") or "hazard"} for z in json.loads(mp.read_text()).get("zones", [])
+                 if z.get("source") == "scout" and z.get("by") == "auto"]
+        now = self.clock()
         with self._lock:
             props = [{k: z[k] for k in PROPOSAL_KEYS} for z in self.open.values()]
             failed, c = [dict(f) for f in self.failed], dict(self.counts)
-            handled, warned, error = len(self.handled), self._warned, self.error
+            handled, warned, error, pwhy = len(self.handled), self._warned, self.error, self._person_why
+            people = [dict(z) for z in self.people.values() if now < z["last_seen"] + PERSON_TTL_S]
+            gates = {k: len(x) for k, x in self.gates.items()}
+        if mode != "off":
+            zones += [{"name": z["name"], "kind": "person", "label": PERSON, "temporary": True, "object_id": z["object_id"], "p": z["p"],
+                       "expires_at": self._at(z["last_seen"] + PERSON_TTL_S), "points_n": z["points_n"], "cells": z["cells"],
+                       "photo": {k: z["photo"][k] for k in ("file", "url")} if z["photo"].get("file") else z["photo"],
+                       "poly": polygon(z["cells"], cal, z["res"]) if cal else None} for z in people]
         why = None
         if not props:
             if not handled:
                 why = warned or ("no object taken: the last feed FAILED (error)" if error else
-                                 "no placed object yet: the scout asks once about each thing 07 pins on the grid")
+                                 f"no hazard candidate yet: a zone needs p >= {HAZARD_P_MIN}, {HAZARD_SEEN_N} windows over "
+                                 f"{HAZARD_SPAN_S:.0f} s, a lit cluster of {HAZARD_MIN_POINTS}+ points and the confirm model's yes")
             else:
-                parts = [f"{c['asked']} asked, {c['added']} added to the map as a hazard at p >= {self.thr}"]
+                parts = [f"{c['asked']} asked, {c['added']} added to the map as a hazard past the four gates"]
                 parts += [f"{c[k]} {k}" for k in ("confirmed", "dismissed", "deduped") if c[k]]
                 parts += [f"{len(failed)} failed (listed)"] if failed else []
                 parts += [warned] if warned else []
                 why = "no open proposal: " + ", ".join(parts)
-            why = OFF if off else why
-        return {"n": len(props), "proposals": props, "zones": zones, "auto_zones": "off (WTDD_SCOUT_ZONES=0)" if off else "on",
+            why = "; ".join(w for w in (why, pwhy) if w)
+            why = OFF if mode == "off" else why
+        auto = {"on": "on", "person": "person only (WTDD_SCOUT_ZONES=person)", "off": "off (WTDD_SCOUT_ZONES=0)"}[mode]
+        return {"n": len(props), "proposals": props, "zones": zones, "auto_zones": auto, "gates": gates,
                 "_version": v, "failed": failed, "why": why,
                 **({"error": error} if error else {})}
-
 
 def png(grid: occupancy.Grid, threshold: int, cells, path) -> Path:
     """occupancy.png, then every zone cell one PNG_SCALE square in CELL_RGB (grid rows and columns, not the map)."""
@@ -637,11 +849,12 @@ def main(argv: list[str] | None = None) -> int:
     t_all = time.perf_counter()
     try:
         from .fixtures.make_objects_fixture import CAL
-        g = None
+        g, last = None, None
         for d in occupancy.replay(a.replay):
             if g is None:
                 g = occupancy.Grid.from_frame(d)
             g.update_frame(d)
+            last = d
         if g is None:
             raise ValueError(f"{a.replay} holds no frames")
         w = Path(a.watch)
@@ -655,13 +868,21 @@ def main(argv: list[str] | None = None) -> int:
         store.observe(frame, pose, g, CAL, a.fov, a.threshold)
         with tempfile.TemporaryDirectory(prefix="wtdd-scout-replay-") as tmp:   # the photo copies and an empty map: nothing real is read or written
             (Path(tmp) / "map.json").write_text('{"zones": []}\n')
-            # DEMO_CACHE: the replay always asks decide_stub (COCO name -> label, p = the detector's conf), even with
-            # JEV_API_KEY set. Why: a replay of fixtures is not a step and must not spend a model call or claim a live
-            # answer. Live: the session's feed (GET /dog/objects starts it) asks decider(), Jev when the key is set.
+            # DEMO_CACHE: the replay always asks decide_stub and confirm_stub (the detector's conf, no picture looked
+            # at), even with JEV_API_KEY or OPENROUTER_API_KEY set, and feeds its ONE window HAZARD_SEEN_N times
+            # HAZARD_SPAN_S apart on a replay clock. Why: a replay of fixtures is not a step and must not spend a model
+            # call or claim a live answer or a real repeat. Live: the session's feed (GET /dog/objects starts it) asks
+            # decider() and confirmer() once per thing past the gates, on real windows.
+            clock = [0.0]
             props = Proposals(append=lambda r: log("scout", "replay row (not written)", tool=r["tool"], ok=r["ok"]),
-                              decide=decide_stub, photo_dir=tmp, map_path=Path(tmp) / "map.json")
-            props.feed(store.to_list(), frame, pose, g, CAL, a.fov, a.threshold)
-            st = props.state()
+                              decide=decide_stub, confirm=confirm_stub, photo_dir=tmp, map_path=Path(tmp) / "map.json",
+                              clock=lambda: clock[0])
+            live = localize.band(last["points"])   # the last replayed window, as the session's _live_m
+            for k in range(HAZARD_SEEN_N):
+                props.feed(store.to_list(), {**frame, "t": k}, pose, g, CAL, a.fov, a.threshold, live=live)
+                clock[0] += HAZARD_SPAN_S / (HAZARD_SEEN_N - 1)
+            st = props.state(CAL)
+        st["zones"] = [z for z in st["zones"] if z["kind"] == "hazard"]
         for z in st["zones"]:
             log("scout", z["name"], label=z["label"], p=z["p"], by=z["by"], cells=len(z["cells"]), poly=z["poly"])
         png(g, a.threshold, [c for z in st["zones"] for c in z["cells"]], a.png)

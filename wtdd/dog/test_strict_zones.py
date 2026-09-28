@@ -145,7 +145,7 @@ class Hazard(Base):
 
     def test_c_no_lit_cluster_no_zone(self):
         calls: list = []
-        for live in (None, [], WALL, square(TABLE_AT, 0.05)):   # no view, empty, lit elsewhere, too few points
+        for live in (None, [], WALL, [[2.0, 0.0], [2.05, 0.0]]):   # no view, empty, lit elsewhere, too few points
             p = self.props(calls=calls)
             self.feed(p, [obj()], n=6, live=live)
             self.assertEqual(self.auto(), [])
