@@ -39,7 +39,7 @@ export function ImagesLive() {
   const sessions = usePoll<Sessions>("/sessions", 10000);
   const [picked, setPicked] = useState<string | null>(null);
   const shift = picked ?? defaultRun(sessions.data);
-  const imgs = usePoll<ImagesJson>(shift ? `/images?shift=${encodeURIComponent(shift)}` : null, 5000);
+  const imgs = usePoll<ImagesJson>(shift ? `/images?shift=${encodeURIComponent(shift)}` : null, 10000);   // each read parses the whole ledger
   const list = imgs.data?.images ?? [];
   const stops = [...new Set(list.map((i) => i.stop))].sort((a, b) => (a == null ? 1 : b == null ? -1 : a - b));   // "not at a stop" last
   return (
@@ -78,9 +78,11 @@ export function ImagesLive() {
   );
 }
 
-/** One run's photos at one stop, or "no photo at this stop"; its own read, so one failed run never hides the others. */
+/** One run's photos at one stop, or "no photo at this stop"; its own read, so one failed run never hides the others.
+ *  Each read parses the whole ledger on the API that holds the dog, so a past run (which no longer changes) is re-read
+ *  once a minute; only the run in force, which can still gain photos, every 10 s. */
 function RunAtStop({ shift, stop, inForce }: { shift: string; stop: number; inForce: boolean }) {
-  const imgs = usePoll<ImagesJson>(`/images?shift=${encodeURIComponent(shift)}`, 10000);
+  const imgs = usePoll<ImagesJson>(`/images?shift=${encodeURIComponent(shift)}`, inForce ? 10000 : 60000);
   const here = (imgs.data?.images ?? []).filter((i) => i.stop === stop);
   return (
     <li className="flex flex-col gap-3 border-t border-border py-4 first:border-t-0 first:pt-0">
@@ -94,7 +96,7 @@ function RunAtStop({ shift, stop, inForce }: { shift: string; stop: number; inFo
 }
 
 export function CompareStop({ stop }: { stop: number }) {
-  const sessions = usePoll<Sessions>("/sessions", 10000);
+  const sessions = usePoll<Sessions>("/sessions", 60000);   // one record.build() per run; the run list changes rarely
   const runs = (sessions.data ?? []).slice(0, CAP);   // newest first, as served
   return (
     <div className="flex flex-col gap-4">
