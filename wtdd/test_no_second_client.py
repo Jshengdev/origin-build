@@ -3,16 +3,21 @@ The API process holds the dog's one WebRTC slot. During an API restart a wake's 
 and commands._via_api returned None, so DogSession.get() opened a second WebRTC client inside the listener. With
 WTDD_API_ONLY=1, which `python -m wtdd.chat listen` sets at start, _via_api raises a ConnectionError naming the API
 address instead, and the caller's failure path runs ("couldn't look", a FAILED row). The CLI keeps its fallback.
-Offline: requests.post is patched to refuse, and DogSession.get fails the test if it is ever called."""
+Offline: requests.post is patched to refuse, and DogSession.get fails the test if it is ever called. Each refused step
+is one FAILED api.<tool> row (and one stderr line) in a temp ledger, whoever catches it."""
 from __future__ import annotations
 import argparse
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
+
+os.environ["WTDD_LEDGER"] = str(Path(tempfile.mkdtemp(prefix="wtdd-no-second-client-")) / "ledger.jsonl")   # before any wtdd import
 
 import requests
 
-from wtdd import commands, config
+from wtdd import commands, config, ledger
 from wtdd.chat import __main__ as chat_main
 from wtdd.dog import session
 
@@ -29,6 +34,8 @@ class ApiOnly(unittest.TestCase):
                     call()
                 self.assertIn(config.API, str(c.exception))
                 self.assertIn("never connects the dog itself", str(c.exception))
+                last = ledger.rows()[-1]
+                self.assertEqual((last["tool"].startswith("api."), last["ok"]), (True, False), last)
 
     def test_the_cli_keeps_its_fallback(self):
         with mock.patch.dict(os.environ, {}), REFUSED:
