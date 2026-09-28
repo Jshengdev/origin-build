@@ -137,10 +137,10 @@ class Round(unittest.TestCase):
         m["stops"] = stops
         MAP.write_text(json.dumps(m))
 
-    def round(self, states: list, **api) -> None:
+    def round(self, states: list, wake: str = "W1", **api) -> None:
         self.api = Api(states, self.events, **api)
         with mock.patch.object(requests, "get", self.api.get), mock.patch.object(requests, "post", self.api.post):
-            self.l.wake_show(msg("what the dog doin"))
+            self.l.wake_show(msg("what the dog doin", wake))
 
     def rows(self, tool: str) -> list[dict]:
         return [r for r in ledger.rows()[self.n0:] if r["tool"] == tool]
@@ -164,6 +164,29 @@ class Round(unittest.TestCase):
         self.assertIn(("POST", "/dog/resume"), self.events)
         self.assertEqual([r["state_after"]["verdict"] for r in self.rows("intruder.verdict")], ["known"])
         self.assertEqual([r["ok"] for r in self.rows("listen.hold")], [False], "the hold that went on past it is one failed row")
+
+    # the same failure outside the hold: the stop's own post ("not sure: ..." for an ask, or the photo and its "couldn't
+    # look") raised out of look_and_say into walk()'s on_stop and halted the round the same way
+
+    def _failed_stop_post(self, wake: str, fail: tuple, decision: dict, failed: str) -> None:
+        """Its own wake guid: posts through the real chat post claim their triggers for good (never twice)."""
+        sends(self, *fail)
+        self.l.post = cli.post
+        self._stops([5])
+        self.enterContext(mock.patch.dict(SEEN, decision=decision))
+        self.round([state(3), state(5, stopped_at=5), state(len(PATH) - 1, active=False, done=True)], wake=wake)
+        posts = [(r["args"]["trigger"], r["ok"], r["args"]["text"]) for r in self.rows("chat.post")]
+        self.assertIn((failed, False), [p[:2] for p in posts], "the failed post is its FAILED chat.post row")
+        self.assertEqual(posts[-1], (f"done:{wake}", True, "dog done"), "the round did not finish its walk")
+        self.assertNotIn(("POST", "/dog/stop"), self.events, "the dog was halted at the stop")
+        self.assertIn(("POST", "/dog/resume"), self.events)
+        self.assertEqual([r["ok"] for r in self.rows("listen.stop")], [False], "the stop that went on past it is one failed row")
+
+    def test_a_failed_ask_at_a_stop_never_halts_the_walk(self):
+        self._failed_stop_post("WA", ("not sure",), {"label": "box", "p": 0.4, "needs_person": False, "model": "stub", "action": "ask"}, "decide:WA:5")
+
+    def test_a_failed_look_post_at_a_stop_never_halts_the_walk(self):
+        self._failed_stop_post("WL", ("a chair", "couldn't look"), SEEN["decision"], "say-fail:WL:5")
 
     # ask 1 = lights 1: the walk fails mid-round (one slow /dog/state read), the follower is still driving
 
