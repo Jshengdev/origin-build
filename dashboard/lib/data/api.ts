@@ -86,6 +86,8 @@ export interface MapJson {
 /** GET /dog/scout (19): the scout's auto zones and proposals, the map version they were served from, failed model calls. */
 export interface Scout {
   n: number; zones: NonNullable<MapJson["zones"]>; proposals: unknown[]; _version?: number; source?: string; why?: string;
+  /** #94: "on", or "off (WTDD_SCOUT_ZONES=0)" when the scout adds no auto zones; an empty list then is not "found nothing". */
+  auto_zones?: string;
   failed?: Array<{ stage?: string; error: string; kind?: string; object_id?: string; ts?: string }>;
 }
 /** GET /record?shift=<id> (item 10, S13's route): one shift's record, exactly `python -m wtdd.record --shift <id>`'s JSON.
