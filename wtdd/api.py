@@ -17,6 +17,7 @@
                                   force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
+  GET  /routines | POST /routines {action: save | load | delete, name}   named routes: the map's path, stops and actions kept by name and loaded back (wtdd/routines.py)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status, cal: the calibration tie {map, heading_deg, at} or null); POST /dog/drive {x,y,z}, /dog/stop
   POST /dog/calibrate {p, heading_deg | toward}   the dog is at map point p now, facing heading_deg (or facing point `toward`)
@@ -134,6 +135,10 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, tools.describe())
         if u.path == "/map":
             return self._json(200, {**json.loads(MAP.read_text()), "_version": int(MAP.stat().st_mtime)})   # the page sends it back on save
+        # named routines
+        if u.path == "/routines":   # the named routes and the one on the map now (a read, no row; wtdd/routines.py)
+            from . import routines
+            return self._json(200, routines.listing(MAP))
         if u.path == "/ledger":
             return self._json(200, rows(int((parse_qs(u.query).get("n") or ["20"])[0])))
         if u.path == "/field":   # a walk writes it at 10 Hz; older than BUSY_S it is a leftover of a killed process, not a walk
@@ -276,6 +281,13 @@ class H(BaseHTTPRequestHandler):
             MAP.write_text(json.dumps(m, indent=2) + "\n")
             log("api", "map restored from route-saved.json", points=len(m["path"]), stops=m["stops"])
             return self._json(200, {"ok": True, "path_pts": len(m["path"]), "stops": m["stops"]})
+        # named routines
+        if u.path == "/routines":   # {action: save | load | delete, name}: one routine.* row, ok or not (wtdd/routines.py)
+            from . import routines
+            try:
+                return self._json(200, routines.act(MAP, self._body()))
+            except routines.Refused as e:   # a bad name, an empty path, a name not saved, an unknown action: a plain reason
+                return self._json(e.code, {"ok": False, "error": str(e)})
         if u.path == "/intruder":   # {on}: arm or disarm the intruder watch (python -m wtdd.watch acts on the file)
             on = bool(self._body().get("on", True))
             f = ROOT / "intruder.on"
@@ -300,11 +312,10 @@ class H(BaseHTTPRequestHandler):
             if problems and data.get("path"):   # an unrunnable path is refused, with the points named; the page keeps the edit
                 log("api", "map NOT saved", problems=len(problems))
                 return self._json(400, {"ok": False, "error": "not saved: " + "; ".join(problems)})
-            if MAP.exists():
-                MAP.with_name("map.prev.json").write_text(MAP.read_text())   # the previous route survives one overwrite
-            MAP.write_text(json.dumps(data, indent=2) + "\n")
+            from .field import write_map
+            v = write_map(MAP, data)   # the previous route survives one overwrite (map.prev.json)
             log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])))
-            return self._json(200, {"ok": True, "_version": int(MAP.stat().st_mtime)})
+            return self._json(200, {"ok": True, "_version": v})
         if u.path in ("/dog/drive", "/dog/stop", "/dog/calibrate", "/dog/follow", "/dog/resume", "/dog/avoid", "/dog/record", "/dog/mark", "/dog/lidar"):
             import math
             from .dog import nav
