@@ -320,8 +320,8 @@ class Listener:
 
     def wake_show(self, m: dict[str, Any]) -> None:
         """The wake demo, in Johnny's order: the picture, "dog doin" as the walk starts, the walk (wtdd/field.py, the same
-        one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when the map
-        has no stops), then "dog done". Each part is a tool call and a gated post keyed on the wake message; a failed
+        one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when no stop
+        was looked at: each is counted as it happens, so a walk that fails after one never looks again), then "dog done". Each part is a tool call and a gated post keyed on the wake message; a failed
         part is posted as its error, never faked, and the sequence still ends with "dog done". With the real dog, a walk
         that fails (or a Ctrl-C of the listener) first halts the follower (halt(), POST /dog/stop), so the dog is never
         driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look. Stop on
@@ -347,8 +347,7 @@ class Listener:
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})
-            out = walk(on_stop=lambda i, p, here: self.look_and_say(m, i), source=source)
-            stops = out.get("stops", [])
+            out = walk(on_stop=lambda i, p, here: (stops.append(i), self.look_and_say(m, i)), source=source)   # as they happen: a walk that raises later keeps them
             log("chat", "walked", seconds=out["seconds"], writes=out["writes"], errors=out["errors"], stops=len(stops), rooms=",".join(out["rooms"]))
             if out.get("errors"):
                 walked = f"{out['errors']} light write(s) failed, see the ledger"
