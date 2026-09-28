@@ -3,7 +3,8 @@
 The dog accepts one peer at a time and keeps the slot for about ten seconds after a close, so connecting per command is
 slow and collides. This module holds a single Body on a background asyncio loop; synchronous callers (tools, HTTP
 handlers) submit coroutines with run(). The API process owns the dog while it runs (WTDD_API_PROCESS=1); other
-processes reach the dog through the API (wtdd/commands.py) so two peers never fight for the slot. If the 20 Hz state
+processes reach the dog through the API (wtdd/commands.py) so two peers never fight for the slot; the chat listener
+(WTDD_API_ONLY=1) never falls back to its own session when the API is down. If the 20 Hz state
 stream goes quiet for STALE_MS (the dog was power-cycled or left its hotspot) the next call closes the dead peer and
 connects once more, logged; there is no reconnect loop. A follow running then is stopped, and its row names the reconnect.
 
