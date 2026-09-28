@@ -246,8 +246,9 @@ class Listener:
 
     def await_verdict(self, seconds: float) -> bool:
         """After "who dis?!" at a stop, the listener is inside the round, so it reads the chats here: the asked chat's
-        next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, within the
-        same `seconds`. No answer in `seconds` = the question is withdrawn and the round goes on; that is logged, never
+        next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, a fresh
+        `seconds` from the re-ask (at most twice `seconds` in all, under the follower's 180 s stop timeout). No answer
+        in `seconds` = the question is withdrawn and the round goes on; that is logged, never
         faked, and a re-ask nobody answered is its unclear verdict row (_drop)."""
         t0 = time.monotonic()
         log("chat", "who dis: waiting for the verdict", seconds=seconds)
@@ -256,7 +257,8 @@ class Listener:
                 if m.get("text") and self.allowed(m) and self.verdict(m):
                     pend = json.loads(PENDING.read_text()) if PENDING.exists() else {}
                     if pend.get("reasked") and not pend.get("acknowledged"):
-                        continue   # asked once more: hold for that answer
+                        t0 = time.monotonic()   # asked once more: the re-ask gets its own `seconds`
+                        continue
                     return True
                 log("chat", "who dis: a message while holding, not the verdict: not handled", chat=m["chat"], chars=len(m.get("text") or ""))
             time.sleep(1.0)
