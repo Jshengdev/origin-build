@@ -144,10 +144,14 @@ export function ScaleSlider({ scale, busy, onCommit }: { scale: { data?: Scale; 
  *  position, the old remote's "lights follow the dog" (POST /tools/walk_path {source: "dog", follower: false, act: false}):
  *  wherever the dog goes, walked or driven, the lights near it come up and the ones it leaves go dark. Off is POST
  *  /field/stop, which ends it dark. The switch shows GET /field, never an optimistic state. The on call stays open as long
- *  as the lights follow (the tool answers when the field ends), so its answer is the result line. Needs the dog located. */
+ *  as the lights follow (the tool answers when the field ends), so its answer is the result line. Needs the dog located.
+ *  It owns only its own field (follower false): while a walk it did not start runs (a chat round's), it reads "a walk is
+ *  running" and posts nothing, so it can never stop a round (field.STOP is shared). While on, it says to turn it off
+ *  before a chat round: a round's own walk is refused while this field runs (the head's run-sheet rule for tonight). */
 export function LightsSwitch({ field, connected, calibrated, onResult }: { field?: FieldJson; connected: boolean; calibrated: boolean; onResult: (r: Result) => void }) {
   const [busy, setBusy] = useState(false);
-  const on = !!field?.p;
+  const on = !!field?.p && field.follower === false;   // its own follow-the-dog field only
+  const other = !!field?.p && !on;                     // a walk it did not start (a chat round's): hands off
   const flip = async () => {
     setBusy(true);
     if (on) {
@@ -165,10 +169,16 @@ export function LightsSwitch({ field, connected, calibrated, onResult }: { field
     onResult(r.ok ? { what: `Lights followed the dog${said ? ` · ${said}` : ""}`, ok: true } : { what: "Lights on", ok: false, error: r.error });
   };
   const why = !connected ? "The dog is not connected" : !calibrated ? "Calibrate first: the lights follow where the dog is believed to be" : undefined;
+  if (other) return (
+    <ActionButton intent="secondary" size="sm" disabled title="A walk this switch did not start owns the lights (a chat round): it ends on its own or with Stop">Lights · a walk is running</ActionButton>
+  );
   return (
-    <ActionButton intent="secondary" size="sm" aria-pressed={on} disabled={busy || (!on && !!why)}
-      title={on ? "POST /field/stop: the lights go dark" : why ?? "POST /tools/walk_path: the lights follow the dog, walked or driven"} onClick={flip}>
-      {on ? "Lights on" : "Lights off"}
-    </ActionButton>
+    <span className="flex items-center gap-2">
+      {on && <span className="text-[12px] text-muted-foreground">turn off before a chat round</span>}
+      <ActionButton intent="secondary" size="sm" aria-pressed={on} disabled={busy || (!on && !!why)}
+        title={on ? "POST /field/stop: the lights go dark" : why ?? "POST /tools/walk_path: the lights follow the dog, walked or driven"} onClick={flip}>
+        {on ? "Lights on" : "Lights off"}
+      </ActionButton>
+    </span>
   );
 }
