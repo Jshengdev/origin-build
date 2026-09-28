@@ -85,6 +85,7 @@ on camera, and that a live reply's chat.db time is never before the post it answ
 from __future__ import annotations
 import json
 import re
+import threading
 import time
 from typing import Any, Callable
 
@@ -99,7 +100,7 @@ CORRECTION = re.compile(r"^(its|it s|thats|that s|those are|these are|that is|no
 CORRECTION_WINDOW_S = 1800   # a correction counts within this long after the dog's last post
 STATE = config.ROOT / "state.json"
 PENDING = config.ROOT / "pending.json"   # the open question from intruder_alarm ("who dis?!"): the chat's next answer decides
-HEARTBEAT = config.ROOT / "listen.json"  # written every poll: the remote's "group chat" status reads it (GET /chat)
+HEARTBEAT = config.ROOT / "listen.json"  # the remote's "group chat" status (GET /chat): beat(), from its own thread in run()
 PENDING_WINDOW_S = 120
 ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
 VERDICT_WAIT_S = 45.0         # at a stop with a person in frame the round holds this long for the on-call person's answer
@@ -580,9 +581,19 @@ class Listener:
         else:
             self.say(f"res:{m['guid']}", str(out)[:300])
 
+    def beat(self) -> None:
+        """listen.json, whole or not at all (a temp file replaced): GET /chat never reads a half-written beat."""
+        hb, by = HEARTBEAT, self.armed_by
+        tmp = hb.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"t": time.time(), "guid": self.guid, "armed": self.armed, "armed_by": hname(by) if by else None,
+                                   "dry": self.dry, "pending": PENDING.exists(), "last_rowid": self.last}))
+        tmp.replace(hb)
+
+    def _beats(self, every: float, done: threading.Event) -> None:
+        while not done.wait(every):
+            self.beat()
+
     def poll(self) -> int:
-        HEARTBEAT.write_text(json.dumps({"t": time.time(), "guid": self.guid, "armed": self.armed, "armed_by": hname(self.armed_by) if self.armed_by else None,
-                                         "dry": self.dry, "pending": PENDING.exists(), "last_rowid": self.last}))
         if self.armed_by and not self.armed:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None
@@ -607,10 +618,21 @@ class Listener:
         return sorted(out, key=lambda m: m["rowid"])
 
     def run(self, every: float = 2.0, once: bool = False) -> None:
+        """Polls every `every` s. The heartbeat (listen.json: alive, armed, pending) is beat() once here, then every `every`
+        s from its own thread, the only writer, because a round (the walk, the looks, a 45 s hold) runs inside one poll()
+        and GET /chat reads a beat older than 10 s as "listener down". Known trade-off: the thread would keep beating if
+        the main thread wedged; every blocking call in a round has a timeout (the posts, the API, the follower's 180 s)."""
         log("chat", f"listen guid={self.guid}", oncall=self.oncall or "none", from_rowid=self.last, listen_s=self.listen_s, dry=self.dry,
             wake_phrases=len(wake_phrases()), commands=len(command_list()))
-        while True:
-            self.poll()
-            if once:
-                break
-            time.sleep(every)
+        self.beat()
+        done = threading.Event()
+        if not once:
+            threading.Thread(target=self._beats, args=(every, done), daemon=True).start()
+        try:
+            while True:
+                self.poll()
+                if once:
+                    break
+                time.sleep(every)
+        finally:
+            done.set()
