@@ -1,0 +1,45 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "stop": "s1",
+   "ts": "2026-09-26T23:00:56Z",
+   "image": "/fixtures/images/look_s1.svg",
+   "pins": [
+    {
+     "label": "person",
+     "p": 0.87,
+     "position": [
+      6.1,
+      1.9
+     ]
+    }
+   ],
+   "sentence": "Someone is standing just inside the front door."
+  },
+  {
+   "stop": "s2",
+   "ts": "2026-09-26T23:01:57Z",
+   "image": "/fixtures/images/look_s2.svg",
+   "pins": [
+    {
+     "label": "socks (detector said bird 0.40)",
+     "p": 0.4,
+     "position": [
+      4.2,
+      3.4
+     ]
+    }
+   ],
+   "sentence": "A pair of socks on the living room floor."
+  },
+  {
+   "stop": "s3",
+   "ts": "2026-09-26T23:03:01Z",
+   "image": "/fixtures/images/look_s3.svg",
+   "pins": [],
+   "sentence": "Counter is clear."
+  }
+ ]
+}

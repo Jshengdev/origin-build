@@ -1,0 +1,59 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "id": "nogo-1",
+   "name": "Trench",
+   "kind": "nogo",
+   "polygon": [
+    [
+     3,
+     1
+    ],
+    [
+     5.5,
+     1
+    ],
+    [
+     5.5,
+     2.2
+    ],
+    [
+     3,
+     2.2
+    ]
+   ],
+   "drawnBy": "person",
+   "status": "rule",
+   "item": "04"
+  },
+  {
+   "id": "prop-1",
+   "name": "Proposed: blob by the couch",
+   "kind": "proposed",
+   "polygon": [
+    [
+     1.2,
+     4.2
+    ],
+    [
+     2.4,
+     4.2
+    ],
+    [
+     2.4,
+     5.1
+    ],
+    [
+     1.2,
+     5.1
+    ]
+   ],
+   "drawnBy": "dog",
+   "status": "awaiting_tap",
+   "item": "19",
+   "honest": "Nothing is refused on a proposal; only a named person's tap makes it a no-go rule."
+  }
+ ]
+}
