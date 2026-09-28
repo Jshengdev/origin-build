@@ -4,8 +4,9 @@ agent's own report, and seen to fail first. Run: python -m unittest wtdd.test_ev
   decide    the round with decisions: one ok `decided` row per stop (02), needs_person recomputed from p and the
             row's own threshold (never trusted), a "not sure:" question posted and claimed when it is, every post
             read back (state_after.rowid) and no model call before the stop's local detector row
-  escalate  the escalation with a reply: the flag (chat.post kind escalate) went to the on-call person's 1:1 chat
-            (guid any;-;<handle>, 03), never the group; a reply row answers that flag with a measured acked_ms;
+  escalate  the escalation with a reply: the flag (chat.post kind escalate, or a stop's "not sure:" question) went to
+            the on-call person's 1:1 chat (guid any;-;<handle>, 03), or the group only when it is the on-call chat
+            (WTDD_ON_CALL_GUID, S10); a reply row answers that flag with a measured acked_ms;
             the shift's signature is read from record.signed (one is a detail, two ok ones are a fail)
   refuse    the refusal at a no-go: route.refused (04) ok false, source "map" at the top level and in args, the
             waypoint inside the named zone on the map itself (wtdd.field.inside), nothing moved after it

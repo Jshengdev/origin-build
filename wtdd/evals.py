@@ -37,7 +37,8 @@ The new round (item 11) is graded from the rows it left, by grade_decide / grade
 grade_correct. decide: every stop (a look that reached the vision model, ok or failed) has exactly one decided row, its
 needs_person equals p < the row's own threshold (recomputed, never trusted), a stop below the threshold posted a
 question after its decision ("not sure: ..." or "who dis?!"), and every post was read back. escalate: every flag (a
-chat.post of kind escalate) went to a 1:1 chat (any;-;<handle>) or the on-call chat WTDD_ON_CALL_GUID (the group for
+chat.post of kind escalate, or a stop's "not sure: ..." question, as the record lists them) went to a 1:1 chat
+(any;-;<handle>) or the on-call chat WTDD_ON_CALL_GUID (the group for
 the demo, S10), and has a reply from that chat with a measured acked_ms; the shift's signature is read from
 record.signed (none is said, two is a fail). refuse: every
 route.refused row is ok false, sourced to the map, names a zone drawn nogo on the map (wtdd.field.MAP, read at call
@@ -216,14 +217,16 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
 
 
 def grade_escalate(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
-    """The escalation with a reply (03). Every flag (ok chat.post kind escalate) went to a 1:1 chat (any;-;<handle>) or
+    """The escalation with a reply (03). Every flag (ok chat.post kind escalate, or a stop's "not sure:" question:
+    decide.ask_line, which the listener posts as kind listen; the record lists both) went to a 1:1 chat (any;-;<handle>) or
     to the on-call chat WTDD_ON_CALL_GUID (S10: THE CASTLE's guid for the demo; read at call time; any other chat fails,
     naming the key), was read back, and has a reply from that same chat (intruder.verdict asked = the flag's trigger,
     or a chat.correction of the flag's photo) with a measured acked_ms (int >= 0; chat.db's clock, whole seconds). The
     shift's signature is read from ok record.signed rows: none is said (unsigned), two is a fail."""
-    flags = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("kind") == "escalate"]
+    flags = [(i, r) for i, r in enumerate(rows) if r.get("tool") == "chat.post" and r.get("ok") and ((r.get("args") or {}).get("kind") == "escalate"
+             or str((r.get("args") or {}).get("text") or "").startswith("not sure:"))]
     if not flags:
-        return False, "no flag (chat.post kind escalate) in the trial", ""
+        return False, "no flag (chat.post kind escalate, or a stop's \"not sure:\" question) in the trial", ""
     bad = read_back([r for _, r in flags])
     parts, shifts, oncall = [], [], config.maybe("WTDD_ON_CALL_GUID")
     for i, f in flags:
