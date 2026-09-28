@@ -61,8 +61,9 @@ def block() -> str:
 
 
 def shifts(rows: list[dict]) -> list[dict]:
-    """Per args.shift_id, sorted: flags (ok escalate posts), acked_ms (ok intruder.verdict / chat.correction rows, ledger
-    order, a None skipped), signed and signed_by (the last ok record.signed row; none = unsigned)."""
+    """Per args.shift_id, sorted: flags (ok escalate posts, or a stop's "not sure:" question, as the record lists them),
+    acked_ms (ok intruder.verdict / chat.correction rows, ledger order, a None skipped), signed and signed_by (the last
+    ok record.signed row; none = unsigned)."""
     out: dict[str, dict] = {}
     for r in rows:
         a = r.get("args") or {}
@@ -71,7 +72,7 @@ def shifts(rows: list[dict]) -> list[dict]:
         s = out.setdefault(a["shift_id"], {"shift_id": a["shift_id"], "flags": 0, "acked_ms": [], "signed": False, "signed_by": None})
         if not r.get("ok"):
             continue
-        if r.get("tool") == "chat.post" and a.get("kind") == "escalate":
+        if r.get("tool") == "chat.post" and (a.get("kind") == "escalate" or str(a.get("text") or "").startswith("not sure:")):
             s["flags"] += 1
         elif r.get("tool") in ("intruder.verdict", "chat.correction") and a.get("acked_ms") is not None:
             s["acked_ms"].append(a["acked_ms"])
