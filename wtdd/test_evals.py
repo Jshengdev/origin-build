@@ -710,9 +710,10 @@ class NoHandles(unittest.TestCase):
             rc, out = run_main(["--scenario", "escalate", "--ledger", str(p), "--write"])
         self.assertEqual(rc, 1, out)   # graded fail: the reply came from another chat
         self.assertIsNone(PRIVATE.search(out), out)
-        for f in (readme, ev):
-            self.assertIsNone(PRIVATE.search(f.read_text()), f)
-        self.assertIn("reply came from any;-;a member", readme.read_text())
+        trials = readme.read_text().split(evals.START)[1].split(evals.END)[0]   # the section --write owns (the rest has git@github.com)
+        for text in (trials, ev.read_text()):
+            self.assertIsNone(PRIVATE.search(text), text)
+        self.assertIn("reply came from any;-;a member", trials)
 
 
 class Unknown(unittest.TestCase):
