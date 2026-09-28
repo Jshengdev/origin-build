@@ -11,7 +11,8 @@ Run: python -m wtdd.chat listen [--dry-run] [--every 2] [--listen-s 120] [--once
 
 Facts. No replay at boot: the watermark starts at MAX(ROWID). WTDD_LISTEN_S (default 120) is the armed window and any
 recognized message re-arms it. Who may wake the dog: any member while HOUSEMATES is empty (one WARN), else the listed
-handles (any other sender is ignored with one masked WARN per sender); from-me rows only with WTDD_ALLOW_SELF=1 (Johnny's phone shares the dog's account), and even then the dog's
+handles (any other sender is ignored with one masked WARN per sender); from-me rows only with WTDD_ALLOW_SELF=1
+(Johnny's phone shares the dog's account), and even then the dog's
 own posts are refused by confirmed guid and by the opening words of its replies. "yo dog ..." (or "hey dog", "dog ...") is a chat turn: the model answers from the group's context (memory.context: who
 said what, what the dog did and reported, corrections), reading the same sender's next messages for GATHER_S as part
 of the request; nothing else in the chat is answered. "who dis?!" (a round's look with a person in frame, or
@@ -49,7 +50,8 @@ in the 1:1 chat as read here, and the send to it (send.py).
 
 S10, the demo: WTDD_ON_CALL_GUID set to the group's own guid makes the group the on-call target (oncall.person()). The
 flag goes to the group, the group is read once, and it keeps its wake words, commands and chat turns: while a flag is
-open those are not an answer (a command only when the whole message is one: "sit" is not an answer, "it is teri" is) (the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
+open those are not an answer (a command only when the whole message is one: "sit" is not an answer, "it is teri"
+is; the 1:1 rule above, answers only, applies to a 1:1 on-call chat only). The first clear
 reply from a member (not a wake word, a command or a chat turn) decides, as in the 1:1. Every intruder.verdict row
 carries args.by (the HOUSEMATES first name, else "a member"), args.say (one first-person sentence, the reply quoted
 with any phone or email in it replaced by "a member", as the page's redact() does) and args.decided true; args.from
@@ -329,8 +331,9 @@ class Listener:
     def wake_show(self, m: dict[str, Any]) -> None:
         """The wake demo, in Johnny's order: the picture, "dog doin" as the walk starts, the walk (wtdd/field.py, the same
         one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when no stop
-        was looked at: each is counted as it happens, so a walk that fails after one never looks again), then "dog done". Each part is a tool call and a gated post keyed on the wake message; a failed
-        part is posted as its error, never faked, and the sequence still ends with "dog done". With the real dog, a walk
+        was looked at: each is counted as it happens, so a walk that fails after one never looks again), then "dog
+        done". Each part is a tool call and a gated post keyed on the wake message; a failed part is posted as its
+        error, never faked, and the sequence still ends with "dog done". With the real dog, a walk
         that fails (or a Ctrl-C of the listener) first halts the follower (halt(), POST /dog/stop), so the dog is never
         driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look. Stop on
         either dashboard during this round (field.stop written since the wake, or the follow ended "stopped") is no
