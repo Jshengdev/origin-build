@@ -1,0 +1,56 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "id": "unitree",
+   "what": "Unitree Go2 (the body)",
+   "status": "EXISTS on main"
+  },
+  {
+   "id": "hue",
+   "what": "Philips Hue, four lamps",
+   "status": "EXISTS on main"
+  },
+  {
+   "id": "tuya",
+   "what": "Tuya light strip",
+   "status": "EXISTS on main"
+  },
+  {
+   "id": "imessage",
+   "what": "iMessage group through one Mac (chat.db read-back)",
+   "status": "EXISTS on main"
+  },
+  {
+   "id": "imessage-1to1",
+   "what": "iMessage 1:1 to the named on-call person",
+   "status": "BUILT, PR #7 open, not merged"
+  },
+  {
+   "id": "twilio",
+   "what": "SMS via Twilio",
+   "status": "BUILT, PR #11 open, not merged; never sent"
+  },
+  {
+   "id": "yolo",
+   "what": "YOLO11n detector (AGPL-3.0)",
+   "status": "EXISTS on main"
+  },
+  {
+   "id": "vision",
+   "what": "Vision model via OpenRouter (x-ai/grok-4.20)",
+   "status": "EXISTS on main"
+  },
+  {
+   "id": "jev",
+   "what": "Jev typed decision (typesafe/jev-1.13)",
+   "status": "BUILT, PR #3 open, not merged"
+  },
+  {
+   "id": "laptop-cam",
+   "what": "Laptop camera as a fixed gate camera",
+   "status": "BUILT, PR #1 open, not merged"
+  }
+ ]
+}

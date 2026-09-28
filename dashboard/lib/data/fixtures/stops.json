@@ -1,0 +1,47 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "id": "s1",
+   "index": 1,
+   "name": "Front door (intruder check)",
+   "position": [
+    6.2,
+    1.8
+   ],
+   "look": "level",
+   "intruderCheck": true
+  },
+  {
+   "id": "s2",
+   "index": 2,
+   "name": "Living room floor",
+   "position": [
+    4,
+    3.6
+   ],
+   "look": "nod"
+  },
+  {
+   "id": "s3",
+   "index": 3,
+   "name": "Kitchen counter",
+   "position": [
+    3.5,
+    7.5
+   ],
+   "look": "nod"
+  },
+  {
+   "id": "s4",
+   "index": 4,
+   "name": "Hallway",
+   "position": [
+    9,
+    3.8
+   ],
+   "look": "nod"
+  }
+ ]
+}

@@ -1,0 +1,155 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "id": "taught",
+   "name": "Taught route",
+   "source": "recorded by driving once",
+   "status": "exists_on_main",
+   "polyline": [
+    [
+     8.2,
+     1.4
+    ],
+    [
+     7.6,
+     1.8
+    ],
+    [
+     6.6,
+     1.9
+    ],
+    [
+     6.2,
+     1.8
+    ],
+    [
+     5.8,
+     2.8
+    ],
+    [
+     4.6,
+     3.3
+    ],
+    [
+     4,
+     3.6
+    ],
+    [
+     3.4,
+     5
+    ],
+    [
+     3.5,
+     6.9
+    ],
+    [
+     3.5,
+     7.5
+    ],
+    [
+     5.5,
+     6.2
+    ],
+    [
+     7.4,
+     5.4
+    ],
+    [
+     8.4,
+     4.4
+    ],
+    [
+     9,
+     3.8
+    ],
+    [
+     8.6,
+     2.4
+    ],
+    [
+     8.2,
+     1.4
+    ]
+   ],
+   "stopIds": [
+    "s1",
+    "s2",
+    "s3",
+    "s4"
+   ],
+   "waypointEveryM": 0.4
+  },
+  {
+   "id": "tapped-1",
+   "name": "Tapped stops, planned over the grid",
+   "source": "person tapped stops; planner A* over the dog's cells",
+   "status": "built_pr",
+   "item": "21",
+   "polyline": [
+    [
+     8.2,
+     1.4
+    ],
+    [
+     7.2,
+     2.6
+    ],
+    [
+     6.0,
+     2.7
+    ],
+    [
+     4,
+     3.6
+    ],
+    [
+     3.4,
+     5.2
+    ],
+    [
+     3.5,
+     7.5
+    ]
+   ],
+   "stopIds": [
+    "s2",
+    "s3"
+   ],
+   "legs": [
+    {
+     "from": "start",
+     "to": "s2",
+     "ok": true
+    },
+    {
+     "from": "s2",
+     "to": "s3",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "refused-1",
+   "name": "Route through the trench",
+   "status": "refused",
+   "item": "04",
+   "why": "route REFUSED zone=nogo-1 waypoint=480,1100",
+   "polyline": [
+    [
+     8.2,
+     1.4
+    ],
+    [
+     4.2,
+     1.6
+    ],
+    [
+     3.5,
+     7.5
+    ]
+   ]
+  }
+ ]
+}

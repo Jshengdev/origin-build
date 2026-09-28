@@ -1,0 +1,19 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": [
+  {
+   "id": "oncall",
+   "name": "Sam Stand-in",
+   "role": "on_call",
+   "channel": "imessage_1to1",
+   "note": "Fixture name, same as the team's dry screenshots. Nobody real has answered."
+  },
+  {
+   "id": "group",
+   "name": "THE CASTLE (house group)",
+   "role": "group",
+   "channel": "imessage_group"
+  }
+ ]
+}

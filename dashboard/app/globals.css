@@ -1,0 +1,222 @@
+/*
+ * What the Dog Doin: design system mapped onto shadcn/ui (Tailwind v4).
+ *
+ * Replace the contents of app/globals.css with this file AFTER `npx shadcn@latest init`.
+ * Why this doesn't break shadcn:
+ *   - Every variable shadcn components read (--background, --primary, --border, --ring, --sidebar-*, --chart-*...)
+ *     is defined here with our values. Stock components restyle themselves; you never edit components/ui/*.
+ *   - Our own tokens (heat ramp, highlight, twin-canvas, signal-*) are ADDED alongside, never renamed into shadcn's.
+ *   - Dark mode uses shadcn's convention: the `.dark` class on <html> (next-themes with attribute="class").
+ *
+ * Meaning guard: shadcn uses --accent for HOVER backgrounds on menus, ghost and outline buttons.
+ * So --accent is a quiet neutral here. Our yellow lives in --highlight and means only "waiting on a person".
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* ---- shadcn contract, light ---- */
+  --radius: 2px;
+  --background: #F1F1EC;            /* paper */
+  --foreground: #1B1C1E;            /* ink */
+  --card: #FAFAF6;                  /* surface */
+  --card-foreground: #1B1C1E;
+  --popover: #FAFAF6;
+  --popover-foreground: #1B1C1E;
+  --primary: #1B1C1E;               /* primary action = ink */
+  --primary-foreground: #F1F1EC;    /* on-ink */
+  --secondary: #E6E6E0;
+  --secondary-foreground: #1B1C1E;
+  --muted: #E6E6E0;
+  --muted-foreground: #5C5D58;      /* ink-muted, 5.3:1 on muted */
+  --accent: #E6E6E0;                /* hover neutral, NOT the highlight */
+  --accent-foreground: #1B1C1E;
+  --destructive: #A5342A;           /* signal-alert */
+  --border: #D9D9D1;                /* line: hairlines only */
+  --input: #86867E;                 /* line-strong: control edges, 3.5:1 on surface */
+  --ring: #86867E;
+  --chart-1: #3A1D5C;               /* heat ramp, cold to peak */
+  --chart-2: #9B2D66;
+  --chart-3: #E0522B;
+  --chart-4: #F5A524;
+  --chart-5: #EFE36A;
+  --sidebar: #F1F1EC;
+  --sidebar-foreground: #1B1C1E;
+  --sidebar-primary: #1B1C1E;
+  --sidebar-primary-foreground: #F1F1EC;
+  --sidebar-accent: #FAFAF6;        /* active nav item = surface */
+  --sidebar-accent-foreground: #1B1C1E;
+  --sidebar-border: #D9D9D1;
+  --sidebar-ring: #86867E;
+
+  /* ---- What the Dog Doin extras, light ---- */
+  --paper: var(--background);
+  --surface: var(--card);
+  --line: var(--border);
+  --line-strong: var(--input);
+  --ink: var(--foreground);
+  --ink-muted: var(--muted-foreground);
+  --on-ink: var(--primary-foreground);
+  --twin-canvas: #1C1D20;
+  --heat-cold: #3A1D5C;
+  --heat-warm: #9B2D66;
+  --heat-hot: #E0522B;
+  --heat-peak: #F5A524;
+  /* The LiDAR depth ramp, low to high (Johnny: "apply the lidar colorscheme ... the depth to be color calculated"): turbo's
+     cool half, stopping before its yellow and red, which mean "a person must act" and alert on this map. The map is dark in
+     both themes, so the ramp does not change with the theme. */
+  --lidar-0: #4A78F0;
+  --lidar-1: #2EB6F0;
+  --lidar-2: #29EFA2;
+  --lidar-3: #A2FC3C;
+  --highlight: #EFE36A;             /* waiting on a person: an open ask, a proposed zone, an unsigned record */
+  --on-highlight: #1B1C1E;          /* constant across themes */
+  --signal-good: #2D6A3B;
+  --signal-good-soft: #DCEBDD;
+  --signal-alert: #A5342A;
+  --signal-alert-soft: #F4DDD8;
+}
+
+.dark {
+  --background: #16171A;
+  --foreground: #EDEDE7;
+  --card: #1F2024;
+  --card-foreground: #EDEDE7;
+  --popover: #1F2024;
+  --popover-foreground: #EDEDE7;
+  --primary: #EDEDE7;
+  --primary-foreground: #16171A;
+  --secondary: #26272B;
+  --secondary-foreground: #EDEDE7;
+  --muted: #26272B;
+  --muted-foreground: #A2A39C;
+  --accent: #2A2B30;
+  --accent-foreground: #EDEDE7;
+  --destructive: #F28B7F;
+  --border: #34363B;
+  --input: #6E7076;
+  --ring: #6E7076;
+  --chart-1: #6A45A0;
+  --sidebar: #16171A;
+  --sidebar-foreground: #EDEDE7;
+  --sidebar-primary: #EDEDE7;
+  --sidebar-primary-foreground: #16171A;
+  --sidebar-accent: #1F2024;
+  --sidebar-accent-foreground: #EDEDE7;
+  --sidebar-border: #34363B;
+  --sidebar-ring: #6E7076;
+
+  --twin-canvas: #34373E;
+  --heat-cold: #6A45A0;
+  --signal-good: #7DC68D;
+  --signal-good-soft: #1D3323;
+  --signal-alert: #F28B7F;
+  --signal-alert-soft: #3A1E1B;
+}
+
+@theme inline {
+  /* shadcn's mapping, unchanged in shape */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Radius: 2px everywhere (cards, controls, chips, keys). Circles (pins, switches) stay round.
+     Previously 3/6/10/14; kept as named steps so the hierarchy can come back.
+     rounded-sm = key hints and grid cells, rounded-md = buttons/inputs/chips (shadcn's default for controls),
+     rounded-xl = cards/modules/map frame (shadcn's Card uses rounded-xl). */
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
+
+  /* Our extras as utilities: bg-heat-hot, text-ink-muted, bg-highlight, bg-twin-canvas, text-signal-alert... */
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-on-ink: var(--on-ink);
+  --color-twin-canvas: var(--twin-canvas);
+  --color-heat-cold: var(--heat-cold);
+  --color-heat-warm: var(--heat-warm);
+  --color-heat-hot: var(--heat-hot);
+  --color-heat-peak: var(--heat-peak);
+  --color-highlight: var(--highlight);
+  --color-on-highlight: var(--on-highlight);
+  --color-signal-good: var(--signal-good);
+  --color-signal-good-soft: var(--signal-good-soft);
+  --color-signal-alert: var(--signal-alert);
+  --color-signal-alert-soft: var(--signal-alert-soft);
+
+  /* Fonts from next/font (see app/layout.tsx snippet in SHADCN.md) */
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+  /* Numbers a machine produced line up */
+  .font-mono { font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+/* ---- Motion (DESIGN_SYSTEM.md §3) ---- */
+/* The one orchestrated moment: an accepted route draws from start to end along its legs. */
+.wtdd-route-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: wtdd-route-draw 400ms ease-out forwards;
+}
+@keyframes wtdd-route-draw { to { stroke-dashoffset: 0; } }
+
+/* A receipts row lit on the map: responds to the user, 200ms, no pulse. */
+.wtdd-focus-ring { animation: wtdd-focus-in 200ms ease-out; }
+@keyframes wtdd-focus-in { from { opacity: 0; transform: scale(1.4); } }
+
+/* Data arriving (a module's first read, a new receipts row, a panel opening): 150ms, a 4px rise, the entrance curve.
+   No fill mode, so nothing is held after it ends. The reduced-motion clamp above makes it instant. */
+.wtdd-arrive { animation: wtdd-arrive 150ms cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes wtdd-arrive { from { opacity: 0; transform: translateY(4px); } }
+
+/* The room the dog walks into: its soft background fades in (Johnny: "a change in BG whenever a dog is entering a different room"). */
+@keyframes wtdd-room-enter { from { fill-opacity: 0; } }
+.wtdd-room-enter { animation: wtdd-room-enter 400ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .wtdd-room-enter { animation: none; } }
