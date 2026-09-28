@@ -7,7 +7,7 @@
  * An API that does not answer is a 502 naming the address and the cause (connection refused, ...), never the generic
  * 500 a rewrite gives, so the page's FAILED line says what actually happened.
  */
-const api = () => process.env.WTDD_API ?? "http://127.0.0.1:7960";
+import { apiTarget as api } from "@/lib/data/api-target";
 
 async function proxy(req: Request, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
