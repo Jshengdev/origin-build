@@ -90,7 +90,17 @@ Reset, between two takes (POST /chat/reset): the API drops pending.json, writes 
 The next poll(), or the hold in progress (await_verdict, every second), reads RESET (_reset): disarmed, any question still
 open dropped, the hold ended as reset (no verdict row, nothing posted), one line, the flag deleted; the next wake starts a
 fresh round. A reset pressed mid-walk ends the next stop's hold as it starts and never stops the walk (Stop does that).
-UNVERIFIED until the first live run: a press landing during a real hold at a stop."""
+UNVERIFIED until the first live run: a press landing during a real hold at a stop.
+
+A failure never ends the listener (the e2e audit, 2026-09-27). run() catches an Exception out of a poll (a post that
+failed: osascript rc=1 or an unconfirmed read-back, e.g. "dog done"; a locked chat.db) as one WARN and one listen.poll
+row (ok false, the error), waits 2 s and polls again; the heartbeat keeps beating; Ctrl-C and SystemExit still end it.
+The rest of that poll's messages are not handled (read() has already moved the watermark past them). A round that
+raised still stamps round_end, so a wake typed during it starts nothing and one after it starts the next. A failure
+reading or answering a reply inside a hold (a failed "ok, standing down") ends the hold as one listen.hold row and the
+walk resumes; the failed post is its own chat.post row either way. A failed "dog doin" still ends that round before
+its walk (the listener stays up). UNVERIFIED until the first live run: a real osascript failure mid-round, and that a
+listener failing every poll still reads "alive" on GET /chat (the heartbeat does not carry the error; the ledger does)."""
 from __future__ import annotations
 import json
 import re
@@ -270,7 +280,8 @@ class Listener:
         `seconds` from the re-ask (at most twice `seconds` in all, under the follower's 180 s stop timeout). No answer
         in `seconds` = the question is withdrawn and the round goes on; that is logged, never
         faked, and a re-ask nobody answered is its unclear verdict row (_drop). A reset (RESET) ends the hold at once:
-        no verdict, nothing posted, the round goes on."""
+        no verdict, nothing posted, the round goes on. A reply whose reading or answer raised (a post that failed) ends
+        the hold too: one listen.hold row (_went_on), the walk goes on."""
         t0 = time.monotonic()
         log("chat", "who dis: waiting for the verdict", seconds=seconds)
         while time.monotonic() - t0 < seconds:
@@ -671,7 +682,8 @@ class Listener:
         """Polls every `every` s. The heartbeat (listen.json: alive, armed, pending) is beat() once here, then every `every`
         s from its own thread, the only writer, because a round (the walk, the looks, a 45 s hold) runs inside one poll()
         and GET /chat reads a beat older than 10 s as "listener down". Known trade-off: the thread would keep beating if
-        the main thread wedged; every blocking call in a round has a timeout (the posts, the API, the follower's 180 s)."""
+        the main thread wedged; every blocking call in a round has a timeout (the posts, the API, the follower's 180 s).
+        A poll that raises an Exception is one WARN and one listen.poll row (_went_on), 2 s, then the next poll."""
         log("chat", f"listen guid={self.guid}", oncall=self.oncall or "none", from_rowid=self.last, listen_s=self.listen_s, dry=self.dry,
             wake_phrases=len(wake_phrases()), commands=len(command_list()))
         self.beat()
