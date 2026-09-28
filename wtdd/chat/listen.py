@@ -98,7 +98,9 @@ row (ok false, the error), waits 2 s and polls again; the heartbeat keeps beatin
 The rest of that poll's messages are not handled (read() has already moved the watermark past them). A round that
 raised still stamps round_end, so a wake typed during it starts nothing and one after it starts the next. A failure
 reading or answering a reply inside a hold (a failed "ok, standing down") ends the hold as one listen.hold row and the
-walk resumes; the failed post is its own chat.post row either way. A failed "dog doin" still ends that round before
+walk resumes; a post that fails at a stop outside the hold (its photo and "couldn't look", the "not sure" ask, a
+heads-up's "couldn't escalate") ends that stop as one listen.stop row and the walk resumes, never POST /dog/stop; the
+failed post is its own chat.post row either way. A failed "dog doin" still ends that round before
 its walk (the listener stays up). UNVERIFIED until the first live run: a real osascript failure mid-round, and that a
 listener failing every poll still reads "alive" on GET /chat (the heartbeat does not carry the error; the ledger does)."""
 from __future__ import annotations
@@ -403,7 +405,13 @@ class Listener:
                 if not r.get("ok"):
                     raise RuntimeError(f"follow refused: {r.get('error')}")
                 log("chat", "follower started", **{k: v for k, v in r["follow"].items() if k in ("i", "n", "stops")})
-            out = walk(on_stop=lambda i, p, here: (stops.append(i), self.look_and_say(m, i)), source=source)   # as they happen: a walk that raises later keeps them
+            def at_stop(i: int) -> None:   # counted as they happen: a walk that raises later keeps them
+                stops.append(i)
+                try:
+                    self.look_and_say(m, i)
+                except Exception as e:  # noqa: BLE001  (a post that failed at a stop: its chat.post row has it; the walk goes on)
+                    self._went_on("listen.stop", e)
+            out = walk(on_stop=lambda i, p, here: at_stop(i), source=source)
             log("chat", "walked", seconds=out["seconds"], writes=out["writes"], errors=out["errors"], stops=len(stops), rooms=",".join(out["rooms"]))
             if out.get("errors"):
                 walked = f"{out['errors']} light write(s) failed, see the ledger"
@@ -637,7 +645,7 @@ class Listener:
         tmp.replace(hb)
 
     def _went_on(self, tool: str, e: Exception) -> None:
-        """A failure the listener outlives (a poll in run(), a reply inside a hold): one WARN and one failed row. A
+        """A failure the listener outlives (a poll in run(), a reply inside a hold, a post at a stop): one WARN and one failed row. A
         failed post also has its own chat.post row."""
         err = f"{type(e).__name__}: {str(e)[:200]}"
         log("chat", f"WARN {tool} failed, going on", error=err)
