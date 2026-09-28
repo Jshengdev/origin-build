@@ -166,7 +166,7 @@ export function PathsLive() {
         <div className="col-span-12 flex flex-col gap-4 lg:col-span-4">
           {/* Results sit in this column, never above the map: a line appearing after a save must not move the map
               under a finger that is about to tap again (worker's live check). */}
-          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} />{walkRoute.lightsOff}</div>}
+          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} /></div>}
           {/* each map layer's served status and every FAILED, outside the map (the map keeps only its legend) */}
           <div className="flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground empty:hidden">{notes}</div>
           <Module title="Draw" size="auto">

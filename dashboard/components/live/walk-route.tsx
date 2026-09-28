@@ -12,16 +12,18 @@
  *   /field (the stop it is at) and /dog/state's follow. Its answer is the result line: served numbers and each stop's
  *   action, a failed one FAILED with its error, and a stop whose post a Stop skipped (walk_path's `stopped`) named and
  *   not counted as posted. A refusal (a walk already running, not calibrated, a no-go zone) is FAILED.
- *   With the Lights switch's own field on, a walk is refused on the page: FAILED "Turn Lights off first", with a button
- *   that turns it off (POST /field/stop). The page never posts /field/stop on its own: a stale stop could end the walk.
+ *   With the Lights switch's own field on (Johnny, 22:17: "why can't you walk the route with the lights on, so the dog
+ *   drives the lights?"): since #105 the backend hands over. A walk with stops starts as normal; field.walk asks the
+ *   Lights field to yield and then drives the lights itself ("the walk takes over the lights"). A walk with no stops is
+ *   POST /dog/follow and the Lights field keeps running, so the lights keep following the dog ("lights keep following").
+ *   The page never posts /field/stop on its own; GET /field says which walker owns the lights.
  */
 import { useState } from "react";
-import { ActionButton, LiveMark, SignalChip } from "@/components/wtdd";
+import { LiveMark, SignalChip } from "@/components/wtdd";
 import { post, type DogState, type FieldJson, type MapJson } from "@/lib/data/api";
 import type { Result } from "@/components/live/stop";
 
 type Action = { stop?: number; look?: string; say?: boolean; ok?: boolean; error?: string; stopped?: string | null };
-const LIGHTS = "Turn Lights off first: the walk drives the lights itself";
 
 /** The walk's answer as one line: its served numbers and each stop's action, a failed one as FAILED. */
 export function walkLine(what: string, r: { ok: boolean; error?: string; result?: unknown }): Result {
@@ -52,12 +54,10 @@ export function lookWithoutPosting(m: MapJson): { actions: NonNullable<MapJson["
 
 export function useWalkRoute(field: FieldJson | undefined, onResult: (r: Result) => void, onSaved?: (m: MapJson) => void) {
   const [starting, setStarting] = useState(false);
-  const [lightsBlocked, setLightsBlocked] = useState(false);
-  const lightsOn = !!field?.p && field.follower === false;   // the Lights switch's own field
+  const lightsOn = !!field?.p && field.follower === false;   // the Lights switch's own field, running when the walk starts
   /** `map`: the served map to walk (Routines: the one its load answered with, through `before`). */
   const start = async (what: string, map: MapJson | null | undefined, before?: () => Promise<{ ok: boolean; error?: string; map?: MapJson }>) => {
-    if (lightsOn) { setLightsBlocked(true); onResult({ what, ok: false, error: LIGHTS }); return; }
-    setLightsBlocked(false);
+    const lights = lightsOn;
     setStarting(true);
     let m = map ?? null;
     if (before) {
@@ -69,7 +69,7 @@ export function useWalkRoute(field: FieldJson | undefined, onResult: (r: Result)
     if (!(m.stops ?? []).length) {   // no stops: a straight walk, as before
       const r = await post("/dog/follow", {});
       setStarting(false);
-      onResult(r.ok ? { what: `${what} · no stops, so no look`, ok: true } : { what, ok: false, error: r.error });
+      onResult(r.ok ? { what: `${what} · no stops, so no look${lights ? " · lights keep following" : ""}`, ok: true } : { what, ok: false, error: r.error });
       return;
     }
     const prep = lookWithoutPosting(m);
@@ -82,12 +82,10 @@ export function useWalkRoute(field: FieldJson | undefined, onResult: (r: Result)
     setTimeout(() => setStarting(false), 2000);   // then the buttons follow GET /field and the follow state
     const r = await running;
     setStarting(false);
-    onResult(walkLine(prep ? `${what} · ${prep.n} ${prep.n === 1 ? "stop" : "stops"} set to look without posting` : what, r));
+    const head = `${what}${lights ? " · the walk takes over the lights" : ""}`;
+    onResult(walkLine(prep ? `${head} · ${prep.n} ${prep.n === 1 ? "stop" : "stops"} set to look without posting` : head, r));
   };
-  const lightsOff = lightsBlocked && lightsOn ? (
-    <ActionButton intent="secondary" size="sm" onClick={async () => { const r = await post("/field/stop", {}); if (!r.ok) onResult({ what: "Turn Lights off", ok: false, error: r.error }); }}>Turn Lights off</ActionButton>
-  ) : null;
-  return { start, starting, lightsOff };
+  return { start, starting };
 }
 
 /** "Walking", with the stop it is at while it looks (GET /field's stop among the map's stops), else the follow's waypoint. */

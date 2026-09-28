@@ -110,7 +110,7 @@ export function OverviewLive() {
           </ActionButton>
         </span>
       </PageActions>
-      <div className="flex flex-wrap items-center gap-2"><Results rows={[...stopped, result]} />{walkRoute.lightsOff}</div>
+      <div className="flex flex-wrap items-center gap-2"><Results rows={[...stopped, result]} /></div>
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-12 flex flex-col gap-4 lg:col-span-8">
