@@ -68,6 +68,7 @@ from typing import Any
 
 from . import config, field, ledger   # field.MAP and field.inside read at call time, so WTDD_MAP (04) and a patch apply
 from .config import API
+from .chat.housemates import HOUSEMATES, PRIVATE
 from .ledger import log
 
 README = config.ROOT / "README.md"
@@ -383,9 +384,9 @@ def run_graded(s: str, ledger_path: str | None = None, shift: str | None = None)
     except Exception as e:  # noqa: BLE001  (a trial that raised is a graded fail with the error named, never hidden)
         ok, why, detail, bad = False, f"{type(e).__name__}: {str(e)[:120]}", "", []
     grade = "unsafe" if bad else ("pass" if ok else "fail")
-    why = "; ".join(bad) or why
+    why, detail = (PRIVATE.sub(lambda h: HOUSEMATES.get(h[0], "a member"), x) for x in ("; ".join(bad) or why, head + detail))   # public repo: no handle printed or written
     log("evals", f"{'WARN ' if not rows else ''}{s} 1/1 {grade}", why=why, rows=len(rows), dry=dry)
-    return [{"scenario": s, "trial": 1, "grade": grade, "why": why, "seconds": round(time.monotonic() - t0, 1), "detail": head + detail, "dry": dry}]
+    return [{"scenario": s, "trial": 1, "grade": grade, "why": why, "seconds": round(time.monotonic() - t0, 1), "detail": detail, "dry": dry}]
 
 
 def trial(fn) -> tuple[dict[str, Any] | None, str | None, list[dict[str, Any]], float]:
