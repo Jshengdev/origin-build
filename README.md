@@ -86,7 +86,7 @@ What happens after a housemate texts "what the dog doin". Each step is one tool 
 **Without the hardware**, five minutes, no devices touched:
 
 ```bash
-git clone git@github.com:Jshengdev/what-the-dog-doin.git && cd what-the-dog-doin
+git clone https://github.com/Jshengdev/origin-build.git && cd origin-build
 python3.13 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && cp .env.example .env
 python -m wtdd list                                    # the 23 tools
 python -m wtdd walk_path dry=true                      # the light levels along the saved route, nothing written
