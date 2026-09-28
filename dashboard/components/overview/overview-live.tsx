@@ -172,7 +172,8 @@ function DogChip({ dog, error, fresh }: { dog?: DogState; error?: string; fresh:
   if (error) return <SignalChip tone="alert">Dog · FAILED {error}</SignalChip>;
   if (!dog) return <SignalChip tone="neutral">Dog · reading</SignalChip>;
   if (!dog.connected) return <SignalChip tone="neutral">Dog off</SignalChip>;
-  if (!fresh) { const a = age(dog.state?.age_ms ?? 0); return <SignalChip tone="alert">Dog stale · {a.value} {a.unit}</SignalChip>; }
+  if (dog.state?.age_ms == null) return <SignalChip tone="alert">Dog on · no state served</SignalChip>;   // never a made-up "0 ms"
+  if (!fresh) { const a = age(dog.state.age_ms); return <SignalChip tone="alert">Dog stale · {a.value} {a.unit}</SignalChip>; }
   return <SignalChip tone="good">Dog on · {dog.recheck ? "confirm its location" : dog.calibrated ? "located" : "not located"}</SignalChip>;
 }
 
