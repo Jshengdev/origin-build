@@ -165,6 +165,14 @@ class People(Api):
         self.assert_no_handle(text)
         self.assert_no_handle(json.dumps(status.people()))   # the dict itself, not only what redact() lets through
 
+    def test_the_names_file_is_never_served_as_a_static_file(self):
+        f = self.root / status.NAMES   # wherever people() reads it; api.UI is this root's ui/, the static remote
+        f.write_text(json.dumps({EMAIL: "Teri"}))
+        with mock.patch.object(api, "UI", self.root / "ui"), self.assertRaises(urllib.error.HTTPError) as e:
+            self.get("/" + f.name)
+        self.assertEqual(e.exception.code, 404, "a handle-keyed file in the served ui/ goes out verbatim, redact() never runs")
+        self.assert_no_handle(e.exception.read().decode())
+
     def test_a_read_writes_no_row(self):
         before = self.led.read_bytes()
         self.get("/people")
