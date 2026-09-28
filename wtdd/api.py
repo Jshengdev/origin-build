@@ -11,6 +11,7 @@
   GET  /evals                     <repo>/evals.json, every scenario's newest trials (python -m wtdd.evals --write)
   GET  /watch                     <repo>/watch.json, the detector's newest counts and boxes plus age_ms and the intruder flag
   POST /intruder {on}             arm/disarm the intruder watch (<repo>/intruder.on; python -m wtdd.watch sounds intruder_alarm)
+  POST /chat/reset {by}           between two takes: drops pending.json (an open "who dis?!"), writes <repo>/chat.reset (the listener disarms, ends its hold); one chat.reset row, nothing posted; {ok, dropped, pending_was}
   GET  /shift                     the run in force {shift_id, source: file | WTDD_SHIFT | date} (a read, no row; wtdd/shift.py)
   POST /shift {name}              start a "morning" or "night" run: <repo>/shift.json, one shift.started row; any other name is a 400
   GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
@@ -77,7 +78,7 @@ from .field import FIELD, MAP, STOP, check_path
 from pathlib import Path
 
 PICTURES = Path("~/Pictures/wtdd").expanduser()
-from .ledger import log, rows
+from .ledger import log, rows, step
 from .chat.housemates import PRIVATE
 
 UI = ROOT / "ui"
@@ -314,6 +315,24 @@ class H(BaseHTTPRequestHandler):
                 f.unlink(missing_ok=True)
             log("api", "intruder watch " + ("armed" if on else "disarmed"))
             return self._json(200, {"ok": True, "intruder": on})
+        if u.path == "/chat/reset":   # {by}: a clean slate between takes; one chat.reset row, ok or not; nothing is posted
+            from .chat import listen
+            by = self._body().get("by")
+            with step("chat", "chat.reset", "imessage", {"by": by}) as r:
+                try:
+                    pend = json.loads(listen.PENDING.read_text())
+                    was = {"trigger": pend.get("trigger"), "kind": pend.get("kind")}
+                except FileNotFoundError:
+                    was = None
+                try:
+                    armed = json.loads(listen.HEARTBEAT.read_text()).get("armed")
+                except FileNotFoundError:
+                    armed = None   # no listener has ever beaten here: unknown, not false
+                r["state_before"] = {"pending": was, "armed": armed}
+                listen.PENDING.unlink(missing_ok=True)
+                listen.RESET.write_text(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")   # the listener's next poll() or hold acts on it
+                r["state_after"] = {"dropped": was is not None}
+            return self._json(200, {"ok": True, "dropped": was is not None, "pending_was": was})
         if u.path == "/shift":   # {name: morning | night}: one shift.started row, ok or not; a bad name is the caller's 400
             try:
                 return self._json(200, {"ok": True, **shift.start(self._body().get("name"))})

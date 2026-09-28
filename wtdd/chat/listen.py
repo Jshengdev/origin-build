@@ -84,7 +84,13 @@ is the group's), so the on-call person's "handled" about a held flag never answe
 chat.db time is before the open question's confirmed post was typed about an earlier flag: one WARN, not read, the
 question stays open (a dry or failed post cannot prove this, and reads as before). UNVERIFIED until the first live run:
 the re-ask's answer read by Jev, a hold across two stops, that ACK_WINDOW_S (1800 s) is long enough for a real "handled"
-on camera, and that a live reply's chat.db time is never before the post it answers."""
+on camera, and that a live reply's chat.db time is never before the post it answers.
+
+Reset, between two takes (POST /chat/reset): the API drops pending.json, writes RESET (its time) and one chat.reset row.
+The next poll(), or the hold in progress (await_verdict, every second), reads RESET (_reset): disarmed, any question still
+open dropped, the hold ended as reset (no verdict row, nothing posted), one line, the flag deleted; the next wake starts a
+fresh round. A reset pressed mid-walk ends the next stop's hold as it starts and never stops the walk (Stop does that).
+UNVERIFIED until the first live run: a press landing during a real hold at a stop."""
 from __future__ import annotations
 import json
 import re
@@ -103,6 +109,7 @@ CORRECTION = re.compile(r"^(its|it s|thats|that s|those are|these are|that is|no
 CORRECTION_WINDOW_S = 1800   # a correction counts within this long after the dog's last post
 STATE = config.ROOT / "state.json"
 PENDING = config.ROOT / "pending.json"   # the open question from intruder_alarm ("who dis?!"): the chat's next answer decides
+RESET = config.ROOT / "chat.reset"       # POST /chat/reset's flag (its time): the next poll() or the hold in progress disarms (_reset)
 HEARTBEAT = config.ROOT / "listen.json"  # the remote's "group chat" status (GET /chat): beat(), from its own thread in run()
 PENDING_WINDOW_S = 120
 ACK_WINDOW_S = 1800           # the head's choice for beat 2.4b: a held flag ("on it") stays open this long after the acknowledgement
@@ -262,10 +269,13 @@ class Listener:
         next message decides (verdict(): read typed). A re-ask keeps the round holding for the answer to it, a fresh
         `seconds` from the re-ask (at most twice `seconds` in all, under the follower's 180 s stop timeout). No answer
         in `seconds` = the question is withdrawn and the round goes on; that is logged, never
-        faked, and a re-ask nobody answered is its unclear verdict row (_drop)."""
+        faked, and a re-ask nobody answered is its unclear verdict row (_drop). A reset (RESET) ends the hold at once:
+        no verdict, nothing posted, the round goes on."""
         t0 = time.monotonic()
         log("chat", "who dis: waiting for the verdict", seconds=seconds)
         while time.monotonic() - t0 < seconds:
+            if self._reset(holding=True):
+                return False
             for m in self.read():
                 if m.get("text") and self.allowed(m) and self.verdict(m):
                     pend = json.loads(PENDING.read_text()) if PENDING.exists() else {}
@@ -278,6 +288,20 @@ class Listener:
         self._drop(json.loads(PENDING.read_text()) if PENDING.exists() else {}, "who dis: no answer at the stop, moving on",
                    waited_s=round(time.monotonic() - t0))
         return False
+
+    def _reset(self, holding: bool = False) -> bool:
+        """POST /chat/reset's flag (RESET), read at every poll() and every second of a hold: disarm, drop any question
+        still open (one opened after the press, at a stop mid-walk, would answer the next take's first message), one
+        line, delete the flag. No verdict row and nothing posted: the API's chat.reset row is the receipt. True if set."""
+        if not RESET.exists():
+            return False
+        dropped = PENDING.exists()
+        log("chat", "RESET: disarmed" + (", hold ended" if holding else "") + ", nothing posted", at=RESET.read_text().strip(),
+            was_armed=self.armed, dropped=dropped)
+        self.armed_until, self.armed_by = 0.0, None
+        PENDING.unlink(missing_ok=True)
+        RESET.unlink(missing_ok=True)
+        return True
 
     def _row(self, pend: dict[str, Any], reply: dict[str, Any], fields: dict[str, Any], stub: bool,
              verdict: str, meaning: str | None, p: float | None, did: str) -> None:
@@ -598,6 +622,7 @@ class Listener:
             self.beat()
 
     def poll(self) -> int:
+        self._reset()
         if self.armed_by and not self.armed:
             log("chat", "disarmed (timeout)", was=hname(self.armed_by))
             self.armed_by = None

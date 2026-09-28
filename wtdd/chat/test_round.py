@@ -446,5 +446,62 @@ class Correction(unittest.TestCase):
         self.assertEqual(posts, [("fix:C2", "noted: that's socks")])
 
 
+
+class Reset(unittest.TestCase):
+    """Johnny, live at 18:3x: "just make sure there's a reset chat button". POST /chat/reset (wtdd.test_chat_reset)
+    drops pending.json and writes L.RESET; the listener reads the flag on its next poll() and inside a hold. The take
+    before left the dog armed and holding on "who dis?!"; after the reset the hold is over with no verdict and nothing
+    posted, the dog is disarmed, the flag is gone, and the next take's "what the dog doin" starts a round (an armed
+    listener only re-arms on it)."""
+
+    def setUp(self):
+        self.posts: list[tuple[str, str | None]] = []
+        self.rounds: list[str] = []
+        self.flag, self.pend = _TMP / "chat.reset", _TMP / "pending-reset.json"
+        for p in (mock.patch.object(L, "PENDING", self.pend), mock.patch.object(L, "RESET", self.flag, create=True),
+                  mock.patch.object(L.db, "max_rowid", return_value=0), mock.patch.dict(os.environ, {"WTDD_WAKE_SHOW": "1"}),
+                  mock.patch("wtdd.tools.call")):
+            self.enterContext(p)
+        self.l = L.Listener(GROUP, lambda g, k, kind, t, f: self.posts.append((k, t)), listen_s=60)
+        self.l.wake_show = lambda m: self.rounds.append(m["guid"])
+        for f in (self.flag, self.pend):
+            self.addCleanup(f.unlink, missing_ok=True)
+        self.l.armed_until, self.l.armed_by = time.time() + 60, "+15550001111"   # the take before: woken, then a stop asked
+        self.pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": "/tmp/look.jpg", "seconds": 5,
+                                         "trigger": "alarm:T1:5", "chat": GROUP, "question": "who dis?!"}))
+        self.n0 = len(ledger.rows())
+
+    def test_a_hold_ends_on_the_reset_without_posting_and_the_next_wake_starts_a_round(self):
+        clock = [0.0]
+
+        def read() -> list[dict]:
+            if clock[0] == 3.0:   # the button, 3 s into the hold; only the flag (a question opened after the press must go too)
+                self.flag.write_text("2026-09-27T18:35:00\n")
+            return []
+
+        with mock.patch.object(L.time, "monotonic", lambda: clock[0]), \
+                mock.patch.object(L.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s)), \
+                mock.patch.object(self.l, "read", read), mock.patch.object(L, "log", wraps=L.log) as log:
+            self.assertFalse(self.l.await_verdict(L.VERDICT_WAIT_S), "a reset is no verdict")
+        self.assertLess(clock[0], 10.0, "the hold ran to its timeout: the reset never reached it")
+        self.assertEqual(self.posts, [], "a reset posts nothing to the group")
+        self.assertEqual((self.l.armed, self.l.armed_by), (False, None), "still armed from the take before")
+        self.assertFalse(self.flag.exists(), "the flag was not deleted: it would end the next take's hold too")
+        self.assertFalse(self.pend.exists(), "the question outlived the reset")
+        self.assertEqual([r["tool"] for r in ledger.rows()[self.n0:] if r["tool"] == "intruder.verdict"], [], "a reset writes no verdict")
+        self.assertEqual(len([c for c in log.call_args_list if "reset" in c.args[1].lower()]), 1, "one line for the reset")
+        self.l.handle(msg("what the dog doin", "W2", 2))
+        self.assertEqual(self.rounds, ["W2"], "the next take's wake did not start a round")
+
+    def test_the_next_poll_disarms_so_the_next_takes_wake_starts_a_round(self):
+        self.pend.unlink()   # the API already dropped it
+        self.flag.write_text("2026-09-27T18:35:00\n")
+        with mock.patch.object(self.l, "read", return_value=[msg("what the dog doin", "W3", 3)]):
+            self.l.poll()
+        self.assertEqual(self.rounds, ["W3"], "the armed window from the take before ate the wake (it only re-armed)")
+        self.assertFalse(self.flag.exists())
+        self.assertEqual(self.posts, [])
+
+
 if __name__ == "__main__":
     unittest.main()
