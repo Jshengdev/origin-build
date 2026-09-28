@@ -106,7 +106,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/dog/floorplan` | `threshold` (default 3) | `{segments_px, classes, class_px, source, ok?, threshold?, frames?, ms?, ts?, cell_px?, segments_top_m?, class_top_m?, moved?, why?}` | 500 `{segments_px: [], error}` |
 | GET | `/dog/blobs` | | `{labels, source, moved, ts?, why?}` | 500 `{labels: [], error}` |
 | GET | `/dog/objects` | | `{n, objects, windows, fov_deg, source, why?}` | 500 `{n: 0, objects: [], error}` |
-| GET | `/dog/scout` | | `{n, proposals, zones, auto_zones, _version, failed, why, source, error?}` | 500 `{n: 0, proposals: [], failed: [], error}` |
+| GET | `/dog/scout` | | `{n, proposals, zones, auto_zones, gates, _version, failed, why, source, error?}` | 500 `{n: 0, proposals: [], failed: [], error}` |
 | GET | `/dog/frame.jpg` | | JPEG bytes (`image/jpeg`); **connects the dog** | 503 `{error}` |
 | GET | `/pictures/<name>` | | the file under `~/Pictures/wtdd` | 404 `{error}` |
 | GET | `/`, `/<file>` | | `ui/index.html`, or the file under `ui/` (`/route-saved.json`, `/house.svg`, ...) | 404 `{error: "no <file>"}` |
@@ -192,9 +192,31 @@ What the keys hold:
   hit_m, dist_m, pos_px, why, first_seen, last_seen, windows_unseen, stale}`.
 - **`/dog/scout`**:
   - `proposals[]` is `{id, object_id, kind, label, p, app, cells, cells_px, poly, thumb, photo, dist_m, area_m2, ts}`.
-  - `zones` are the auto zones on `ui/map.json`.
-  - `auto_zones` is `"on"`, or `"off (WTDD_SCOUT_ZONES=0)"`: the scout adds no zone and `why` says so. `zones` still lists
-    the auto zones already on the map.
+  - `zones[]` has two kinds (`kind`). `"hazard"`: an auto zone on `ui/map.json` (by `"auto"`), written only past the four
+    gates (the detector's p >= 0.6; seen in 4 windows over 3 s; a lit LiDAR cluster of 8+ points around the pin, which
+    is its shape; the confirm model's yes at p >= 0.8 naming the detector's class), with its `evidence` and `photo`.
+    `"person"`: a live, temporary zone from the lit points around a detected person, NEVER on `ui/map.json` (so no
+    route, follow or round sees it), `poly` through the calibration in force at the GET (null without one), gone
+    20 s after the last window that saw them lit. `photo` is `{file, url}` (the file is in the pictures folder and
+    listed by `GET /images?kind=scout`) or `{missing: true, error}`, never a made-up url. Served exactly as (cells cut
+    to two here):
+
+    ```json
+    {"name": "nogo-1", "label": "table", "poly": [[415, 674], [483, 674], [483, 742], [415, 742]], "nogo": true, "source": "scout",
+     "cells": [[1.85, -0.15], [1.85, -0.1]], "proposal": "z1", "by": "auto", "app": "stub", "p": 0.85, "kind": "hazard",
+     "evidence": {"p": 0.85, "seen_n": 4, "span_s": 3.0, "confirm": {"model": "test/confirm-double", "answer": "yes", "name": "dining table", "p": 0.9}, "points_n": 49},
+     "photo": {"file": "scout-20260927T203853-z1.jpg", "url": "/pictures/scout-20260927T203853-z1.jpg"}}
+    {"name": "person-3", "kind": "person", "label": "person", "temporary": true, "object_id": "o3", "p": 0.5,
+     "expires_at": "2026-09-26T19:30:23", "points_n": 25, "cells": [[1.4, -1.1], [1.4, -1.05]],
+     "photo": {"file": "scout-20260927T203853-person-3.jpg", "url": "/pictures/scout-20260927T203853-person-3.jpg"},
+     "poly": [[312, 625], [369, 625], [369, 682], [312, 682]]}
+    ```
+    (Dry: a stub Jev, a confirm-model double and synthetic live points, `wtdd/dog/test_strict_zones.py`'s world.)
+  - `auto_zones` is `"on"`, `"person only (WTDD_SCOUT_ZONES=person)"` (person zones only, no confirm call) or
+    `"off (WTDD_SCOUT_ZONES=0)"`: the scout adds no zone and `why` says so. `zones` still lists the hazard zones already
+    on the map.
+  - `gates` counts the things considered and rejected per gate since the last summary line (every 30 s):
+    `{considered, low_p, repeat, no_lit, deduped, not_a_hazard, confirm_no, confirm_failed}`.
   - `failed[]` is `{object_id, kind, error, ts, stage?}`.
   - `why` is null when `n` > 0. `error` is the last feed's raise.
 - **Fixtures (DEMO_CACHE).** With `WTDD_OBJECTS`, `WTDD_SCOUT` or `WTDD_BLOBS` set, that route serves the file's keys
