@@ -7,7 +7,9 @@ words and {label, p, needs_person, model}, or {error}), the confirmed post row, 
 the photo, posted when needs_person; the chat listener, not this tool, reads the reply). The caption gets a
 "[detector: cup, chair x2]" suffix when the detector saw something. look_and_see() is the half without the post: the chat listener calls it and posts under the wake message's
 guid (say:<guid>); with person true at an ask stop it flags "who dis?!" to the on-call chat and holds for the answer, and
-only a reply read as stranger sounds light_alarm (wtdd/chat/listen.py look_and_say, verdict).
+only a reply read as stranger sounds light_alarm (wtdd/chat/listen.py look_and_say, verdict). run(cancel=f), Python
+callers only (walk_path passes field.stop's exists): f() is read after the look and before the post; true = no post,
+one "stopped before the post" line, and the result carries stopped.
 
   python -m wtdd dog_say                          nod, look, say, post (trigger defaults to say-<epoch>)
   python -m wtdd dog_say look=sit trigger=k       the sit look; trigger is the idempotence key of the post
