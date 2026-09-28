@@ -184,5 +184,30 @@ class Round(unittest.TestCase):
         self.assertTrue(self.posts[-1][1].startswith("dog done (couldn't walk the path: RuntimeError: follow refused"), self.posts[-1])
 
 
+
+class Wake(unittest.TestCase):
+    """ask 8: handle() with WTDD_WAKE_SHOW=1 and the round stubbed (it only moves chat.db's MAX(ROWID) and outlasts
+    listen_s), so the message's own ROWID against the round's end is what decides."""
+
+    def test_a_wake_sent_during_the_round_starts_nothing_and_one_after_dog_done_starts_the_next(self):
+        top = [100]                                    # chat.db's MAX(ROWID)
+        rounds: list[str] = []
+        with mock.patch.object(L.db, "max_rowid", side_effect=lambda: top[0]), \
+                mock.patch.dict(os.environ, {"WTDD_WAKE_SHOW": "1"}), \
+                mock.patch.object(L, "PENDING", _TMP / "pending-wake.json"), mock.patch.object(L, "STATE", _TMP / "state-wake.json"):
+            l = L.Listener(GROUP, lambda *a: None, listen_s=60)
+
+            def show(m: dict) -> None:
+                rounds.append(m["guid"])
+                top[0] += 3              # during the round: the wake's row, a second "what the dog doin", "dog done"
+                l.armed_until = 0.0      # the round outlasted listen_s: the chat is no longer listening when it ends
+
+            l.wake_show = show
+            l.handle(msg("what the dog doin", "W1", 101))
+            l.handle(msg("what the dog doin", "W2", 102))   # typed during W1's round, read after its "dog done"
+            l.handle(msg("what the dog doin", "W3", 104))   # typed after "dog done": the next take
+        self.assertEqual(rounds, ["W1", "W3"])
+
+
 if __name__ == "__main__":
     unittest.main()
