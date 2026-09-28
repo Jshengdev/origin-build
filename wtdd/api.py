@@ -16,6 +16,7 @@
   GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
                                   force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
+  GET  /images?shift=<id>&trigger=<t>&kind=<k>   the photos a run's rows name {shift, images: [{file, url, ts, kind, stop, ...}], n, why?} (wtdd/images.py; /record's default and 404; no bytes; a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status, cal: the calibration tie {map, heading_deg, at} or null); POST /dog/drive {x,y,z}, /dog/stop
@@ -76,7 +77,7 @@ from .ledger import log, rows
 from .chat.housemates import PRIVATE
 
 UI = ROOT / "ui"
-PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger")   # B10: what they answer passes through redact()
+PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger", "/images")   # B10: what they answer passes through redact()
 
 
 def redact(x):
@@ -174,6 +175,9 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, record.build(sid, rs))   # what python -m wtdd.record --shift <id> prints
             except Exception as e:  # noqa: BLE001  (reported, the page shows it)
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path == "/images":   # the photos a run's rows name (wtdd/images.py), a read (no row); the bytes stay behind /pictures/<name>
+            from . import images
+            return self._json(*images.get(parse_qs(u.query), PICTURES))
         if u.path == "/dog/state":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().state())
