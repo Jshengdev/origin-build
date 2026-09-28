@@ -121,7 +121,7 @@ export function RoutinesLive() {
 
         <Module title="Site map" meta="the route on the map now" size="auto"
           className="col-span-12 lg:col-span-7 [&>[data-slot=card-content]]:flex [&>[data-slot=card-content]]:flex-1">
-          <TwinMap {...props} className="h-auto min-h-[720px] flex-1" />
+          <TwinMap {...props} mode="plan2d" className="h-auto min-h-[720px] flex-1" />
         </Module>
       </div>
 

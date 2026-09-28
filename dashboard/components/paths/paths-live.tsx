@@ -156,7 +156,7 @@ export function PathsLive() {
       <div className="grid grid-cols-12 gap-4">
         <Module title="Site map" meta="the house, a stand-in for a site" size="auto"
           className="col-span-12 lg:col-span-8 [&>[data-slot=card-content]]:flex [&>[data-slot=card-content]]:flex-1">
-          <TwinMap {...props} live={props.live && { ...props.live, onWaypoint: tool === "dots" || tool === "stops" ? tapDot : undefined }}
+          <TwinMap {...props} mode="plan2d" live={props.live && { ...props.live, onWaypoint: tool === "dots" || tool === "stops" ? tapDot : undefined }}
             onMapClick={tool === "dots" || tool === "zone" ? tapFloor : undefined}
             onStopClick={tool === "dots" || tool === "stops" ? (id) => tapDot(Number(id.replace("stop-", ""))) : undefined}
             draft={tool === "zone" ? corners : undefined}

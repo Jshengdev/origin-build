@@ -116,8 +116,15 @@ export interface TwinMapProps {
   live?: LiveLayers;
   /** Layer switches to start with (Storybook's off / on views); the Layers panel still changes them. */
   initialLayers?: Partial<Record<LayerKey, boolean>>;
+  /** "plan2d" (Paths, Routines; Johnny, 19:5x: "routines and paths are just 2D drawings and seeing what Jev has already
+   *  classified and blocked"): the LiDAR-derived layers (live scan, grid and memory, 2.5D, the floor plan's cells and runs,
+   *  walls and obstacles, the depth ramp) are neither drawn nor offered; its switches are remembered apart from Overview's. */
+  mode?: "live" | "plan2d";
   className?: string;
 }
+
+/** The layers a 2D drawing map never draws or offers: everything the LiDAR's own data draws. */
+const OFF_2D: Partial<Record<LayerKey, boolean>> = { grid: false, floorplan: false, scan: false, memory: false, heights: false, plan: false };
 
 interface View { s: number; tx: number; ty: number }
 /** Fit padding: room for the legend (left), zoom buttons (right), and the heat key (bottom). */
@@ -125,7 +132,7 @@ const PAD = { l: 24, r: 56, t: 56, b: 72 };
 
 export function TwinMap({
   grid, floorPlan, zones = [], routes = [], stops = [], devices = [], looks = [],
-  runActive, focus, drawRouteId, onMapClick, onStopClick, selectedStopIds = [], draft, compact, actions, live, initialLayers, className,
+  runActive, focus, drawRouteId, onMapClick, onStopClick, selectedStopIds = [], draft, compact, actions, live, initialLayers, mode = "live", className,
 }: TwinMapProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -145,15 +152,17 @@ export function TwinMap({
   // One depth ramp over every served height on the map (the head: "so live and memory read as one depth scale"); null
   // when none is served, and then nothing is coloured by height
   const depth = live ? heightSpan(live.cells?.tops, live.heights?.segments, live.scanZ) : null;
-  const [layers, setLayers] = useState<Record<LayerKey, boolean>>(() => ({
+  const storeKey = mode === "plan2d" ? "wtdd.map.layers.plan2d" : "wtdd.map.layers";
+  const [chosen, setLayers] = useState<Record<LayerKey, boolean>>(() => ({
     grid: true, floorplan: true, zones: true, route: true, stops: true, lights: true, camera: true, dog: true, pins: true,
     scan: true, house: true, heights: false, memory: true, decisions: true, plan: true,   // plan: Johnny, 19:2x, "just showing the obstacles and ... how the wall would be drawn"   // Johnny, 14:50: memory vs live "which he likes and wants on"; 2.5D stays his switch
     ...initialLayers,
-    ...(live && !initialLayers ? savedLayers() : {}),
+    ...(live && !initialLayers ? savedLayers(storeKey) : {}),
   }));
+  const layers: Record<LayerKey, boolean> = useMemo(() => (mode === "plan2d" ? { ...chosen, ...OFF_2D } : chosen), [chosen, mode]);
   // The live map remembers its layer switches across reloads (Johnny's opening shot keeps the house plan off); Storybook's
   // initialLayers win there. Everything the switches change is drawn only on the client, after the first measure.
-  useEffect(() => { if (live && !initialLayers) localStorage.setItem("wtdd.map.layers", JSON.stringify(layers)); }, [layers, live, initialLayers]);
+  useEffect(() => { if (live && !initialLayers) localStorage.setItem(storeKey, JSON.stringify(chosen)); }, [chosen, live, initialLayers, storeKey]);
   const relief = reliefOn(live, layers, depth);
   const { resolvedTheme } = useTheme();
   const hatchId = useId().replace(/:/g, "");
@@ -337,14 +346,14 @@ export function TwinMap({
     return d ? { xy: d.position, label: focus.label ?? d.name } : null;
   }, [focus, stops, devices]);
 
-  const legend: Array<{ key: LayerKey; label: string }> = [
+  const legend = ([
     { key: "grid", label: "Grid" }, { key: "floorplan", label: "Floor plan" }, { key: "zones", label: "Zones" },
     { key: "route", label: "Route" }, { key: "stops", label: "Stops" }, { key: "lights", label: "Lights" },
     { key: "camera", label: "Camera" }, { key: "dog", label: "Dog" }, { key: "pins", label: "Pins" },
     ...(live ? [{ key: "plan" as const, label: "Walls and obstacles" }, { key: "scan" as const, label: "Live scan" }, { key: "house" as const, label: "House plan" },
       { key: "heights" as const, label: "2.5D heights" }, { key: "memory" as const, label: "Memory vs live" },
       { key: "decisions" as const, label: "Decisions" }] : []),
-  ];
+  ] as Array<{ key: LayerKey; label: string }>).filter((l) => mode !== "plan2d" || !(l.key in OFF_2D));   // a 2D drawing map does not offer the LiDAR's layers
 
   return (
     <div
@@ -715,9 +724,9 @@ export function TwinMap({
 }
 
 /** The layer switches this browser last chose on the live map, or none. */
-function savedLayers(): Partial<Record<LayerKey, boolean>> {
+function savedLayers(key: string): Partial<Record<LayerKey, boolean>> {
   if (typeof window === "undefined") return {};
-  try { return JSON.parse(localStorage.getItem("wtdd.map.layers") ?? "{}"); } catch { return {}; }
+  try { return JSON.parse(localStorage.getItem(key) ?? "{}"); } catch { return {}; }
 }
 
 /** Whether a point lies inside a polygon (the ray test today's remote uses for the room a point is in). */
