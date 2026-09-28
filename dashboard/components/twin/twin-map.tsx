@@ -549,7 +549,7 @@ export function TwinMap({
 
           {live && layers.pins && live.jev?.map((j) => (
             <div key={`jev-${j.id}`}>
-              <MapPin at={P(j.position)} size={12} shape="diamond" label={j.error ? undefined : j.text}
+              <MapPin at={P(j.position)} size={12} shape="diamond"   // the name is in its hover tip (Johnny: nothing piled on the map)
                 tip={<><div className="font-medium">Jev · {j.text}</div>{j.error && <div className="font-mono text-[12px] text-signal-alert">{j.error}</div>}</>}>
                 {null}
               </MapPin>
@@ -561,7 +561,7 @@ export function TwinMap({
 
           {live && layers.pins && live.objects?.map((o) => (
             <div key={o.id} className={o.stale ? "opacity-40" : undefined}>
-              <MapPin at={P(o.position)} size={14} shape="diamond" label={`${o.label} · ${o.p.toFixed(2)}`}
+              <MapPin at={P(o.position)} size={14} shape="diamond"   // what it is and its p are in its hover tip, never piled on the map
                 tip={<><div className="font-medium">{o.label}</div><div className="font-mono text-[12px] opacity-80">p {o.p.toFixed(2)}{o.stale ? " · stale" : ""}</div>{o.message && <div className="text-[12px] opacity-80">{o.message}</div>}</>}>
                 {null}
               </MapPin>
