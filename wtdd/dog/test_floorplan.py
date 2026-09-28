@@ -426,13 +426,16 @@ class Run(Base):
 class Cadence(Base):
     def test_the_session_runs_only_when_the_grid_advanced_and_at_most_every_FLOORPLAN_S(self):
         s, t0, S = self.session(accumulated()), 1000.0, floorplan.FLOORPLAN_S
-        self.assertIsNotNone(s.floorplan_tick(now=t0), "frames and no floor plan yet: a run")
+        first = s.floorplan_tick(now=t0)
+        self.assertIsNotNone(first, "frames and no floor plan yet: a run")
         self.assertIsNone(s.floorplan_tick(now=t0 + S / 4), "the grid did not advance: no run")
         s.grid.update_frame(frames()[0])
         self.assertIsNone(s.floorplan_tick(now=t0 + S / 2), "advanced, but inside FLOORPLAN_S of the last run")
-        self.assertIsNotNone(s.floorplan_tick(now=t0 + S + 0.01))
+        second = s.floorplan_tick(now=t0 + S + 0.01)
+        self.assertIsNotNone(second)
         self.assertIsNone(s.floorplan_tick(now=t0 + 10 * S), "no frame since the last run: no run, however long it waits")
-        self.assertEqual([r["state_before"]["frames"] for r in fp_rows()], [3, 4])
+        self.assertEqual([first["frames"], second["frames"]], [3, 4], "two runs")
+        self.assertEqual([r["state_before"]["frames"] for r in fp_rows()], [3], "QuietRows: the unchanged second run writes no row")
 
     def test_no_run_per_window_or_per_poll(self):
         s = self.session(None)

@@ -182,6 +182,7 @@ class DogSession:
         self._fp_frames: int | None = None    # grid.frames it ran on
         self._fp_lock = threading.Lock()      # one floor plan at a time: the ticker and the button
         self._fp_thread: threading.Thread | None = None   # the ticker, started once by lidar(on=True), never by _on_frame
+        self._fp_row: tuple = (None, -math.inf, 0)   # the ticker's last written row: (signature, when, quiet ticks since)
         self.fp_errors = 0                    # ticks that raised (each already a failed row)
         self._labels: dict[str, Any] | None = None   # the newest blob press: {labels, source, ts, why?}; a FAILED press is labels [] and why
         self.scout = scout_zones.Proposals()         # the scout's auto no-go zones, fed by the objects thread (GET/POST /dog/scout)
@@ -600,11 +601,26 @@ class DogSession:
             if g is None or g.frames == self._fp_frames or (self._fp_t is not None and now - self._fp_t < floorplan.FLOORPLAN_S):
                 return None
             snap, self._fp_t, self._fp_frames = copy.deepcopy(g), now, g.frames
-        return self._fp_run(snap, occupancy.THRESHOLD, "session", None)
+        return self._fp_run(snap, occupancy.THRESHOLD, "session", None, tick_at=now)
 
-    def _fp_run(self, g: occupancy.Grid, threshold: int, source: str, cal: dict | None) -> dict[str, Any]:
+    def _fp_run(self, g: occupancy.Grid, threshold: int, source: str, cal: dict | None, tick_at: float | None = None) -> dict[str, Any]:
+        """One floor plan. The button (tick_at None) always writes its row. A tick (live 2026-09-27: 552 rows in 35 min
+        buried the receipts) runs quiet and writes a row only on a real change, else a summary at most every
+        floorplan.ROW_S counting its ticks; a failure is always its row (floorplan.run)."""
         with self._fp_lock:
-            res = floorplan.run(g, threshold, grid_source=source)
+            if tick_at is None:
+                res = floorplan.run(g, threshold, grid_source=source)
+                self._fp_row = (floorplan.signature(res), time.monotonic(), 0)
+            else:
+                res = floorplan.run(g, threshold, grid_source=source, quiet=True)
+                sig, (last, t_row, n) = floorplan.signature(res), self._fp_row
+                n += 1
+                reason = "changed" if floorplan.changed(last, sig) else "summary" if tick_at - t_row >= floorplan.ROW_S else None
+                if reason:
+                    floorplan.record(res, reason=reason, ticks=n)
+                    self._fp_row = (sig, tick_at, 0)
+                else:
+                    self._fp_row = (last, t_row, n)
             self._fp = (res, source, cal)
         return res
 
