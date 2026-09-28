@@ -91,7 +91,7 @@ class LightAlarm(unittest.TestCase):
             on, bri, xy = BEFORE[rid]
             self.assertEqual((stub.st[rid]["on"], stub.st[rid]["bri"], stub.st[rid]["xy"]), (on, bri, xy),
                              f"{rid}: not put back as it was")
-        self.assertEqual(self.strip[0], {"on": True, "bri": 100.0})
+        self.assertEqual(self.strip[1], {"on": True, "bri": 100.0}, "strip read, then 100%")
         self.assertEqual(len(rows), 1, "one lights.alarm row")
         after = rows[0]["state_after"]
         self.assertTrue(rows[0]["ok"])
