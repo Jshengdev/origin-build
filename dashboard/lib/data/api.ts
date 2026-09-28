@@ -55,7 +55,12 @@ export type Sessions = Array<{ shift_id: string; start: string | null; end: stri
 /** GET /images (#73): the photos a run's rows name, in time order; the bytes are behind /pictures/<file>. `missing`: the
  *  file is not in the pictures folder. `replaced`: a newer look wrote the same name after the row, so the bytes at `url`
  *  are not this row's. `why` counts both, or says why the list is empty. */
-export interface RunImage { file: string; url: string; ts: string; kind: "look" | "ask" | "scout" | "blob"; stop: number | null; trigger: string | null; caption: string | null; shift_id: string; ok: boolean; missing: boolean; replaced: boolean }
+export interface RunImage {
+  file: string; url: string; ts: string; kind: "look" | "ask" | "scout" | "blob"; stop: number | null; trigger: string | null; caption: string | null; shift_id: string; ok: boolean; missing: boolean; replaced: boolean;
+  /** POST /images/share (feat/photo-share): when this photo was sent to the group, and the group's replies in the 10 min
+   *  window after it (by is a housemate's name or "a member"; text redacted by the route), in time order. */
+  shared?: { trigger: string; at: string; by: string } | null; replies?: Array<{ by: string; text: string; ts: string }>;
+}
 export interface ImagesJson { shift: string; images: RunImage[]; n: number; why?: string }
 /** GET /field: the running lights walk's entity (wtdd/field.py), {} when none: its map point, room, each light's level
  *  (0-100, by light id), the stop it is at, and whether it follows the dog. */
