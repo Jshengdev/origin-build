@@ -98,7 +98,8 @@ until}) is read once per poll() (_share: in a try, a missing file is none open, 
 a window, window() raising BAD_SHARE, is none open and one WARN, never the listener's end); past its until it is
 closed, with one line per window. While it is open and no question is (pending.json), a group message from an
 allowed sender that the verdict, the correction, the chat turn and the wake did not take, and that is not a bare
-command (the whole message one), is ONE chat.reply row {share, file, from (the raw handle: GET /images and /ledger
+command (the whole message one) nor, while armed, a message match_command finds a command in ("stop please"), is ONE
+chat.reply row {share, file, from (the raw handle: GET /images and /ledger
 redact it), text, ts (chat.db's, UTC), rowid, guid} (share_reply). Nothing is posted and no model is called. The dog's
 own posts never reach it (allowed(): its confirmed guids, and "from the dog's round", the default caption, among
 OWN_OPENERS). A reply opening like a correction ("that's ...", "its ...", "not ...") within CORRECTION_WINDOW_S of the
@@ -585,7 +586,7 @@ class Listener:
             self.chat(m)
             return
         wake = is_wake(text)
-        if not wake and self.share_reply(m):
+        if not wake and not (self.armed and match_command(text)) and self.share_reply(m):   # armed, a command anywhere in it is the dog's (Stop too), as on main
             return
         if not self.armed or (wake and self.round_end > 0):   # after a round a wake is judged by its ROWID, armed or not (a short round leaves it armed)
             if not wake:
