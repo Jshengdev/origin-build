@@ -36,7 +36,9 @@
   GET  /dog/scale                 the map scale in force {px_per_m, source: default | WTDD_PX_PER_M | dog_cal.json | page} (a read, no row)
   POST /dog/scale {px_per_m}      the page's slider: one dog.scale row, saved in dog_cal.json beside the tie; a bad value is a 400 naming it
   GET  /map                       ui/map.json
-  POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk);
+  POST /map  {path, lights, ...}  rewrites ui/map.json (the page saves the drawn path, lights and rooms here before every walk; the
+                                  scout's auto zones (source scout) are kept from the file, a drawn zone never takes their name, and
+                                  only POST /dog/scout {dismiss} removes one);
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, hits, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog);
                                   hits [int per cells_px entry]: the frames that cell was seen in, the count the threshold is applied to; absent with no grid
@@ -351,6 +353,18 @@ class H(BaseHTTPRequestHandler):
             if problems and data.get("path"):   # an unrunnable path is refused, with the points named; the page keeps the edit
                 log("api", "map NOT saved", problems=len(problems))
                 return self._json(400, {"ok": False, "error": "not saved: " + "; ".join(problems)})
+            if MAP.exists() and isinstance(data.get("zones"), list):   # the scout's auto zones live in the file, not in the page's
+                scout = [z for z in json.loads(MAP.read_text()).get("zones", []) if z.get("source") == "scout"]   # copy (live 22:02)
+                mine = [z for z in data["zones"] if z.get("source") != "scout"]
+                taken = {z.get("name") for z in scout}
+                for z in mine:   # a drawn zone never takes a scout zone's name: the next free nogo-<n>
+                    if z.get("name") in taken:
+                        k = 1
+                        while f"nogo-{k}" in taken | {m.get("name") for m in mine}:
+                            k += 1
+                        log("api", "map: a drawn zone renamed, its name was a scout zone's", was=z["name"], now=f"nogo-{k}")
+                        z["name"] = f"nogo-{k}"
+                data["zones"] = mine + scout   # removed only by POST /dog/scout {dismiss}, never by a page save
             from .field import write_map
             v = write_map(MAP, data)   # the previous route survives one overwrite (map.prev.json)
             log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])))
