@@ -68,7 +68,7 @@ export function RecordLive() {
           : run.data && <SignalChip tone="neutral">Run in force · {run.data.shift_id}</SignalChip>}
         <span className="ml-auto flex items-center gap-2">
           <Select value={shiftId ?? ""} onValueChange={setPicked} disabled={!shifts.data?.shifts.length}>
-            <SelectTrigger aria-label="Run" className="h-9 w-[190px] border-input bg-card text-[13px] shadow-none"><SelectValue placeholder="No runs yet" /></SelectTrigger>
+            <SelectTrigger aria-label="Run" className="h-9 w-[190px] border-input bg-card text-[13px] shadow-none"><SelectValue placeholder={shifts.error ? "runs · FAILED" : "No runs yet"} /></SelectTrigger>
             <SelectMenu>
               {(shifts.data?.shifts ?? []).map((s) => <SelectItem key={s} value={s} className="text-[13px]">{s}{s === shifts.data?.current ? " · in force" : ""}</SelectItem>)}
             </SelectMenu>
@@ -98,7 +98,7 @@ export function RecordLive() {
             <div className="flex flex-col gap-2">
               {d?.signed
                 ? <SignalChip tone="good" className="self-start">Signed by {d.signed.by} · {d.signed.at.replace("T", " ")}</SignalChip>
-                : <WaitingChip className="self-start">Unsigned</WaitingChip>}
+                : d && <WaitingChip className="self-start">Unsigned</WaitingChip>}   {/* only a record that loaded is unsigned */}
               <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
                 Your name
                 <Input value={by} placeholder="required to sign" aria-invalid={tried && !d?.signed && !by.trim()} disabled={!!d?.signed} className="h-8 max-w-[200px] text-[13px]"

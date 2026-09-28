@@ -11,7 +11,7 @@ import { usePageHeaderSlots } from "./page-header";
 function ApiChip() {
   const [t, setT] = useState<{ api?: string; error?: string }>({});
   useEffect(() => {
-    fetch("/api/target").then((r) => r.json()).then((j) => setT({ api: String(j.api) })).catch((e) => setT({ error: String(e) }));
+    fetch("/api/target").then((r) => r.json()).then((j) => setT(typeof j?.api === "string" ? { api: j.api } : { error: "no api served" })).catch((e) => setT({ error: String(e) }));
   }, []);
   if (t.error) return <SignalChip tone="alert">API · FAILED to read which one</SignalChip>;
   if (!t.api) return null;
