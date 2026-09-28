@@ -33,7 +33,7 @@ class Redact(unittest.TestCase):
     def test_phones_and_emails_become_a_member(self):
         r = redact()
         self.assertEqual(r("+13105551234"), "a member")
-        self.assertEqual(r("jo.smith+dog@gmail.com"), "a member")
+        self.assertEqual(r("someone@example.net"), "a member")
         self.assertEqual(r('{"from":"+15550003333","text":"idk","to":"sam@example.org"}'),
                          '{"from":"a member","text":"idk","to":"a member"}')
 

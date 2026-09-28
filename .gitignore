@@ -50,3 +50,9 @@ people-names.json
 
 # sources of truth (the origin folder), read locally, never committed
 context/
+
+# kept local, not in the public repo: internal dev notes, old screenshots, the roadmap
+docs/gotchas/
+docs/evidence/night-1/
+docs/evidence/night-2/
+goals/
