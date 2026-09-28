@@ -106,7 +106,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/dog/floorplan` | `threshold` (default 3) | `{segments_px, classes, class_px, source, ok?, threshold?, frames?, ms?, ts?, cell_px?, segments_top_m?, class_top_m?, moved?, why?}` | 500 `{segments_px: [], error}` |
 | GET | `/dog/blobs` | | `{labels, source, moved, ts?, why?}` | 500 `{labels: [], error}` |
 | GET | `/dog/objects` | | `{n, objects, windows, fov_deg, source, why?}` | 500 `{n: 0, objects: [], error}` |
-| GET | `/dog/scout` | | `{n, proposals, zones, _version, failed, why, source, error?}` | 500 `{n: 0, proposals: [], failed: [], error}` |
+| GET | `/dog/scout` | | `{n, proposals, zones, auto_zones, _version, failed, why, source, error?}` | 500 `{n: 0, proposals: [], failed: [], error}` |
 | GET | `/dog/frame.jpg` | | JPEG bytes (`image/jpeg`); **connects the dog** | 503 `{error}` |
 | GET | `/pictures/<name>` | | the file under `~/Pictures/wtdd` | 404 `{error}` |
 | GET | `/`, `/<file>` | | `ui/index.html`, or the file under `ui/` (`/route-saved.json`, `/house.svg`, ...) | 404 `{error: "no <file>"}` |
@@ -184,6 +184,8 @@ What the keys hold:
 - **`/dog/scout`**:
   - `proposals[]` is `{id, object_id, kind, label, p, app, cells, cells_px, poly, thumb, photo, dist_m, area_m2, ts}`.
   - `zones` are the auto zones on `ui/map.json`.
+  - `auto_zones` is `"on"`, or `"off (WTDD_SCOUT_ZONES=0)"`: the scout adds no zone and `why` says so. `zones` still lists
+    the auto zones already on the map.
   - `failed[]` is `{object_id, kind, error, ts, stage?}`.
   - `why` is null when `n` > 0. `error` is the last feed's raise.
 - **Fixtures (DEMO_CACHE).** With `WTDD_OBJECTS`, `WTDD_SCOUT` or `WTDD_BLOBS` set, that route serves the file's keys
