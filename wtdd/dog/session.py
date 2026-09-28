@@ -1189,10 +1189,11 @@ class DogSession:
             fs["planned"].append(leg["path"])
             if n:
                 fs["replans"].append({"at": i, "from": pose["p"], "waypoints": len(leg["path"]) - 1})
+            planned_at = list(pose["p"])   # the leg is re-checked only once the dog has moved from here (live 22:36:50)
             for k in range(1, len(leg["path"])):
                 if k > 1 and (view := self._view())[0] is not None:
                     live, pose = view
-                    if not plan.clear([pose["p"], *leg["path"][k:]], live):
+                    if math.dist(pose["p"], planned_at) > reach_px and not plan.clear([pose["p"], *leg["path"][k:]], live):
                         say = f"The way to dot {i + 1} is blocked now by something I see live. I'm re-planning from where I stand ({n + 1} of {MAX_REPLANS})."
                         break
                 try:

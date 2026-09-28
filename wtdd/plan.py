@@ -186,14 +186,16 @@ def snap(p, live_px, max_m: float = LIVE_SNAP_M) -> tuple[list[int], float] | No
 def clear(poly, live_px) -> bool:
     """S6b: True while the rest of a leg (poly[0] is the dog) is clear in the newest live view: no point along it, every
     half cell, within half_width() - 1 cells of a live cell (one cell of slack under the padding it was planned with, so
-    the band's jitter does not re-plan a leg that hugs an obstacle). Points within half_width() + 1 cells of the dog are
-    not counted: the start rule (_leave) and the dog's own avoidance cover those."""
+    the band's jitter does not re-plan a leg that hugs an obstacle). Points within half_width() + 1 cells of the dog, or of
+    the leg's own end, are not counted: the start rule (_leave) and the dog's own avoidance cover the start, and the end is
+    the (snapped) target the leg was planned to (live 22:36:50: a snapped dot beside a permanent blocker failed this check
+    on every new leg, five re-plans in one second from one pose)."""
     m, near = _inflate(_live_cells(live_px), half_width() - 1), (half_width() + 1) * CELL
     for a, b in zip(poly, poly[1:]):
         n = max(1, math.ceil(math.dist(a, b) / (CELL / 2)))
         for t in range(n + 1):
             q = (a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n)
-            if _at(m, q) and math.dist(q, poly[0]) > near:
+            if _at(m, q) and math.dist(q, poly[0]) > near and math.dist(q, poly[-1]) > near:
                 return False
     return True
 
