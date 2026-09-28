@@ -23,7 +23,8 @@ URL = "https://openrouter.ai/api/v1/chat/completions"
 
 def generate(agent: str, messages: list[dict[str, Any]], *, model_id: str | None = None,
              max_tokens: int = 400, temperature: float = 0.4, response_format: dict | None = None,
-             timeout: float = 60.0, tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+             timeout: float = 60.0, tools: list[dict[str, Any]] | None = None,
+             extra: dict[str, Any] | None = None) -> dict[str, Any]:
     n_img = sum(1 for m in messages if isinstance(m.get("content"), list)
                 for p in m["content"] if p.get("type") == "image_url")
     mid = model_id or config.get("OPENROUTER_VISION_MODEL" if n_img else "OPENROUTER_MODEL")
@@ -32,6 +33,8 @@ def generate(agent: str, messages: list[dict[str, Any]], *, model_id: str | None
         body["response_format"] = response_format
     if tools:
         body["tools"] = tools
+    if extra:   # provider fields passed through as given, e.g. {"reasoning": {"effort": "low"}} for a reasoning model
+        body.update(extra)
     headers = {"Authorization": f"Bearer {config.get('OPENROUTER_API_KEY')}",
                "HTTP-Referer": "https://github.com/Jshengdev/what-the-dog-doin",
                "X-Title": "what-the-dog-doin", "Content-Type": "application/json"}
