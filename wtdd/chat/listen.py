@@ -386,11 +386,12 @@ class Listener:
         """A housemate correcting the dog's last report ("that's socks, not a bird"): one chat.correction row naming
         what it corrects (the last posted look: sentence, file, detector counts), appended to state.json so the next
         look's prompt carries it (wtdd/tools/dog_say.py), and acknowledged in the chat. Only within CORRECTION_WINDOW_S
-        of the dog's last post, armed or not."""
+        of the dog's last post, armed or not: the whole ledger is scanned for it (a row count would end the window
+        early, as the last 300 rows did; the scan runs only on a correction-shaped message)."""
         if not CORRECTION.match(normalize(m["text"])):
             return False
         chat = m.get("chat") or self.guid   # a chat corrects the last photo it was shown (a row without a guid predates 03)
-        looks = [r for r in ledger_rows(300) if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("file")
+        looks = [r for r in ledger_rows() if r.get("tool") == "chat.post" and r.get("ok") and (r.get("args") or {}).get("file")
                  and (r["args"].get("guid") or chat) == chat]
         if not looks:
             return False
