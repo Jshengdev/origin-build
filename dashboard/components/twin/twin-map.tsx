@@ -131,7 +131,8 @@ export function TwinMap({
   // before a scale change is not drawn after it
   const trail = useRef<Frame[]>([]);
   useEffect(() => {
-    if (live?.scan?.length) trail.current = [...trail.current.slice(-5), { pts: live.scan, known: live.scanKnown, z: live.scanZ, pxPerM: live.pxPerM }];
+    // the head's law audit: a scan that stopped (the LiDAR off, the dog gone) takes its sweep with it, never left drawn as live
+    trail.current = live?.scan?.length ? [...trail.current.slice(-5), { pts: live.scan, known: live.scanKnown, z: live.scanZ, pxPerM: live.pxPerM }] : [];
   }, [live?.scan, live?.scanKnown, live?.scanZ, live?.pxPerM]);
   // One depth ramp over every served height on the map (the head: "so live and memory read as one depth scale"); null
   // when none is served, and then nothing is coloured by height
