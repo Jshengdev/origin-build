@@ -10,7 +10,8 @@
  *   No stops on the map: a straight walk, POST /dog/follow, as before (no look).
  *   The walk answers only when it ends, so it is fired with hours of timeout and never holds the page; progress is GET
  *   /field (the stop it is at) and /dog/state's follow. Its answer is the result line: served numbers and each stop's
- *   action, a failed one FAILED with its error. A refusal (a walk already running, not calibrated, a no-go zone) is FAILED.
+ *   action, a failed one FAILED with its error, and a stop whose post a Stop skipped (walk_path's `stopped`) named and
+ *   not counted as posted. A refusal (a walk already running, not calibrated, a no-go zone) is FAILED.
  *   With the Lights switch's own field on, a walk is refused on the page: FAILED "Turn Lights off first", with a button
  *   that turns it off (POST /field/stop). The page never posts /field/stop on its own: a stale stop could end the walk.
  */
@@ -19,19 +20,20 @@ import { ActionButton, LiveMark, SignalChip } from "@/components/wtdd";
 import { post, type DogState, type FieldJson, type MapJson } from "@/lib/data/api";
 import type { Result } from "@/components/live/stop";
 
-type Action = { stop?: number; look?: string; say?: boolean; ok?: boolean; error?: string };
+type Action = { stop?: number; look?: string; say?: boolean; ok?: boolean; error?: string; stopped?: string | null };
 const LIGHTS = "Turn Lights off first: the walk drives the lights itself";
 
 /** The walk's answer as one line: its served numbers and each stop's action, a failed one as FAILED. */
 export function walkLine(what: string, r: { ok: boolean; error?: string; result?: unknown }): Result {
   if (!r.ok) return { what, ok: false, error: r.error };
   const out = (r.result ?? {}) as { seconds?: number; writes?: number; actions?: Action[] };
-  const acts = out.actions ?? [], failed = acts.filter((a) => a.ok === false), posted = acts.filter((a) => a.ok !== false && a.say).length;
+  const acts = out.actions ?? [], failed = acts.filter((a) => a.ok === false), posted = acts.filter((a) => a.ok !== false && a.say && !a.stopped).length;
   const parts = [
     out.seconds != null && `${out.seconds} s`,
     out.writes != null && `${out.writes} light writes`,
     acts.length > 0 && `${acts.length - failed.length} of ${acts.length} stops looked, ${posted} posted`,
     ...failed.map((a) => `stop at dot ${(a.stop ?? -1) + 1} FAILED: ${a.error ?? "no error served"}`),
+    ...acts.filter((a) => a.stopped).map((a) => `stop at dot ${(a.stop ?? -1) + 1}: ${a.stopped}`),
   ].filter(Boolean);
   const line = `${what}${parts.length ? ` · ${parts.join(" · ")}` : ""}`;
   return failed.length ? { what: line, ok: false } : { what: line, ok: true };
