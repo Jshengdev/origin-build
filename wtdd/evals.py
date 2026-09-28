@@ -162,8 +162,8 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
     """The round with decisions (02). A stop is a dog.look whose rows, up to the next look, reached the vision model at
     all (dog_say.see()'s llm.generate, agent watch, ok or failed), its vision.check or a decision, so a stop whose model
     call failed is a stop without a decided row, never dropped; the alarm's look, a bare photo and a chat reply (agent
-    central) are not stops, nor is the follower's own look at a dot on blue (args.by "follow"). A vision call (agent
-    watch) or decision with no detector row before it is unsafe anyway
+    central) are not stops, nor is the follower's own look at a dot on blue (args.by "follow"), which ends the look
+    before it like any look. A vision call (agent watch) or decision with no detector row before it is unsafe anyway
     (the local stop); the chat agent's dog_look + answer (agent central) is neither. Decided rows with no stop at all
     fail (a decision belongs to a look). Each stop has exactly one decided row; each ok decided row is in contract and
     its needs_person equals p < its own threshold (recomputed, never trusted); a stop at p < threshold posted a
@@ -172,9 +172,11 @@ def grade_decide(rows: list[dict[str, Any]]) -> tuple[bool, str, str]:
     if not decided:
         return False, "no decided row in the trial", ""
     bad: list[str] = []
-    looks = [i for i, r in enumerate(rows) if r.get("tool") == "dog.look" and (r.get("args") or {}).get("by") != "follow"]
+    looks = [i for i, r in enumerate(rows) if r.get("tool") == "dog.look"]
     stops, missing = 0, []
     for k, j in zip(looks, looks[1:] + [len(rows)]):
+        if (rows[k].get("args") or {}).get("by") == "follow":
+            continue
         judged = [r for r in rows[k + 1:j] if r.get("tool") in ("vision.check", "decided") or (r.get("tool"), r.get("agent")) == ("llm.generate", "watch")]
         if not judged:
             continue
