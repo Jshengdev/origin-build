@@ -86,7 +86,7 @@ from typing import Any, Callable
 
 from .. import commands as cmds
 from .. import config
-from ..ledger import append, log, rows as ledger_rows
+from ..ledger import append, log, rows as ledger_rows, step
 from . import db, memory, oncall
 from .housemates import HOUSEMATES, PRIVATE, name as hname
 from .triggers import commands as command_list, is_chat, is_wake, match_command, normalize, wake_phrases
@@ -315,7 +315,9 @@ class Listener:
         """The wake demo, in Johnny's order: the picture, "dog doin" as the walk starts, the walk (wtdd/field.py, the same
         one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when the map
         has no stops), then "dog done". Each part is a tool call and a gated post keyed on the wake message; a failed
-        part is posted as its error, never faked, and the sequence still ends with "dog done"."""
+        part is posted as its error, never faked, and the sequence still ends with "dog done". With the real dog, a walk
+        that fails (or a Ctrl-C of the listener) first halts the follower (halt(), POST /dog/stop), so the dog is never
+        driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look."""
         from .. import tools
         from ..field import walk
         try:
@@ -340,11 +342,27 @@ class Listener:
             log("chat", "walked", seconds=out["seconds"], writes=out["writes"], errors=out["errors"], stops=len(stops), rooms=",".join(out["rooms"]))
             if out.get("errors"):
                 walked = f"{out['errors']} light write(s) failed, see the ledger"
-        except Exception as e:  # noqa: BLE001
+        except BaseException as e:  # noqa: BLE001  (a Ctrl-C too: never leave the follower driving with nobody watching)
+            if source == "dog":
+                self.halt(f"{type(e).__name__}: {e}")
+            if not isinstance(e, Exception):
+                raise
             walked = f"couldn't walk the path: {type(e).__name__}: {str(e)[:100]}"
         if not stops:                      # no stop reached: the look point is wherever the dog is now
             self.look_and_say(m)
         self.say(f"done:{m['guid']}", "dog done" + (f" ({walked})" if walked else ""))
+
+    def halt(self, why: str) -> None:
+        """POST /dog/stop when the round's walk is gone: the API cancels the follower and halts the dog, walking or
+        held at a stop. One dog.stop row; a stop that fails is that row FAILED and a WARN, never the end of the round."""
+        import requests
+        try:
+            with step("chat", "dog.stop", "unitree", {"why": why[:160]}) as r:
+                r["state_after"] = requests.post(f"{config.API}/dog/stop", json={}, timeout=15).json()   # the API's halt waits up to 10 s
+                if not r["state_after"].get("ok"):
+                    raise RuntimeError(r["state_after"].get("error") or "the API refused the stop")
+        except Exception as e:  # noqa: BLE001  (the dog.stop row has it)
+            log("chat", "WARN the follower could NOT be stopped after the failed walk", err=f"{type(e).__name__}: {str(e)[:100]}")
 
     def correction(self, m: dict[str, Any]) -> bool:
         """A housemate correcting the dog's last report ("that's socks, not a bird"): one chat.correction row naming
