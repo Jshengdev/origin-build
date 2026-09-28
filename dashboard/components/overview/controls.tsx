@@ -182,3 +182,29 @@ export function LightsSwitch({ field, connected, calibrated, onResult }: { field
     </span>
   );
 }
+
+/** Reset map (Johnny, live 20:2x: "I need a quick reset map button, because I lifted the dog up and I need a clear canvas to
+ *  start again"): the first press arms it for 4 s and asks; the second posts POST /dog/grid {clear: true, why, by} (the
+ *  saved name, else "Johnny"). The line is the answer: "Map reset · N frames cleared", with the hint to calibrate if the dog
+ *  was moved by hand; a refusal is FAILED with its reason. The saved memory is kept (the API's clear takes the session's). */
+export function ResetMap({ onResult, onDone }: { onResult: (r: Result) => void; onDone: () => void }) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(false), 4000); return () => clearTimeout(t); }, [armed]);
+  const reset = async () => {
+    setArmed(false); setBusy(true);
+    const by = (localStorage.getItem("wtdd.scout.by") ?? "").trim() || "Johnny";
+    const r = await post("/dog/grid", { clear: true, why: "reset map from the page", by });
+    setBusy(false);
+    const n = typeof r.frames_before === "number" ? `${r.frames_before} frames cleared · ` : "";
+    onResult(r.ok ? { what: `Map reset · ${n}then Calibrate if the dog was moved by hand`, ok: true } : { what: "Map reset", ok: false, error: r.error });
+    onDone();
+  };
+  return (
+    <span className="flex items-center gap-2">
+      <ActionButton intent={armed ? "person" : "secondary"} size="sm" disabled={busy} title="POST /dog/grid {clear: true}: a clear canvas for the map the dog draws"
+        onClick={() => (armed ? reset() : setArmed(true))}>{armed ? "Confirm reset" : "Reset map"}</ActionButton>
+      {armed && <span className="text-[13px] text-muted-foreground">Clear the map the dog has drawn? The saved memory is kept.</span>}
+    </span>
+  );
+}

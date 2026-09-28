@@ -7,7 +7,7 @@
  * A route that fails shows FAILED and its reason on the map's bottom lines; nothing falls back to a fixture.
  */
 import { useState } from "react";
-import { usePoll, type FieldJson, type ImagesJson, type BlobsPx, type DogState, type FloorPlanPx, type GridPx, type LidarPx, type MapJson, type ObjectsPx, type Scale } from "@/lib/data/api";
+import { usePoll, type Scout, type FieldJson, type ImagesJson, type BlobsPx, type DogState, type FloorPlanPx, type GridPx, type LidarPx, type MapJson, type ObjectsPx, type Scale } from "@/lib/data/api";
 import type { Device, FloorPlan, Route, Stop, Zone } from "@/lib/data";
 import type { LiveLayers, TwinMapProps } from "./twin-map";
 import { MAP_INK, MAP_INK_MUTED } from "./heat";
@@ -39,7 +39,10 @@ export function useLiveMap(draft?: MapJson | null, floorPlanButton = true, saved
   const scale = usePoll<Scale>("/dog/scale", 10000, kick);
   const map = usePoll<MapJson>("/map", 3000);
   const scouted = usePoll<ImagesJson>("/images?kind=scout", 10000);
-  const field = usePoll<FieldJson>("/field", 500);   // the lights walk, while one runs: where the field is, each light's level   // the photo behind each auto zone (#73), for its hover card
+  const field = usePoll<FieldJson>("/field", 500);
+  // Johnny, 20:23: a person is its own kind of no-go zone, temporary and yellow; the scout serves them (GET /dog/scout),
+  // never GET /map, so they are read here and drawn beside the map's zones
+  const scout = usePoll<Scout>("/dog/scout", 2000);   // the lights walk, while one runs: where the field is, each light's level   // the photo behind each auto zone (#73), for its hover card
 
   const follow = d?.follow ?? {};
   const fresh = !!d?.connected && d.state?.age_ms != null && d.state.age_ms < FRESH_MS;
@@ -49,7 +52,7 @@ export function useLiveMap(draft?: MapJson | null, floorPlanButton = true, saved
   const served = saved && (map.data?._version ?? 0) <= (saved._version ?? 0) ? saved : map.data;
   const props = shapeLive({
     map: draft ?? served, grid: grid.data, plan: plan.data, objects: objects.data, blobs: blobs.data, lidar: lidar.data, pxPerM: scale.data?.px_per_m,
-    dog: d, fresh, house: "/api/house.svg", scouted: scouted.data, field: field.data,
+    dog: d, fresh, house: "/api/house.svg", scouted: scouted.data, field: field.data, scout: scout.data,
     status: (follow.planned?.length ?? 0) > 0 ? <RouteKey /> : undefined,
   });
   // Johnny: "the sitemap has to be in its own box with the depth map instruction legend and that's it": the map keeps its
@@ -76,7 +79,7 @@ function cellTops(g: GridPx, f?: FloorPlanPx) {
 /** Served responses → TwinMap's props, with no request of its own: the hook's shaping, and the Storybook stories' on a fixture frame. */
 export function shapeLive(x: {
   map?: MapJson | null; grid?: GridPx; plan?: FloorPlanPx; objects?: ObjectsPx; blobs?: BlobsPx; lidar?: LidarPx; pxPerM?: number;
-  dog?: DogState; fresh?: boolean; house?: string; status?: React.ReactNode; scouted?: ImagesJson; field?: FieldJson;
+  dog?: DogState; fresh?: boolean; house?: string; status?: React.ReactNode; scouted?: ImagesJson; field?: FieldJson; scout?: Scout;
 }): Pick<TwinMapProps, "live" | "zones" | "routes" | "stops" | "devices" | "runActive" | "floorPlan"> {
   const m = x.map, g = x.grid, f = x.plan, px = x.pxPerM, d = x.dog, follow = d?.follow ?? {};
   const path = m?.path ?? [];
@@ -108,6 +111,7 @@ export function shapeLive(x: {
       text: l.error ? `${l.kind} ${l.blob_id} · FAILED` : `${l.label} · ${l.p != null ? l.p.toFixed(2) : "no p"}${l.source === "fixture" || l.source === "stub" ? " · stand-in" : ""}`,
     })),
     status: x.status,
+    personZones: (x.scout?.zones ?? []).filter((z) => z.kind === "person" && z.poly?.length).map((z) => ({ id: `person:${z.name}`, poly: z.poly, photo: z.photo, expiresAt: z.expires_at })),
     field: x.field?.p ? { p: x.field.p, levels: x.field.levels ?? {}, radius: m?.entity?.radius_px ?? 220 } : undefined,   // 220: field.py's own default
     // Johnny: "just draw what it is and label what it is ... when you hover over it it shows an image of what it sees, and it
     // doesn't show on the map itself": each no-go zone's words and, for an auto zone, the scout's photo of it (its file

@@ -88,7 +88,9 @@ export interface MapJson {
   lights?: Array<{ id: string; kind: "dot" | "line"; pts: XY[]; label?: string; name?: string }>;
   /** 04's drawn zones; 19's scout zones add source "scout", `by` ("auto" or a person's name), and for an auto zone its label and p. */
   entity?: { radius_px?: number };   // the lights walk's field radius (wtdd/field.py; 220 when unset)
-  zones?: Array<{ name: string; label?: string; poly: XY[]; nogo?: boolean; source?: string; by?: string; p?: number; app?: string; proposal?: string }>;
+  zones?: Array<{ name: string; label?: string; poly: XY[]; nogo?: boolean; source?: string; by?: string; p?: number; app?: string; proposal?: string;
+    /** feat/person-zones (GET /dog/scout only, never /map): a person's zone is temporary, with the scout's photo of them. */
+    kind?: "person" | "hazard"; temporary?: boolean; expires_at?: string; photo?: { file: string; url: string } }>;
 }
 /** GET /dog/scout (19): the scout's auto zones and proposals, the map version they were served from, failed model calls. */
 export interface Scout {

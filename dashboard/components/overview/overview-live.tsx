@@ -16,7 +16,7 @@ import { Receipts } from "@/components/live/receipts";
 import { groupRepeats, type ReceiptRow } from "@/components/live/ledger";
 import { Camera } from "@/components/overview/camera";
 import { useAsks } from "@/components/waiting/waiting-live";
-import { LidarSwitch, LightsSwitch, ScaleSlider, useDrive } from "@/components/overview/controls";
+import { LidarSwitch, LightsSwitch, ResetMap, ScaleSlider, useDrive } from "@/components/overview/controls";
 import { Results, useStop, type Result } from "@/components/live/stop";
 import { useWalkRoute, WalkProgress } from "@/components/live/walk-route";
 import { age } from "@/lib/format";
@@ -139,6 +139,7 @@ export function OverviewLive() {
                   </span>
                 )}
               </>}
+              <ResetMap onResult={setResult} onDone={refresh} />
               <ActionButton intent="secondary" size="sm" className="ml-auto" disabled={busy} title="POST /dog/floorplan: one run, one row"
                 onClick={() => act("Floor plan", [["/dog/floorplan", { threshold: 3 }]])}>Floor plan</ActionButton>
             </div>
