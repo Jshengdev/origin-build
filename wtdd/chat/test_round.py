@@ -237,6 +237,25 @@ class Reply(unittest.TestCase):
                 self._ask(f"alarm:{text}")
                 self.assertEqual(self.l.verdict(msg(text, f"R-{text}")), read, "a bare command is the group's; anything else is an answer")
 
+    # ask 4: the re-ask ("do you know them? yes or no") had only what was left of the first 45 s
+
+    def test_the_reask_gets_its_own_wait(self):
+        """An unclear first reply at 40 s of the 45 s hold, then "yes" to the re-ask at 48 s: read, "ok, standing down"."""
+        self._ask("alarm:reask")
+        clock = [0.0]
+        due = [(40.0, msg("wait what", "R-1")), (48.0, msg("yes", "R-2"))]
+
+        def read() -> list[dict]:
+            out = [m for t, m in due if t <= clock[0]]
+            del due[:len(out)]
+            return out
+
+        with mock.patch.object(L.time, "monotonic", lambda: clock[0]), \
+                mock.patch.object(L.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s)), \
+                mock.patch.object(self.l, "read", read):
+            self.assertTrue(self.l.await_verdict(L.VERDICT_WAIT_S), "the answer to the re-ask came after the hold ended")
+        self.assertEqual([t for _, t in self.posts], [L.REASK, "ok, standing down"])
+
 
 if __name__ == "__main__":
     unittest.main()
