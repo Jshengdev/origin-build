@@ -1,0 +1,32 @@
+{
+ "_note": "DRY FIXTURE (source: stub). Invented rows in the shape of the remote's view models, for building the UI only. Not a night, not a site, not a measurement. Never film or pitch these values. The real shapes come from wtdd/api.py and ledger.jsonl in Jshengdev/origin-build; where they differ, the repo wins.",
+ "source": "stub",
+ "data": {
+  "night": "2026-09-26",
+  "stopsToBody": [
+   "s1",
+   "s2",
+   "s3",
+   "s4"
+  ],
+  "cameraToZone": {
+   "cam-gate": "front door"
+  },
+  "onCall": "oncall",
+  "item": "02 (#2)",
+  "quote": {
+   "stops": 3,
+   "nights": 2,
+   "pricePerStopNight": 10,
+   "total": 60,
+   "currency": "USD",
+   "label": "dry placeholder values"
+  },
+  "guardShift": {
+   "value": 18.29,
+   "unit": "USD/hr",
+   "source": "BLS median wage, May 2025",
+   "label": "PLACEHOLDER until an interview; wage only, loaded rate unknown"
+  }
+ }
+}

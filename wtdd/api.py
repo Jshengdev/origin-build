@@ -16,8 +16,10 @@
   GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
                                   force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
+  GET  /images?shift=<id>&trigger=<t>&kind=<k>   the photos a run's rows name {shift, images: [{file, url, ts, kind, stop, ...}], n, why?} (wtdd/images.py; /record's default and 404; no bytes; a read, no row)
   GET  /sessions                  [{shift_id, start, end, rows, stops, flags, signed, signed_by, stub_rows, in_force}] newest first: record.sessions(), build()'s numbers (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
+  GET  /routines | POST /routines {action: save | load | delete, name}   named routes: the map's path, stops and actions kept by name and loaded back (wtdd/routines.py)
   POST /field/stop                end the running walk (any source) at its next tick
   GET  /dog/state                 the shared dog session's state (+ map pose, follow status, cal: the calibration tie {map, heading_deg, at} or null); POST /dog/drive {x,y,z}, /dog/stop
   POST /dog/calibrate {p, heading_deg | toward}   the dog is at map point p now, facing heading_deg (or facing point `toward`)
@@ -37,6 +39,7 @@
                                   the previous file is kept as ui/map.prev.json (same for a recorded route)
   GET  /dog/grid?threshold=N      the accumulated LiDAR occupancy grid in map pixels {n, cells_px, hits, cell_px, threshold, frames, source: session | ui/grid.json | null, why?} (polled every 2 s, with or without a dog);
                                   hits [int per cells_px entry]: the frames that cell was seen in, the count the threshold is applied to; absent with no grid
+                                  top_m [m | null per cells_px entry]: the cell's highest measured layer at or above floorplan.FLOOR, rounded to 0.05; absent with top_why from a grid with no height profile
   POST /dog/grid {save: true} | {clear: true, why?}   save the session grid to ui/grid.json (one dog.grid_save row) or drop it after a power cycle (one dog.grid_clear row);
                                   a saved grid carries the calibration it was tied to and GET draws it through that, not the current one
   GET  /dog/objects               the live object layer {n, objects: [{id, label, p, message, thumb, pos_px, stale, ...}], windows, fov_deg, source, why?} (polled every 2 s, with or without a dog); WTDD_OBJECTS=<file> serves a fixture instead (DEMO_CACHE)
@@ -45,6 +48,7 @@
   POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
   GET  /dog/blobs                 the newest blob labels pinned on the map {labels: [{blob_id, kind, label, p, model, geometry_verdict, erase, source, xy, pos_px, error?}], source, moved, why?} (a read, no row; polled every 2 s); erase and moved are GET /dog/floorplan's own erase at the read (newest plan, threshold now), not stamped at the press; WTDD_BLOBS=<file> serves planted labels (DEMO_CACHE)
   POST /dog/blobs {threshold?}    the press at a stop: one blob.labelled row per blob in the camera's view {labelled, skipped, failed, labels}; 500 with one failed row with no dog, pose, grid or field of view
+  GET  /people, /integrations    the People page {group, people: [{name}]} and the Integrations page {checked_at, integrations: [{name, ok, detail, as_of}]} (wtdd/status.py; reads: no row, no network, redacted like /chat)
   GET  /rules                     decide.rules(): the site labels, the escalate table (map or default), the thresholds in force, the Rules panel's lines
   GET  /dog/scout                 the scout's no-go zones {n, proposals: [{id, kind, label, p, app, cells_px, poly, thumb, ...}], zones: [the auto zones on ui/map.json], _version, failed, source, why} (polled every 2 s); WTDD_SCOUT=<file> serves a fixture instead (DEMO_CACHE)
   POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes a proposal as 04's nogo zone into ui/map.json,
@@ -77,7 +81,7 @@ from .ledger import log, rows
 from .chat.housemates import PRIVATE
 
 UI = ROOT / "ui"
-PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger", "/sessions")   # B10: what they answer passes through redact()
+PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger", "/people", "/integrations", "/images", "/sessions")   # B10: what they answer passes through redact()
 
 
 def redact(x):
@@ -135,6 +139,10 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, tools.describe())
         if u.path == "/map":
             return self._json(200, {**json.loads(MAP.read_text()), "_version": int(MAP.stat().st_mtime)})   # the page sends it back on save
+        # named routines
+        if u.path == "/routines":   # the named routes and the one on the map now (a read, no row; wtdd/routines.py)
+            from . import routines
+            return self._json(200, routines.listing(MAP))
         if u.path == "/ledger":
             return self._json(200, rows(int((parse_qs(u.query).get("n") or ["20"])[0])))
         if u.path == "/field":   # a walk writes it at 10 Hz; older than BUSY_S it is a leftover of a killed process, not a walk
@@ -175,6 +183,9 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, record.build(sid, rs))   # what python -m wtdd.record --shift <id> prints
             except Exception as e:  # noqa: BLE001  (reported, the page shows it)
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path == "/images":   # the photos a run's rows name (wtdd/images.py), a read (no row); the bytes stay behind /pictures/<name>
+            from . import images
+            return self._json(*images.get(parse_qs(u.query), PICTURES))
         if u.path == "/sessions":   # every run's line of the record (record.sessions), newest first, a read (no row); signed_by passes redact()
             from . import record
             return self._json(200, record.sessions(rows(), shift.current()))
@@ -254,6 +265,13 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().scout_state())
             except Exception as e:  # noqa: BLE001  (a missing fixture or a broken store: the page shows it)
                 return self._json(500, {"n": 0, "proposals": [], "failed": [], "error": f"{type(e).__name__}: {e}"})
+        # people · integrations (the dashboard's People, Monitoring and Integrations pages)
+        if u.path in ("/people", "/integrations"):   # reads: no row, no network; names and bools only, never a handle or a key
+            from . import status
+            if u.path == "/people":
+                return self._json(200, status.people())
+            from .dog.session import DogSession
+            return self._json(200, status.integrations(DogSession.get()))
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name
@@ -280,6 +298,13 @@ class H(BaseHTTPRequestHandler):
             MAP.write_text(json.dumps(m, indent=2) + "\n")
             log("api", "map restored from route-saved.json", points=len(m["path"]), stops=m["stops"])
             return self._json(200, {"ok": True, "path_pts": len(m["path"]), "stops": m["stops"]})
+        # named routines
+        if u.path == "/routines":   # {action: save | load | delete, name}: one routine.* row, ok or not (wtdd/routines.py)
+            from . import routines
+            try:
+                return self._json(200, routines.act(MAP, self._body()))
+            except routines.Refused as e:   # a bad name, an empty path, a name not saved, an unknown action: a plain reason
+                return self._json(e.code, {"ok": False, "error": str(e)})
         if u.path == "/intruder":   # {on}: arm or disarm the intruder watch (python -m wtdd.watch acts on the file)
             on = bool(self._body().get("on", True))
             f = ROOT / "intruder.on"
@@ -304,11 +329,10 @@ class H(BaseHTTPRequestHandler):
             if problems and data.get("path"):   # an unrunnable path is refused, with the points named; the page keeps the edit
                 log("api", "map NOT saved", problems=len(problems))
                 return self._json(400, {"ok": False, "error": "not saved: " + "; ".join(problems)})
-            if MAP.exists():
-                MAP.with_name("map.prev.json").write_text(MAP.read_text())   # the previous route survives one overwrite
-            MAP.write_text(json.dumps(data, indent=2) + "\n")
+            from .field import write_map
+            v = write_map(MAP, data)   # the previous route survives one overwrite (map.prev.json)
             log("api", "map saved", points=len(data.get("path", [])), stops=len(data.get("stops", [])))
-            return self._json(200, {"ok": True, "_version": int(MAP.stat().st_mtime)})
+            return self._json(200, {"ok": True, "_version": v})
         if u.path in ("/dog/drive", "/dog/stop", "/dog/calibrate", "/dog/follow", "/dog/resume", "/dog/avoid", "/dog/record", "/dog/mark", "/dog/lidar"):
             import math
             from .dog import nav
