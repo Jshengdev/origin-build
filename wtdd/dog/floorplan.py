@@ -75,6 +75,8 @@ RUN = 1.0   # m: a straight run of grounded cells at least this long end to end 
 GAP = 0.2   # m: a run splits where consecutive cells along its line are further apart than this. UNVERIFIED
 THICK = 0.15   # m: the grounded cells this close to a taken wall's line, inside its extent, are its thickness, never a second parallel run. UNVERIFIED
 FLOORPLAN_S = 2.0   # s: the session runs the floor plan at most this often, and only when grid.frames advanced
+ROW_S = 30.0   # s: the ticker's quiet runs are one summary dog.floorplan row at most this often (live: 552 rows in 35 min buried the receipts)
+ROW_CELLS, ROW_SHARE = 3, 0.10   # a class count moving by more than max(ROW_CELLS, ROW_SHARE of it), or the segment count changing, is a change: a row at once
 CLASS_NAMES = {1: "wall", 2: "tall", 3: "slab", 5: "low"}   # 0 is empty: never counted, never named
 COLOURS = {0: (255, 255, 255), 1: (38, 35, 35), 2: (120, 60, 160), 3: (150, 150, 150), 5: (205, 205, 205)}   # the PNG
 SEG_RGB = (11, 13, 196)   # the PNG's segments, the remote's blue
@@ -214,33 +216,76 @@ def _line(counts: dict, p: dict, ms: float, threshold: int, source: str) -> None
         source=source, dirs=p["dirs"], peak=p["peak"], **({"zero": ",".join(zero)} if zero else {}))
 
 
-def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: float = TALL, grid_source: str = "session") -> dict[str, Any]:
+def run(grid: occupancy.Grid, threshold: int = occupancy.THRESHOLD, *, tall: float = TALL, grid_source: str = "session",
+        quiet: bool = False) -> dict[str, Any]:
     """One floor plan and one `dog.floorplan` row. Returns {ok, why?, threshold, frames, cells, classes, segments, ms, ts,
     grid_source, cls, runs, full, origin, resolution, top?} (top only from a grid with a height profile); no wall is
-    ok=false with `why` (the row already says so); any other raise propagates after its failed row."""
+    ok=false with `why` (the row already says so); any other raise propagates after its failed row. quiet (the
+    session's ticker): the same result with no row, except a failure, which is always its failed row; the ticker
+    writes the row itself on a change or a summary (record)."""
     t0 = time.perf_counter()
     args = {"threshold": threshold, "constants": {"FLOOR": FLOOR, "GROUND": GROUND, "TALL": tall, "RUN": RUN, "GAP": GAP, "THICK": THICK},
             "grid_source": grid_source}
     before = {"cells": int((grid.counts >= threshold).sum()), "frames": grid.frames}
     out: dict[str, Any] = {"ok": False, "threshold": threshold, "frames": grid.frames, "cells": before["cells"],
                            "grid_source": grid_source, "origin": list(grid.origin), "resolution": grid.resolution}
+    def fill() -> dict[str, Any]:
+        p = _plan(grid, threshold, tall)
+        counts, ms = _counts(p["cls"]), round((time.perf_counter() - t0) * 1000, 1)
+        out.update(classes=counts, segments=p["segments"], ms=ms, cls=p["cls"], runs=p["runs"], full=p["full"],
+                   **({"top": p["top"]} if "top" in p else {}))
+        _line(counts, p, ms, threshold, grid_source)
+        return p
+
     try:
-        with ledger.step("dog", "dog.floorplan", "map", args, before) as r:
-            if grid_source != "session":
-                r["cached"], r["source"] = True, "stub"   # a saved grid, not this session's frames (session.floorplan's DEMO_CACHE)
-            p = _plan(grid, threshold, tall)
-            counts, ms = _counts(p["cls"]), round((time.perf_counter() - t0) * 1000, 1)
-            r["state_after"] = {"classes": counts, "segments": [list(s) for s in p["segments"]], "ms": ms}
-            out.update(classes=counts, segments=p["segments"], ms=ms, cls=p["cls"], runs=p["runs"], full=p["full"],
-                       **({"top": p["top"]} if "top" in p else {}))
-            _line(counts, p, ms, threshold, grid_source)
-            if counts["wall"] == 0:
+        if quiet:
+            try:
+                p = fill()
+            except Exception:  # noqa: BLE001  (a failure is always a row: written here, then raised as before)
+                with ledger.step("dog", "dog.floorplan", "map", args, before):
+                    raise
+            if out["classes"]["wall"] == 0:
                 raise NoWall(p.get("why") or "no wall found")
+        else:
+            with ledger.step("dog", "dog.floorplan", "map", args, before) as r:
+                if grid_source != "session":
+                    r["cached"], r["source"] = True, "stub"   # a saved grid, not this session's frames (session.floorplan's DEMO_CACHE)
+                p = fill()
+                r["state_after"] = {"classes": out["classes"], "segments": [list(s) for s in p["segments"]], "ms": out["ms"]}
+                if out["classes"]["wall"] == 0:
+                    raise NoWall(p.get("why") or "no wall found")
         out["ok"] = True
     except NoWall as e:
         out["why"] = f"floor plan: {e}"
     out["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     return out
+
+
+def signature(res: dict[str, Any]) -> tuple:
+    """What a quiet run is compared on: ok, the class counts and the segment count."""
+    return (bool(res.get("ok")), dict(res.get("classes") or {}), len(res.get("segments") or []))
+
+
+def changed(a: tuple | None, b: tuple) -> bool:
+    """A real change since the last written row: ok flipped, the segment count moved, or a class count moved by more
+    than max(ROW_CELLS, ROW_SHARE of it). No row yet is a change."""
+    if a is None or a[0] != b[0] or a[2] != b[2]:
+        return True
+    return any(abs(b[1].get(k, 0) - a[1].get(k, 0)) > max(ROW_CELLS, ROW_SHARE * a[1].get(k, 0)) for k in set(a[1]) | set(b[1]))
+
+
+def record(res: dict[str, Any], *, reason: str, ticks: int, tall: float = TALL) -> None:
+    """The ticker's one dog.floorplan row for a quiet result: the same shape as run()'s row, plus why it was written
+    (changed | summary) and how many ticks it stands for since the last row. ok=false with the no-wall reason."""
+    args = {"threshold": res["threshold"], "constants": {"FLOOR": FLOOR, "GROUND": GROUND, "TALL": tall, "RUN": RUN, "GAP": GAP, "THICK": THICK},
+            "grid_source": res["grid_source"], "reason": reason, "ticks": ticks}
+    try:
+        with ledger.step("dog", "dog.floorplan", "map", args, {"cells": res["cells"], "frames": res["frames"]}) as r:
+            r["state_after"] = {"classes": res.get("classes"), "segments": [list(s) for s in res.get("segments") or []], "ms": res.get("ms")}
+            if not res.get("ok"):
+                raise NoWall(str(res.get("why") or "no wall found").removeprefix("floor plan: "))
+    except NoWall:
+        pass
 
 
 def to_px(res: dict[str, Any], cal: dict) -> dict[str, Any]:

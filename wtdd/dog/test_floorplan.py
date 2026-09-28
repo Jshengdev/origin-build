@@ -426,13 +426,16 @@ class Run(Base):
 class Cadence(Base):
     def test_the_session_runs_only_when_the_grid_advanced_and_at_most_every_FLOORPLAN_S(self):
         s, t0, S = self.session(accumulated()), 1000.0, floorplan.FLOORPLAN_S
-        self.assertIsNotNone(s.floorplan_tick(now=t0), "frames and no floor plan yet: a run")
+        first = s.floorplan_tick(now=t0)
+        self.assertIsNotNone(first, "frames and no floor plan yet: a run")
         self.assertIsNone(s.floorplan_tick(now=t0 + S / 4), "the grid did not advance: no run")
         s.grid.update_frame(frames()[0])
         self.assertIsNone(s.floorplan_tick(now=t0 + S / 2), "advanced, but inside FLOORPLAN_S of the last run")
-        self.assertIsNotNone(s.floorplan_tick(now=t0 + S + 0.01))
+        second = s.floorplan_tick(now=t0 + S + 0.01)
+        self.assertIsNotNone(second)
         self.assertIsNone(s.floorplan_tick(now=t0 + 10 * S), "no frame since the last run: no run, however long it waits")
-        self.assertEqual([r["state_before"]["frames"] for r in fp_rows()], [3, 4])
+        self.assertEqual([first["frames"], second["frames"]], [3, 4], "two runs")
+        self.assertEqual([r["state_before"]["frames"] for r in fp_rows()], [3], "QuietRows: the unchanged second run writes no row")
 
     def test_no_run_per_window_or_per_poll(self):
         s = self.session(None)
@@ -448,6 +451,62 @@ class Cadence(Base):
         s.floorplan(3)
         s.floorplan(3)
         self.assertEqual(len(fp_rows()), 2, "POST /dog/floorplan is one run and one row per press, advanced or not")
+
+
+class QuietRows(Base):
+    """Live 2026-09-27 (the worker, from the receipts): the ticker wrote 552 dog.floorplan rows in 35 minutes, one per
+    ~2 s tick while the LiDAR was on, and buried route.decided, plan.route, dog.follow and chat.post on the filmed
+    receipts. The ticker still computes every tick (the map stays live), but writes a row only on a real change (the
+    classes or the segment count past floorplan.ROW_CELLS / ROW_SHARE), on a summary at most every floorplan.ROW_S
+    counting the ticks since the last row, and on any failure; the button always writes (Cadence)."""
+
+    def ticks(self, s, n, t0=1000.0, feed=True):
+        S, out = floorplan.FLOORPLAN_S, []
+        for i in range(n):
+            if feed and i:
+                s.grid.update_frame(frames()[i % 3])   # a dog standing still: the grid advances, what it sees does not change
+            out.append(s.floorplan_tick(now=t0 + i * (S + 0.01)))
+        return out
+
+    def test_an_unchanged_scene_ticked_for_60_s_writes_at_most_2_rows(self):
+        s = self.session(accumulated())
+        res = self.ticks(s, 30)
+        self.assertTrue(all(r is not None for r in res), "every tick still runs: the map stays live")
+        rows = fp_rows()
+        self.assertLessEqual(len(rows), 2, f"{len(rows)} dog.floorplan rows for one unchanged scene in 60 s")
+        self.assertGreaterEqual(len(rows), 1, "the first result is written")
+
+    def test_the_summary_row_counts_the_ticks_it_covers(self):
+        s = self.session(accumulated())
+        self.ticks(s, 30)
+        rows = fp_rows()
+        self.assertEqual(len(rows), 2, [r["args"] for r in rows])
+        self.assertEqual(rows[1]["args"].get("reason"), "summary", rows[1]["args"])
+        self.assertGreater(rows[1]["args"].get("ticks", 0), 1, "the summary says how many quiet ticks it stands for")
+
+    def test_a_real_change_writes_a_row_at_once(self):
+        s = self.session(accumulated(ff.write(self.tmp / "box.npz", world=BOX_ONLY)))
+        self.assertIsNotNone(s.floorplan_tick(now=1000.0))
+        self.assertEqual(len(fp_rows()), 1, "the first result (no wall yet) is written")
+        g = accumulated()
+        g.update_frame(frames()[0])   # the room's walls come into view: frames advance past the last run
+        s.grid = g
+        self.assertIsNotNone(s.floorplan_tick(now=1000.0 + floorplan.FLOORPLAN_S + 0.01))
+        rows = fp_rows()
+        self.assertEqual(len(rows), 2, "walls appeared: a row at once, no 30 s wait")
+        self.assertTrue(rows[1]["ok"])
+        self.assertEqual(rows[1]["args"].get("reason"), "changed", rows[1]["args"])
+
+    def test_a_failed_tick_always_writes_its_row(self):
+        s = self.session(accumulated())
+        self.ticks(s, 1)
+        with mock.patch.object(floorplan, "_plan", side_effect=RuntimeError("synthetic plan failure")):
+            s.grid.update_frame(frames()[0])
+            with self.assertRaises(RuntimeError):
+                s.floorplan_tick(now=1000.0 + floorplan.FLOORPLAN_S + 0.01)
+        rows = fp_rows()
+        self.assertFalse(rows[-1]["ok"], "a failure is always a row")
+        self.assertIn("synthetic plan failure", rows[-1]["response_or_error"])
 
 
 class Serve(Base):
