@@ -16,6 +16,8 @@
   GET  /record?shift=<id>         item 10's record of one shift, exactly the JSON `python -m wtdd.record --shift <id>` prints (default: the run in
                                   force, shift.current()); an unknown shift is a 404 naming the shifts that exist, never an empty record (a read, no row)
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
+  GET  /images?shift=<id>&trigger=<t>&kind=<k>   the photos a run's rows name {shift, images: [{file, url, ts, kind, stop, ...}], n, why?} (wtdd/images.py; /record's default and 404; no bytes; a read, no row)
+  GET  /sessions                  [{shift_id, start, end, rows, stops, flags, signed, signed_by, stub_rows, in_force}] newest first: record.sessions(), build()'s numbers (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   GET  /routines | POST /routines {action: save | load | delete, name}   named routes: the map's path, stops and actions kept by name and loaded back (wtdd/routines.py)
   POST /field/stop                end the running walk (any source) at its next tick
@@ -46,6 +48,7 @@
   POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
   GET  /dog/blobs                 the newest blob labels pinned on the map {labels: [{blob_id, kind, label, p, model, geometry_verdict, erase, source, xy, pos_px, error?}], source, moved, why?} (a read, no row; polled every 2 s); erase and moved are GET /dog/floorplan's own erase at the read (newest plan, threshold now), not stamped at the press; WTDD_BLOBS=<file> serves planted labels (DEMO_CACHE)
   POST /dog/blobs {threshold?}    the press at a stop: one blob.labelled row per blob in the camera's view {labelled, skipped, failed, labels}; 500 with one failed row with no dog, pose, grid or field of view
+  GET  /people, /integrations    the People page {group, people: [{name}]} and the Integrations page {checked_at, integrations: [{name, ok, detail, as_of}]} (wtdd/status.py; reads: no row, no network, redacted like /chat)
   GET  /rules                     decide.rules(): the site labels, the escalate table (map or default), the thresholds in force, the Rules panel's lines
   GET  /dog/scout                 the scout's no-go zones {n, proposals: [{id, kind, label, p, app, cells_px, poly, thumb, ...}], zones: [the auto zones on ui/map.json], _version, failed, source, why} (polled every 2 s); WTDD_SCOUT=<file> serves a fixture instead (DEMO_CACHE)
   POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes a proposal as 04's nogo zone into ui/map.json,
@@ -78,7 +81,7 @@ from .ledger import log, rows
 from .chat.housemates import PRIVATE
 
 UI = ROOT / "ui"
-PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger")   # B10: what they answer passes through redact()
+PRIVATE_ROUTES = ("/chat", "/evals", "/record", "/record/shifts", "/ledger", "/people", "/integrations", "/images", "/sessions")   # B10: what they answer passes through redact()
 
 
 def redact(x):
@@ -180,6 +183,12 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, record.build(sid, rs))   # what python -m wtdd.record --shift <id> prints
             except Exception as e:  # noqa: BLE001  (reported, the page shows it)
                 return self._json(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path == "/images":   # the photos a run's rows name (wtdd/images.py), a read (no row); the bytes stay behind /pictures/<name>
+            from . import images
+            return self._json(*images.get(parse_qs(u.query), PICTURES))
+        if u.path == "/sessions":   # every run's line of the record (record.sessions), newest first, a read (no row); signed_by passes redact()
+            from . import record
+            return self._json(200, record.sessions(rows(), shift.current()))
         if u.path == "/dog/state":
             from .dog.session import DogSession
             return self._json(200, DogSession.get().state())
@@ -256,6 +265,13 @@ class H(BaseHTTPRequestHandler):
                 return self._json(200, DogSession.get().scout_state())
             except Exception as e:  # noqa: BLE001  (a missing fixture or a broken store: the page shows it)
                 return self._json(500, {"n": 0, "proposals": [], "failed": [], "error": f"{type(e).__name__}: {e}"})
+        # people · integrations (the dashboard's People, Monitoring and Integrations pages)
+        if u.path in ("/people", "/integrations"):   # reads: no row, no network; names and bools only, never a handle or a key
+            from . import status
+            if u.path == "/people":
+                return self._json(200, status.people())
+            from .dog.session import DogSession
+            return self._json(200, status.integrations(DogSession.get()))
         if u.path.startswith("/pictures/"):
             name = u.path[len("/pictures/"):]
             f = PICTURES / name

@@ -1,11 +1,11 @@
-import { LayoutGrid, Inbox, Route, FileSignature, ListChecks, Settings, Radio, Gamepad2, History, Activity, Image as ImageIcon, Users, type LucideIcon } from "lucide-react";
+import { LayoutGrid, Inbox, Route, FileSignature, ListChecks, Settings, Radio, Gamepad2, History, Image as ImageIcon, Users, type LucideIcon } from "lucide-react";
 
-export interface NavEntry { href: string; label: string; icon: LucideIcon; key: string }
+export interface NavEntry { href: string; label: string; icon: LucideIcon; key: string; faded?: boolean }
 
 /**
  * `key` is the second key of the G-then-key shortcut. Johnny, 17:15: Overview · Paths · Routines · Waiting · Record ·
- * Settings ("keep routines and settings because we need to come back to them"). Routines and Settings are not wired yet
- * and say so on the page (components/shell/sample-frame.tsx).
+ * Settings ("keep routines and settings because we need to come back to them"), and People ("let's keep people").
+ * Routines, People and Settings (Monitoring) read the API.
  */
 export const NAV: NavEntry[] = [
   { href: "/", label: "Overview", icon: LayoutGrid, key: "O" },
@@ -13,6 +13,7 @@ export const NAV: NavEntry[] = [
   { href: "/routines", label: "Routines", icon: ListChecks, key: "U" },
   { href: "/waiting", label: "Waiting", icon: Inbox, key: "W" },
   { href: "/record", label: "Record", icon: FileSignature, key: "R" },
+  { href: "/people", label: "People", icon: Users, key: "P" },   // live on GET /people (Johnny: "let's keep people")
 ];
 
 /**
@@ -22,12 +23,12 @@ export const NAV: NavEntry[] = [
  * record on Record, the dog's health on Overview's Body card, the group's asks on Waiting.
  */
 export const SAMPLES: NavEntry[] = [
-  { href: "/live", label: "Live", icon: Radio, key: "L" },
-  { href: "/driving", label: "Driving", icon: Gamepad2, key: "D" },
+  // Johnny: "driving can be faded and live can be faded": their live parts are on Overview (the camera, the drive switch).
+  // Monitoring is live inside Settings; Sessions and Images come as their routes land.
+  { href: "/live", label: "Live", icon: Radio, key: "L", faded: true },
+  { href: "/driving", label: "Driving", icon: Gamepad2, key: "D", faded: true },
   { href: "/sessions", label: "Sessions", icon: History, key: "E" },
-  { href: "/monitoring", label: "Monitoring", icon: Activity, key: "M" },
   { href: "/images", label: "Images", icon: ImageIcon, key: "I" },
-  { href: "/people", label: "People", icon: Users, key: "P" },
 ];
 
 export const SETTINGS: NavEntry = { href: "/settings", label: "Settings", icon: Settings, key: "S" };

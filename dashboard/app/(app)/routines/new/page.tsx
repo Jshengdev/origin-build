@@ -1,11 +1,6 @@
-import { RoutineEditor } from "@/components/routines/routine-editor";
-import { SampleFrame } from "@/components/shell/sample-frame";
-import { getDataSource, loadMap } from "@/lib/data";
+import { redirect } from "next/navigation";
 
-export default async function NewRoutinePage() {
-  return (
-    <SampleFrame what="Routines are not wired yet.">
-      <RoutineEditor map={await loadMap(getDataSource())} />
-    </SampleFrame>
-  );
+/** A routine has no page of its own: it is a row on /routines (load, run, save as). The mock editor stays in Storybook. */
+export default function Page() {
+  redirect("/routines");
 }

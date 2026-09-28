@@ -1,11 +1,12 @@
-import { PeopleView } from "@/components/people/people-view";
-import { SampleFrame } from "@/components/shell/sample-frame";
+import { PageHeader } from "@/components/shell/page-header";
+import { PeopleLive } from "@/components/people/people-live";
 
-/** Back as a sample (Johnny, 17:3x: "bring them back so i can be more specific about what it should and shouldnt display"). People are not wired yet. */
+/** People reads GET /people (components/people/people-live.tsx): the group and its names, as served. */
 export default function PeoplePage() {
   return (
-    <SampleFrame what="People are not wired yet: the group's real asks and answers are on Waiting.">
-      <PeopleView />
-    </SampleFrame>
+    <>
+      <PageHeader crumbs={[{ label: "People" }]} />
+      <PeopleLive />
+    </>
   );
 }

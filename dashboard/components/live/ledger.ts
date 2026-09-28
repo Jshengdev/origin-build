@@ -77,6 +77,7 @@ function rowLine(r: LedgerRow): string {
   if (str(a.dir)) return str(a.dir)!;
   if (str(a.action)) return str(a.action)!.replace(/_/g, " ");
   if (str(a.routine)) return str(a.routine)!;
+  if (r.tool?.startsWith("routine.") && str(a.name)) return str(a.name)!;   // routine.saved / loaded / deleted: the routine's name
   if (num(a.points) != null) return `path of ${a.points} ${a.points === 1 ? "point" : "points"}`;
   if (Array.isArray(a.at)) return `at ${(a.at as number[]).map((v) => v.toFixed(1)).join(", ")} m`;
   return "";
