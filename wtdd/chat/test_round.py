@@ -370,5 +370,29 @@ class Senders(unittest.TestCase):
         self.assertNotIn("teri.b@example.com", str(warns[0]), "the handle is masked")
 
 
+
+class Correction(unittest.TestCase):
+    """record 6 (assigned to this PR): correction() looked for the dog's last photo in the last 300 ledger rows only,
+    and the floor-plan ticker, the pose and the detector write that many in minutes, so a correction well inside
+    CORRECTION_WINDOW_S (30 min) found no photo: no chat.correction row, no "noted:", no line."""
+
+    def test_a_correction_finds_a_photo_more_than_300_rows_back(self):
+        posts: list[tuple[str, str | None]] = []
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            l = L.Listener(GROUP, lambda g, k, kind, t, f: posts.append((k, t)), listen_s=60)
+        now = msg("x")["ts_utc"]
+        ledger.append({"step": "chat.post", "agent": "central", "tool": "chat.post", "app": "imessage", "ok": True,
+                       "args": {"guid": GROUP, "kind": "listen", "trigger": "say:C1", "text": "a bird on the couch", "file": "/tmp/look.jpg"},
+                       "state_before": None, "state_after": {"guid": "P-C1", "rowid": 1, "ts": now}, "response_or_error": None, "latency_ms": 0})
+        for _ in range(300):   # the ticker's rows since the photo
+            ledger.append({"step": "dog.floorplan", "agent": "dog", "tool": "dog.floorplan", "app": "unitree", "ok": True, "args": {},
+                           "state_before": None, "state_after": None, "response_or_error": None, "latency_ms": 0})
+        n0 = len(ledger.rows())
+        with mock.patch.object(L, "STATE", _TMP / "state-fix.json"):
+            self.assertTrue(l.correction(msg("that's socks", "C2")), "the correction found no photo 300 rows back")
+        self.assertEqual([r["args"]["corrects"]["said"] for r in ledger.rows()[n0:] if r["tool"] == "chat.correction"], ["a bird on the couch"])
+        self.assertEqual(posts, [("fix:C2", "noted: that's socks")])
+
+
 if __name__ == "__main__":
     unittest.main()
