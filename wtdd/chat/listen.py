@@ -277,7 +277,12 @@ class Listener:
             if self._reset(holding=True):
                 return False
             for m in self.read():
-                if m.get("text") and self.allowed(m) and self.verdict(m):
+                try:
+                    read = bool(m.get("text") and self.allowed(m) and self.verdict(m))
+                except Exception as e:  # noqa: BLE001  (e.g. "ok, standing down" failed to post: its chat.post row has it)
+                    self._went_on("listen.hold", e)   # the hold is over and the walk goes on, never halted by a post
+                    return False
+                if read:
                     pend = json.loads(PENDING.read_text()) if PENDING.exists() else {}
                     if pend.get("reasked") and not pend.get("acknowledged"):
                         t0 = time.monotonic()   # asked once more: the re-ask gets its own `seconds`
@@ -567,8 +572,10 @@ class Listener:
             log("chat", "WAKE", by=hname(m["sender"]), phrase=wake[0], score=wake[1])
             self._event("chat.wake", m, phrase=wake[0], score=wake[1])
             if _flag("WTDD_WAKE_SHOW"):
-                self.wake_show(m)
-                self.round_end = db.max_rowid()
+                try:
+                    self.wake_show(m)
+                finally:   # a round that raised (a failed "dog done") has ended too: a wake typed during it starts nothing
+                    self.round_end = db.max_rowid()
             else:
                 self.say(f"wake:{m['guid']}", f"the dog is doin. listening for {int(self.listen_s)}s: {' · '.join(command_list())}")
             return
@@ -618,6 +625,15 @@ class Listener:
                                    "dry": self.dry, "pending": PENDING.exists(), "last_rowid": self.last}))
         tmp.replace(hb)
 
+    def _went_on(self, tool: str, e: Exception) -> None:
+        """A failure the listener outlives (a poll in run(), a reply inside a hold): one WARN and one failed row. A
+        failed post also has its own chat.post row."""
+        err = f"{type(e).__name__}: {str(e)[:200]}"
+        log("chat", f"WARN {tool} failed, going on", error=err)
+        append({"step": tool, "agent": "central", "tool": tool, "app": "imessage", "ok": False, "args": {},
+                "state_before": None, "state_after": {"armed": self.armed, "armed_by": self.armed_by},
+                "response_or_error": err, "latency_ms": 0})
+
     def _beats(self, every: float, done: threading.Event) -> None:
         while not done.wait(every):
             self.beat()
@@ -664,7 +680,11 @@ class Listener:
             threading.Thread(target=self._beats, args=(every, done), daemon=True).start()
         try:
             while True:
-                self.poll()
+                try:
+                    self.poll()
+                except Exception as e:  # noqa: BLE001  (never KeyboardInterrupt or SystemExit: Ctrl-C still ends the listener)
+                    self._went_on("listen.poll", e)
+                    time.sleep(2.0)
                 if once:
                     break
                 time.sleep(every)

@@ -465,7 +465,7 @@ class Heartbeat(unittest.TestCase):
             l = L.Listener(GROUP, lambda *a: None, listen_s=60)
         seen: list[dict] = []
 
-        class Over(Exception):
+        class Over(BaseException):   # run() outlives an Exception now: only this ends it
             pass
 
         def a_round(m: dict) -> None:   # the walk, then a question opened and its hold, all inside one poll()
