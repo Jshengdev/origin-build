@@ -647,7 +647,9 @@ class Proposals:
                 continue
             stub = stub or cstub
             ev = {"p": float(o["p"]), "seen_n": seen_n, "span_s": span_s, "confirm": conf, "points_n": pts}
-            z = {"id": zid, "object_id": o["id"], "kind": o["label"], "label": d["label"], "p": float(d["p"]), "app": "stub" if stub else app,
+            true_name = " ".join(str(c["name"]).lower().split()) or d["label"]   # what the stronger model says it truly is
+            z = {"id": zid, "object_id": o["id"], "kind": o["label"], "label": true_name, "class": d["label"], "p": float(d["p"]),
+                 "app": "stub" if stub else app,
                  "cells": cells, "cells_px": occupancy.to_map_px(cells, cal).tolist(), "poly": poly, "thumb": o.get("thumb"),
                  "photo": {k: photo[k] for k in ("path", "sha256", "bytes", "file", "url")}, "evidence": ev,
                  "dist_m": o["dist_m"], "area_m2": area, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
@@ -768,7 +770,7 @@ class Proposals:
                             "source": "scout", "cells": z["cells"], "proposal": z["id"], "by": by,
                             **({"app": "stub"} if z["app"] == "stub" else {})}   # DEMO_CACHE provenance survives; 04 ignores the key
             if by == "auto":   # a model's label and p, no person's name: the remote says "auto · <label> · <p>"
-                e.update(label=z["label"], p=z["p"], kind="hazard", evidence=z.get("evidence"),
+                e.update(label=z["label"], p=z["p"], kind="hazard", evidence=z.get("evidence"), **({"class": z["class"]} if z.get("class") else {}),
                          photo={k: z["photo"][k] for k in ("file", "url")} if (z.get("photo") or {}).get("file") else None)
             return zones + [e]
         v = self._rewrite(version, "added" if by == "auto" else "confirmed", add, since)
