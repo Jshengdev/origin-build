@@ -90,7 +90,7 @@ class Share(unittest.TestCase):
         self.fail_send: Exception | None = None
         for p in (mock.patch.object(L, "PENDING", self.pend), mock.patch.object(L, "RESET", self.flag),
                   mock.patch.object(L, "SHARE", self.share, create=True), mock.patch.object(L, "HEARTBEAT", d / "listen.json"),
-                  mock.patch.object(L, "STATE", d / "state.json"),
+                  mock.patch.object(L, "STATE", d / "state.json"), mock.patch.object(memory, "MEMORY", d / "memory.db"),   # a fresh never-twice gate: every test shares in the same second
                   mock.patch.object(api, "PICTURES", PICS), mock.patch.object(send, "PICTURES", PICS),
                   mock.patch.object(send, "_osascript", self._osascript), mock.patch.object(db, "max_rowid", return_value=0),
                   mock.patch.object(db, "chat_name", return_value=send.TARGET_NAME),
@@ -212,7 +212,9 @@ class Share(unittest.TestCase):
 
     def test_two_group_replies_are_kept_on_that_image(self):
         trig = self.shared()["trigger"]
-        self.poll(msg("so cute", "R-1", 11), msg(f"lol text me {OTHER}", "R-2", 12, sender=OTHER))
+        self.poll(msg("so cute", "R-1", 11))
+        with mock.patch.dict(L.HOUSEMATES, {}, clear=True):   # an empty list lets any member in: a handle with no name
+            self.poll(msg(f"lol text me {OTHER}", "R-2", 12, sender=OTHER))
         self.assertEqual(self.posts, [], "a reply is kept, never answered")
         rs = self.replies()
         self.assertEqual([(r["args"]["share"], r["args"]["from"], r["args"]["rowid"]) for r in rs],
@@ -247,7 +249,7 @@ class Share(unittest.TestCase):
             self.l = L.Listener(GROUP, lambda g, k, kind, t, f: self.posts.append((k, t)), listen_s=60)
         self.pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "file": "/tmp/look.jpg", "seconds": 5,
                                          "trigger": "alarm:T1:5", "chat": GROUP, "question": "who dis?!"}))
-        self.poll(msg("yes that's teri", "V1", 11), msg("cute pic", "R-1", 12))   # the verdict closes the question: then a reply
+        self.poll(msg("that's teri", "V1", 11), msg("cute pic", "R-1", 12))   # the verdict closes the question: then a reply
         self.assertEqual([r["tool"] for r in self.new_rows() if r["tool"] == "intruder.verdict"], ["intruder.verdict"])
         self.assertEqual([r["args"]["guid"] for r in self.replies()], ["R-1"])
 
