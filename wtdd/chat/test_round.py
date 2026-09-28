@@ -271,6 +271,44 @@ class Round(unittest.TestCase):
         self.assertEqual([r["args"]["follower"] for r in self.rows("field.walk")], [False, True], "the lights walk's row, then the round's")
         self.assertTrue(lit and lit[0].get("yielded"), f"the lights walk did not end yielded: {lit}")
 
+    # lights 3: the round went ahead once the lights walk's field.json was older than BUSY_S, not once it was gone: a
+    # lights write still in flight past BUSY_S landed after the round's dark start, and that light stayed lit all round
+
+    def test_a_lights_write_slower_than_busy_s_lands_before_the_rounds_dark_start(self):
+        self.enterContext(mock.patch.object(field, "BUSY_S", 0.2))
+        slow: list = []                                   # the lights walk's first lit write: (id, level), slower than BUSY_S
+        mine = self._write
+
+        def write(light: dict, level: int) -> float:
+            if level and not slow:
+                slow.append((light["id"], level))
+                time.sleep(0.8)                           # BUSY_S < 0.8 s < YIELD_S
+                self.writes.append(("late", level))
+                return 0.8
+            return mine(light, level)
+        self.enterContext(mock.patch.object(field, "_write", write))
+        api = Api([state(1), state(2), state(2, active=False, done=True)], self.events)
+        idle = {"map": {"p": PATH[0]}, "follow": {}}
+        main, lit = threading.current_thread(), []
+        get = lambda url, **kw: api.get(url, **kw) if threading.current_thread() is main else SimpleNamespace(json=lambda: idle)   # noqa: E731
+        with mock.patch.object(requests, "get", get), mock.patch.object(requests, "post", api.post):
+            t = threading.Thread(target=lambda: lit.append(field.walk(source="dog", follower=False)), daemon=True)
+            t.start()
+            for _ in range(300):
+                if field.FIELD.exists() and slow:
+                    break
+                time.sleep(0.01)
+            self.l.wake_show(msg("what the dog doin"))
+            if t.is_alive():
+                type(_TMP)(field.STOP).write_text("x")
+            t.join(5)
+        self.assertTrue(slow, "no light was lit at the lights walk's pose: nothing to check")
+        before = self.writes[:self.writes.index(("late", slow[0][1]))]
+        self.assertEqual(before.count((slow[0][0], 0)), 1,
+                         f"the round's dark start wrote {slow[0][0][:8]} = 0 before the lights walk's {slow[0][1]} landed: it stays lit")
+        self.assertEqual(self.posts[-1][1], "dog done", str(self.posts[-1]))
+        self.assertTrue(lit and lit[0].get("yielded"), f"the lights walk did not end yielded: {lit}")
+
 
 class Wake(unittest.TestCase):
     """ask 8: handle() with WTDD_WAKE_SHOW=1 and the round stubbed (it only moves chat.db's MAX(ROWID) and outlasts
