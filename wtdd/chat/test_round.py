@@ -161,6 +161,28 @@ class Round(unittest.TestCase):
                 self.assertEqual([lv > 0 for lv in mine], [False, True, False], f"the lamp wrote {mine}: left lit after the walk")
                 self.assertEqual(set({lid: lv for lid, lv in self.writes}.values()), {0}, f"every light ends at 0: {self.writes}")
 
+    # ask 2: Stop on either dashboard mid-round (field.stop, and /dog/stop) is no end look and "dog done (stopped)"
+
+    def test_stop_pressed_mid_round_is_no_end_look_and_dog_done_stopped(self):
+        pressed = lambda: (field.STOP.write_text("x"), state(2))[1]   # noqa: E731  the dashboard's /field/stop lands during this read
+        ended = state(2, active=False, error="stopped")                # its /dog/stop reached the follower first
+        for name, script in (("field.stop", [state(1), pressed]), ("follow ended: stopped", [state(1), ended])):
+            with self.subTest(name):
+                self.events.clear()
+                self.posts.clear()
+                self.round(script)
+                self.assertNotIn(("look", None), self.events, "the dog looked (and could ask who dis) after Stop")
+                self.assertTrue(self.posts[-1][1].startswith("dog done (stopped)"), self.posts[-1])
+
+    def test_a_stop_left_from_an_earlier_walk_does_not_skip_the_look(self):
+        """Guards the fix's clock (passes before it): field.stop is cleared only when a walk starts, so one left from
+        before this wake (the follow refused, the walk never began) is not this round's Stop. A bare STOP.exists() fails."""
+        field.STOP.write_text("x")
+        os.utime(field.STOP, (time.time() - 60, time.time() - 60))
+        self.round([state(1)], follow_ok=False)
+        self.assertIn(("look", None), self.events)
+        self.assertTrue(self.posts[-1][1].startswith("dog done (couldn't walk the path: RuntimeError: follow refused"), self.posts[-1])
+
 
 if __name__ == "__main__":
     unittest.main()
