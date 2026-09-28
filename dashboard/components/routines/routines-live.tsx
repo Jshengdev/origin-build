@@ -79,7 +79,7 @@ export function RoutinesLive() {
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-12 flex flex-col gap-4 lg:col-span-5">
           {/* Results sit in this column, never above the map, as on Paths */}
-          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} />{walkRoute.lightsOff}</div>}
+          {[...stopped, result].some(Boolean) && <div className="flex flex-col gap-1"><Results rows={[...stopped, result]} /></div>}
           <Module title="Routines" meta={list.data ? `${rs.length} saved` : undefined} size="auto"
             loading={!list.data && !list.error} error={list.error ? `FAILED GET /routines · ${redact(list.error)}` : undefined}>
             {rs.length === 0 ? (
