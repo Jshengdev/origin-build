@@ -49,7 +49,9 @@
   POST /dog/floorplan {threshold?}   run the floor plan now (one dog.floorplan row): {ok, why?, classes, segments, ms, frames, grid_source}; 500 with no grid at all
   GET  /dog/blobs                 the newest blob labels pinned on the map {labels: [{blob_id, kind, label, p, model, geometry_verdict, erase, source, xy, pos_px, error?}], source, moved, why?} (a read, no row; polled every 2 s); erase and moved are GET /dog/floorplan's own erase at the read (newest plan, threshold now), not stamped at the press; WTDD_BLOBS=<file> serves planted labels (DEMO_CACHE)
   POST /dog/blobs {threshold?}    the press at a stop: one blob.labelled row per blob in the camera's view {labelled, skipped, failed, labels}; 500 with one failed row with no dog, pose, grid or field of view
-  GET  /people, /integrations    the People page {group, people: [{name}]} and the Integrations page {checked_at, integrations: [{name, ok, detail, as_of}]} (wtdd/status.py; reads: no row, no network, redacted like /chat)
+  GET  /people, /integrations    the People page {group: {name, members, last_ts}, people: [{id, label, is_me, messages_24h, last_ts, replies_to_dog}]} (the group chat's
+                                  members in chat.db plus you; 500 when chat.db is unreadable) and the Integrations page {checked_at, integrations: [{name, ok, detail, as_of}]}
+                                  (wtdd/status.py; reads: no row, no network, redacted like /chat)
   GET  /rules                     decide.rules(): the site labels, the escalate table (map or default), the thresholds in force, the Rules panel's lines
   GET  /dog/scout                 the scout's no-go zones {n, proposals: [{id, kind, label, p, app, cells_px, poly, thumb, ...}], zones: [the auto zones on ui/map.json], _version, failed, source, why} (polled every 2 s); WTDD_SCOUT=<file> serves a fixture instead (DEMO_CACHE)
   POST /dog/scout {id, action: confirm | dismiss, by, _version}   a named person's tap: confirm writes a proposal as 04's nogo zone into ui/map.json,
@@ -267,7 +269,8 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001  (a missing fixture or a broken store: the page shows it)
                 return self._json(500, {"n": 0, "proposals": [], "failed": [], "error": f"{type(e).__name__}: {e}"})
         # people · integrations (the dashboard's People, Monitoring and Integrations pages)
-        if u.path in ("/people", "/integrations"):   # reads: no row, no network; names and bools only, never a handle or a key
+        if u.path in ("/people", "/integrations"):   # reads: no row, no network; labels, counts and bools, never a handle or a key
+            # /people raises on an unreadable chat.db: B9's 500 {error} names it, never [] (reads as nobody)
             from . import status
             if u.path == "/people":
                 return self._json(200, status.people())
