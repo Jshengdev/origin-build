@@ -29,7 +29,8 @@ demo in Johnny's order (dog_on_fire picture, "dog doin", the walk with a look-an
 photo, one sentence from the vision model posted with the photo, and with WTDD_ALARM=1 "who dis?!" when a person is in frame
 and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. The round
 blocks the poll, so a wake typed while it ran is read after "dog done": one whose chat.db ROWID is at or below
-MAX(ROWID) when the round ended starts nothing (one WARN); one typed after "dog done" starts the next. WTDD_AGENT=1
+MAX(ROWID) when the round ended starts nothing (one WARN); one typed after "dog done" starts the next, armed or not (a
+round shorter than WTDD_LISTEN_S leaves the chat armed; a wake there is not a re-arm). WTDD_AGENT=1
 sends an armed message that is not a fixed command to wtdd.agent.ask with the chat context. A failed command is
 reported to the group as its class and message, never faked; a done one as its text, else the tool's result, else
 the raw dict (a registry tool answers {"result": ...}), never an empty message. Live wake demo receipt (2026-09-13 03:0x, in
@@ -99,7 +100,7 @@ from typing import Any, Callable
 
 from .. import commands as cmds
 from .. import config
-from ..ledger import append, log, rows as ledger_rows, step
+from ..ledger import append, log, rows as ledger_rows
 from . import db, memory, oncall
 from .housemates import HOUSEMATES, PRIVATE, name as hname
 from .triggers import commands as command_list, is_chat, is_wake, match_command, normalize, wake_phrases
@@ -357,14 +358,16 @@ class Listener:
         one the remote's button runs) with look_and_say at every stop drawn on the map (or once at the end when no stop
         was looked at: each is counted as it happens, so a walk that fails after one never looks again), then "dog
         done". Each part is a tool call and a gated post keyed on the wake message; a failed part is posted as its
-        error, never faked, and the sequence still ends with "dog done". With the real dog, a walk
-        that fails (or a Ctrl-C of the listener) first halts the follower (halt(), POST /dog/stop), so the dog is never
-        driven under the end look and the next wake's follow is not refused; a Ctrl-C then exits, no look. Stop on
-        either dashboard during this round (field.stop written since the wake, or the follow ended "stopped") is no
-        end look and "dog done (stopped)"."""
+        error, never faked, and the sequence still ends with "dog done". With the real dog, a walk that fails (or a
+        Ctrl-C of the listener) first halts the follower (field.halt, POST /dog/stop: inside walk() before its end dark,
+        else here, one dog.stop row either way), so the dog is never driven under the end look and the next wake's
+        follow is not refused; a Ctrl-C then exits, no look. Stop on either dashboard during this round (field.stop
+        written since the wake, or the follow ended "stopped") is no end look and "dog done (stopped)"; written before
+        the walk began (the picture, "dog doin"), no follow starts."""
         from .. import tools
-        from ..field import STOP, walk
+        from ..field import STOP, halt, walk
         t_wake = time.time()
+        pressed = lambda: STOP.exists() and STOP.stat().st_mtime >= t_wake   # noqa: E731  Stop on a dashboard since this wake
         try:
             pic = tools.call("dog_on_fire")
             self.say(f"fire:{m['guid']}", None, pic["file"])
@@ -375,6 +378,8 @@ class Listener:
         stops: list[int] = []
         source = "dog" if (config.maybe("WTDD_ROUND") or "entity") == "dog" else "entity"
         try:
+            if pressed():         # Stop during the picture or "dog doin": walk() would clear it and the follower would start
+                raise RuntimeError("stopped before the walk began")
             if source == "dog":   # the real dog walks the round: the API's follower drives it, the field follows its pose
                 import requests
                 avoid = (config.maybe("WTDD_ROUND_AVOID") or "1") not in ("0", "false", "no")   # 0 = follow without the dog's avoidance, by explicit choice
@@ -387,27 +392,15 @@ class Listener:
             if out.get("errors"):
                 walked = f"{out['errors']} light write(s) failed, see the ledger"
         except BaseException as e:  # noqa: BLE001  (a Ctrl-C too: never leave the follower driving with nobody watching)
-            if source == "dog":
-                self.halt(f"{type(e).__name__}: {e}")
+            if source == "dog" and not getattr(e, "dog_halted", False):   # walk() halts a failure in its own loop, before the dark
+                halt(f"{type(e).__name__}: {e}", "chat")
             if not isinstance(e, Exception):
                 raise
             walked = f"couldn't walk the path: {type(e).__name__}: {str(e)[:100]}"
-        stopped = (STOP.exists() and STOP.stat().st_mtime >= t_wake) or "follow ended with: stopped" in (walked or "")
+        stopped = pressed() or "follow ended with: stopped" in (walked or "")
         if not stops and not stopped:      # no stop reached: the look point is wherever the dog is now
             self.look_and_say(m)
         self.say(f"done:{m['guid']}", "dog done" + (" (stopped)" if stopped else "") + (f" ({walked})" if walked else ""))
-
-    def halt(self, why: str) -> None:
-        """POST /dog/stop when the round's walk is gone: the API cancels the follower and halts the dog, walking or
-        held at a stop. One dog.stop row; a stop that fails is that row FAILED and a WARN, never the end of the round."""
-        import requests
-        try:
-            with step("chat", "dog.stop", "unitree", {"why": why[:160]}) as r:
-                r["state_after"] = requests.post(f"{config.API}/dog/stop", json={}, timeout=15).json()   # the API's halt waits up to 10 s
-                if not r["state_after"].get("ok"):
-                    raise RuntimeError(r["state_after"].get("error") or "the API refused the stop")
-        except Exception as e:  # noqa: BLE001  (the dog.stop row has it)
-            log("chat", "WARN the follower could NOT be stopped after the failed walk", err=f"{type(e).__name__}: {str(e)[:100]}")
 
     def correction(self, m: dict[str, Any]) -> bool:
         """A housemate correcting the dog's last report ("that's socks, not a bird"): one chat.correction row naming
@@ -562,7 +555,7 @@ class Listener:
             self.chat(m)
             return
         wake = is_wake(text)
-        if not self.armed:
+        if not self.armed or (wake and self.round_end > 0):   # after a round a wake is judged by its ROWID, armed or not (a short round leaves it armed)
             if not wake:
                 return
             if 0 < m.get("rowid", 0) <= self.round_end:   # typed while the last round ran, read only after its "dog done"

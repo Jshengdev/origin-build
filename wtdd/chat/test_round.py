@@ -100,6 +100,7 @@ class Round(unittest.TestCase):
 
     def _write(self, light: dict, level: int) -> float:
         self.writes.append((light["id"], level))
+        self.events.append(("write", level))
         return 0.0
 
     def _look(self, look: str = "tilt", stop: int | None = None) -> dict:
@@ -161,6 +162,28 @@ class Round(unittest.TestCase):
                 self.assertEqual([lv > 0 for lv in mine], [False, True, False], f"the lamp wrote {mine}: left lit after the walk")
                 self.assertEqual(set({lid: lv for lid, lv in self.writes}.values()), {0}, f"every light ends at 0: {self.writes}")
 
+    # lights 1, the rest: the dashboard's dog walk (walk_path, field.walk(source="dog") with no listener) halts too, and
+    # both stop the dog before the end dark (the listener's halt ran after walk()'s finally had darkened every light)
+
+    def test_a_dog_walk_that_fails_stops_the_dog_first_then_goes_dark(self):
+        n = len(json.loads(MAP.read_text())["lights"])
+        for name in ("the dashboard's walk", "the chat's round"):
+            with self.subTest(name):
+                self.events.clear()
+                n0 = len(ledger.rows())
+                script = [state(1), requests.ReadTimeout("read timeout=3")]   # one tick, then a slow /dog/state read
+                if name == "the chat's round":
+                    self.round(script)
+                else:
+                    api = Api(script, self.events)
+                    with mock.patch.object(requests, "get", api.get), mock.patch.object(requests, "post", api.post), \
+                            self.assertRaises(requests.ReadTimeout):
+                        field.walk(source="dog")
+                self.assertIn(("POST", "/dog/stop"), self.events, "the follower was left driving the dog after the walk failed")
+                after = self.events[self.events.index(("POST", "/dog/stop")):]
+                self.assertEqual(after.count(("write", 0)), n, f"stop the dog first, then the end dark: {self.events}")
+                self.assertEqual(len([r for r in ledger.rows()[n0:] if r["tool"] == "dog.stop"]), 1, "one dog.stop row per failure")
+
     # ask 2: Stop on either dashboard mid-round (field.stop, and /dog/stop) is no end look and "dog done (stopped)"
 
     def test_stop_pressed_mid_round_is_no_end_look_and_dog_done_stopped(self):
@@ -173,6 +196,18 @@ class Round(unittest.TestCase):
                 self.round(script)
                 self.assertNotIn(("look", None), self.events, "the dog looked (and could ask who dis) after Stop")
                 self.assertTrue(self.posts[-1][1].startswith("dog done (stopped)"), self.posts[-1])
+
+    def test_stop_pressed_before_the_walk_begins_starts_no_walk(self):
+        """Stop during the picture or "dog doin": /dog/stop finds no follower yet and walk() clears field.stop as it
+        starts, so the round went on to follow the whole route, look again and post a plain "dog done"."""
+        def fire(name: str, **kw) -> dict:
+            field.STOP.write_text("x")   # the dashboard's /field/stop lands while the picture is made
+            return self._tool(name, **kw)
+        self.enterContext(mock.patch("wtdd.tools.call", fire))
+        self.round([state(1), state(len(PATH) - 1, active=False, done=True)])   # unfixed: the follower walks the route to its end
+        self.assertNotIn(("POST", "/dog/follow"), self.events, "the dog was sent walking after Stop")
+        self.assertNotIn(("look", None), self.events)
+        self.assertTrue(self.posts[-1][1].startswith("dog done (stopped)"), self.posts[-1])
 
     def test_a_stop_left_from_an_earlier_walk_does_not_skip_the_look(self):
         """Guards the fix's clock (passes before it): field.stop is cleared only when a walk starts, so one left from
@@ -218,6 +253,23 @@ class Wake(unittest.TestCase):
             l.handle(msg("what the dog doin", "W2", 102))   # typed during W1's round, read after its "dog done"
             l.handle(msg("what the dog doin", "W3", 104))   # typed after "dog done": the next take
         self.assertEqual(rounds, ["W1", "W3"])
+
+    def test_after_a_round_shorter_than_listen_s_the_chat_is_still_armed_and_a_wake_still_decides(self):
+        """A failed take ends in 20 s, so the chat is still armed after "dog done": the retake must start (it was read
+        as a silent re-arm), and a wake typed during the round must still be its one WARN (it too re-armed silently)."""
+        top = [100]
+        rounds: list[str] = []
+        with mock.patch.object(L.db, "max_rowid", side_effect=lambda: top[0]), \
+                mock.patch.dict(os.environ, {"WTDD_WAKE_SHOW": "1"}), mock.patch.object(L, "log") as log, \
+                mock.patch.object(L, "PENDING", _TMP / "pending-wake.json"), mock.patch.object(L, "STATE", _TMP / "state-wake.json"):
+            l = L.Listener(GROUP, lambda *a: None, listen_s=120)
+            l.wake_show = lambda m: (rounds.append(m["guid"]), top.__setitem__(0, top[0] + 3))   # a short round: still armed after it
+            l.handle(msg("what the dog doin", "W1", 101))
+            l.handle(msg("what the dog doin", "W2", 102))   # typed during W1's round
+            self.assertTrue(l.armed)
+            l.handle(msg("what the dog doin", "W3", 104))   # the retake, typed after "dog done"
+        self.assertEqual(rounds, ["W1", "W3"])
+        self.assertEqual(len([c for c in log.call_args_list if "typed during the round" in c.args[1]]), 1, log.call_args_list)
 
 
 

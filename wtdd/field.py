@@ -19,7 +19,9 @@ room starts dark and the first latency of each light is measured), the walk in r
 light to 0 again and wait. One field.walk ledger row with seconds, writes, errors, rooms crossed and the mean latency per
 light; every write is its own row, a failed write is counted and logged, never retried. The end dark runs in a finally:
 a walk that raises (a failed /dog/state read, an on_stop that raises) or is interrupted (Ctrl-C) still drains its in-flight
-writes, puts every light to 0 and shuts its pool down before the error goes on. While it runs, <repo>/field.json
+writes, puts every light to 0 and shuts its pool down before the error goes on. With the follower (source="dog") it
+first halts the dog, before the dark: halt(), POST /dog/stop, one dog.stop row (the remote's walk button and the chat
+alike; the error carries dog_halted so the chat does not halt twice). While it runs, <repo>/field.json
 holds the entity's position, room, levels and current stop (atomic writes at HZ, removed at the end); the API serves it
 at GET /field and the remote draws the dot from it, whichever process runs the walk; a field.json younger than BUSY_S
 means a walk is live and a second walk (the button during a chat round, or the reverse) is refused, never interleaved. Stops: map.json `stops` is a list
@@ -137,6 +139,19 @@ def _dog() -> dict[str, Any]:
     return d
 
 
+def halt(why: str, agent: str = "field") -> None:
+    """POST /dog/stop when a dog walk is gone (it raised, or never began): the API cancels the follower and halts the
+    dog, walking or held at a stop. One dog.stop row; a stop that fails is that row FAILED and a WARN, never raised."""
+    import requests
+    try:
+        with step(agent, "dog.stop", "unitree", {"why": why[:160]}) as r:
+            r["state_after"] = requests.post(f"{API}/dog/stop", json={}, timeout=15).json()   # the API's halt waits up to 10 s
+            if not r["state_after"].get("ok"):
+                raise RuntimeError(r["state_after"].get("error") or "the API refused the stop")
+    except Exception as e:  # noqa: BLE001  (the dog.stop row has it)
+        log(agent, "WARN the follower could NOT be stopped after the failed walk", err=f"{type(e).__name__}: {str(e)[:100]}")
+
+
 def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | None], Any] | None = None,
          source: str = "entity", follower: bool = True) -> dict[str, Any]:
     """Runs the entity along the map's path in real time and drives the real lights (see the module doc for the order).
@@ -145,7 +160,8 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
     writes, errors, rooms crossed, stops done, latency_ms per light, and the light labels.
     source="dog": the entity IS the dog. Its position is the calibrated odometry pose from GET /dog/state (the API's
     follower must be running: POST /dog/follow first), the stops are where the follower pauses (on_stop runs, then
-    POST /dog/resume), and the walk ends when the follower is done or failed (the error is in the row).
+    POST /dog/resume), and the walk ends when the follower is done or failed (the error is in the row); a walk that
+    raises in its loop halts the dog (halt()) before it goes dark.
     source="dog", follower=False: the lights simply follow the dog wherever it is driven (the controller, the keys),
     no route and no stops, until POST /field/stop (or STOP appears); the row says how long and how many writes."""
     if source not in ("entity", "dog"):
@@ -271,6 +287,11 @@ def walk(dry: bool = False, on_stop: Callable[[int, tuple[float, float], str | N
             elif source == "entity" and s >= total:
                 break
             time.sleep(1 / HZ)
+        except BaseException as e:                       # the loop is gone: stop the dog first, then go dark
+          if source == "dog" and follower:
+              halt(f"{type(e).__name__}: {e}")
+              e.dog_halted = True                        # the caller (the chat's round) does not halt it again
+          raise
         finally:                                         # a failed read or a Ctrl-C too: never leave a light lit
           _publish(None)
           for lid, fut in list(inflight.items()):
