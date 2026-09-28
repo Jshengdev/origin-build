@@ -90,7 +90,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/record` | `shift` (default: the run in force) | `{shift_id, rows, stamped, posts, window, planned_stops, stops, flags, corrections, acked_ms, acked_median_ms, refusals, failures, signed, after_signature, site, stub_rows}` | 404 `{error}` unknown shift (a plain sentence); 500 `{error}` |
 | GET | `/record/shifts` | | `{shifts, current}` | 500 `{error}` |
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
-| GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, follow, avoid, recheck, corr, rec}` | 500 `{error}` |
+| GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, cal, follow, avoid, recheck, corr, rec}` (`cal`: the calibration tie `{map, heading_deg, at}` every projection scales about, or `null` when the dog was never placed) | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
 | GET | `/dog/lidar` | | `{on, n, errors, cb_errors, grid_frames, localize, age_ms, frame, points_px, utlidar_pose?, n_xy?, z_m?, known?, why?}` | 500 `{error}` |
 | GET | `/dog/grid` | `threshold` (default 3) | `{n, cells_px, cell_px, threshold, resolution, frames, frame_id, extent_m, source, hits?, cb_errors?, why?}` | 500 `{n: 0, cells_px: [], error}` |
