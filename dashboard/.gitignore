@@ -42,3 +42,7 @@ next-env.d.ts
 
 *storybook.log
 storybook-static
+
+# origin-build's root .gitignore ignores evals.json (the graded report at the root); this one is a labelled dry fixture the
+# app imports (lib/data/fixtures.ts, stories/fixtures.ts), so it is tracked
+!lib/data/fixtures/evals.json
