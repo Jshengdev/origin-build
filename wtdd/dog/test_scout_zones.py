@@ -439,7 +439,7 @@ class Feed(Base):
         p = self.props(decide=self.jev(0.84))
         self.feed(p)
         (z,) = self.auto()   # the backpack is not_a_hazard at 0.84: only a hazard label becomes a zone, never every object
-        self.assertEqual((z["name"], z["label"], z["p"], z["by"], z["nogo"], z["source"]), ("nogo-1", "table", 0.84, "auto", True, "scout"))
+        self.assertEqual((z["name"], z["label"], z["p"], z["by"], z["nogo"], z["source"]), ("nogo-1", "chair", 0.84, "auto", True, "scout"))   # the label is what the confirm model named it (was the class)
         self.assertEqual(as_set(z["cells"]), self.chair_cells())
         self.assertEqual(z["poly"], scout_zones.polygon(z["cells"], CAL, RES))
         self.assertNotIn("app", z, "a live-shaped answer carries no stub mark")
@@ -488,13 +488,13 @@ class Feed(Base):
         p = self.props()
         self.feed(p)
         (z,) = self.auto()
-        self.assertEqual((z["label"], z["p"], z["by"], z["app"]), ("table", 0.71, "auto", "stub"), "DEMO_CACHE provenance on the map")
+        self.assertEqual((z["label"], z["p"], z["by"], z["app"]), ("chair", 0.71, "auto", "stub"), "DEMO_CACHE provenance on the map")
         (r,) = self.tool("zone.confirmed")
         self.assertEqual((r["args"]["by"], r.get("cached"), r.get("source")), ("auto (stub 0.71)", True, "stub"))
         self.assertIn("I added a no-go zone around the chair: seen 4 times over 3.0 s at p 0.71", r["response_or_error"])
         self.assertIn(f"{len(self.chair_cells())} lit LiDAR points", r["response_or_error"])
         a = r["state_before"]
-        self.assertEqual((a["id"], a["object_id"], a["kind"], a["label"], a["p"]), ("z1", "o1", "chair", "table", 0.71))
+        self.assertEqual((a["id"], a["object_id"], a["kind"], a["label"], a["p"]), ("z1", "o1", "chair", "chair", 0.71))
         self.assertEqual(as_set(a["cells"]), self.chair_cells())
         self.assertGreaterEqual(len(a["cells"]), scout_zones.HAZARD_MIN_POINTS)
         self.assertAlmostEqual(a["area_m2"], round(len(a["cells"]) * RES * RES, 4))
@@ -832,7 +832,7 @@ class Dismiss(Base):
         self.assertEqual((r["agent"], r["args"]["id"], r["args"]["by"]), ("scout", "nogo-1", NAME))
         self.assertIn("shift_id", r["args"])
         self.assertEqual(r["state_before"]["by"], "auto")
-        self.assertEqual(r["response_or_error"], f"I took nogo-1 (auto · table · 0.84) off the map: {NAME} dismissed it.")
+        self.assertEqual(r["response_or_error"], f"I took nogo-1 (auto · chair · 0.84) off the map: {NAME} dismissed it.")
         self.assertEqual(len(self.rows), 1)
 
     def test_a_drawn_zone_survives_a_dismiss_of_another(self):
