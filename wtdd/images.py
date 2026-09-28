@@ -25,9 +25,10 @@ constant). stop: the map index a say:, alarm:, decide: or round: trigger ends in
 dropped); a dog.look's frames take the stop of the next such post before the next look (the record's stop rule).
 
 Fail loud. A file that is not in the pictures folder (~/Pictures/wtdd, what /pictures/<name> serves) is listed with
-missing true, never dropped. The looks write fixed names (look-<kind>.jpg, look-down.jpg and their -boxed copies), so
-each look overwrites the one before: a file modified after its row (its whole-second ts plus 1 s) is listed with
-replaced true, because the bytes at its url are a newer look's, not this row's. `why` counts the missing and the
+missing true, never dropped. Rows written before each look had its own name (look-<kind>-<stamp>-<id>.jpg) name the
+old fixed ones (look-<kind>.jpg, look-down.jpg and their -boxed copies), which each look overwrote: a file modified after
+its row (its whole-second ts plus 1 s) is listed with replaced true, because the bytes at its url are a newer look's,
+not this row's. `why` counts the missing and the
 replaced, and says so when nothing is listed. A read: no row, and no stderr line of its own (the API logs the request).
 Captions carry the housemates' words, so the route is in api.PRIVATE_ROUTES (B10: redact()).
 
