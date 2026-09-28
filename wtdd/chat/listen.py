@@ -24,7 +24,9 @@ real dog's: the wake starts the API's path follower (the dog must be calibrated 
 follows the dog's believed pose; unset, the entity walks the drawn path and the dog is hand-driven. WTDD_WAKE_SHOW=1 makes a wake run the
 demo in Johnny's order (dog_on_fire picture, "dog doin", the walk with a look-and-say at every stop on the map: nod,
 photo, one sentence from the vision model posted with the photo, and with WTDD_ALARM=1 "who dis?!" when a person is in frame
-and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. WTDD_AGENT=1
+and a hold of VERDICT_WAIT_S for the on-call person's verdict; then "dog done") instead of a text ack. The round
+blocks the poll, so a wake typed while it ran is read after "dog done": one whose chat.db ROWID is at or below
+MAX(ROWID) when the round ended starts nothing (one WARN); one typed after "dog done" starts the next. WTDD_AGENT=1
 sends an armed message that is not a fixed command to wtdd.agent.ask with the chat context. A failed command is
 reported to the group as its class and message, never faked; a done one as its text, else the tool's result, else
 the raw dict (a registry tool answers {"result": ...}), never an empty message. Live wake demo receipt (2026-09-13 03:0x, in
@@ -122,6 +124,7 @@ class Listener:
         self.armed_until = 0.0
         self.armed_by: str | None = None
         self.last = db.max_rowid()          # no replay at boot
+        self.round_end = 0                  # chat.db's MAX(ROWID) when the last round ended: a wake at or below it was typed during it
         self._warned = False
         self.oncall_handle = config.maybe("WTDD_ON_CALL_HANDLE")
         self.oncall = config.maybe("WTDD_ON_CALL_GUID") or (oncall.guid(self.oncall_handle) if self.oncall_handle else None)   # the group (S10) or the 1:1 (03)
@@ -522,12 +525,16 @@ class Listener:
         if not self.armed:
             if not wake:
                 return
+            if 0 < m.get("rowid", 0) <= self.round_end:   # typed while the last round ran, read only after its "dog done"
+                log("chat", "WARN a wake typed during the round: not starting another", by=hname(m["sender"]), phrase=wake[0])
+                return
             self.armed_until = time.time() + self.listen_s
             self.armed_by = m["sender"]
             log("chat", "WAKE", by=hname(m["sender"]), phrase=wake[0], score=wake[1])
             self._event("chat.wake", m, phrase=wake[0], score=wake[1])
             if _flag("WTDD_WAKE_SHOW"):
                 self.wake_show(m)
+                self.round_end = db.max_rowid()
             else:
                 self.say(f"wake:{m['guid']}", f"the dog is doin. listening for {int(self.listen_s)}s: {' · '.join(command_list())}")
             return
