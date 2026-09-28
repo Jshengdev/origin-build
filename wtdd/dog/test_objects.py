@@ -367,6 +367,30 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(objs["o1"]["why"])
         self.assertEqual([r["args"]["event"] for r in self.rows], ["new", "new"])
 
+    def test_a_pin_follows_the_calibration_and_scale_in_force_now(self):
+        """Live 19:4x: 6 scale and ~25 heading changes put 64 pins in the wrong rooms ("microwave" in bedroom 2): pos_px
+        was projected once, under the calibration of the moment the thing was seen. hit_m (odometry metres) is the truth;
+        GET /dog/objects (the session's objects.tick then state) serves it through the calibration and scale of now, and
+        a new box at the same odometry point under the new tie is the same object, not a second one."""
+        from . import nav
+        s = self.store()
+        self.observe(s, threshold=3)   # seen under CAL (A)
+        s.last_t = frame()["t"]
+        cal_b = {"odom": [0.3, -0.2, 0.4], "map": [520.0, 430.0], "heading": 0.2}   # another tie, another heading
+        was = (nav.PX_PER_M, nav.SCALE_SOURCE)
+        self.addCleanup(lambda: setattr(nav, "PX_PER_M", was[0]) or setattr(nav, "SCALE_SOURCE", was[1]))
+        nav.set_scale(nav.PX_PER_M * 0.8, "test")   # and another scale
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp) / "watch.json"
+            w.write_text(json.dumps(frame()))   # the same window: no new detection, only the tie moved
+            objects.tick(s, w, POSE, self.g, cal_b, FOV)
+        objs = {o["id"]: o for o in s.state()["objects"]}
+        for o in objs.values():
+            self.assertEqual(o["pos_px"], occupancy.to_map_px([o["hit_m"]], cal_b)[0].tolist(), f"{o['id']} served through B, not A")
+        r = s.observe({**frame(), "t": frame()["t"] + 1}, POSE, self.g, cal_b, FOV, threshold=3)
+        self.assertEqual((r["new"], sorted(r["seen"])), ([], ["o1", "o2"]), "the same odometry point under B is the same object")
+        self.assertEqual([r["args"]["event"] for r in self.rows], ["new", "new"])
+
     def test_an_unplaced_box_does_not_revive_a_stale_pin(self):
         s = self.store(stale_windows=1)
         t0 = frame()["t"]
