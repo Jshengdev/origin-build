@@ -70,9 +70,10 @@ def claim(trigger: str) -> None:
         r["state_after"] = {"trigger": trigger, "claimed": True}
 
 
-def post_step(guid: str, trigger: str, kind: str, text: str | None, file: str | None) -> dict[str, Any]:
-    """The send inside one chat.post ledger row (after gate and claim); state_after is the confirmed row {guid, rowid, ts}."""
-    args = {"guid": guid, "kind": kind, "trigger": trigger, "text": text, "file": file, "shift_id": oncall.shift_id()}
+def post_step(guid: str, trigger: str, kind: str, text: str | None, file: str | None, **extra: Any) -> dict[str, Any]:
+    """The send inside one chat.post ledger row (after gate and claim); state_after is the confirmed row {guid, rowid, ts}.
+    extra joins the row's args (a share's by: wtdd/images.py share)."""
+    args = {"guid": guid, "kind": kind, "trigger": trigger, "text": text, "file": file, "shift_id": oncall.shift_id(), **extra}
     with ledger.step("central", "chat.post", "imessage", args, {"max_rowid": db.max_rowid()}) as r:
         row = send.send_file(guid, file, text) if file else send.send_text(guid, text or "")
         r["state_after"] = row
@@ -83,11 +84,11 @@ def post_step(guid: str, trigger: str, kind: str, text: str | None, file: str | 
     return row
 
 
-def post(guid: str, trigger: str, kind: str, text: str | None = None, file: str | None = None) -> dict[str, Any]:
+def post(guid: str, trigger: str, kind: str, text: str | None = None, file: str | None = None, **extra: Any) -> dict[str, Any]:
     """Gate, claim, send, confirm: the one way anything posts. Returns the confirmed from-me row {guid, rowid, ts}."""
     gate(guid)
     claim(trigger)
-    return post_step(guid, trigger, kind, text, file)
+    return post_step(guid, trigger, kind, text, file, **extra)
 
 
 def post_print(guid: str, trigger: str, kind: str, text: str | None = None, file: str | None = None) -> dict[str, Any]:
