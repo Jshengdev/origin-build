@@ -41,7 +41,7 @@ from .chat.housemates import HOUSEMATES, PRIVATE
 from .config import ROOT
 from .decide import JEV_APP
 
-TAIL = 10000     # newest ledger rows read per call (about 60 ms on a 25 MB ledger); older evidence is not searched
+TAIL = 10000     # newest ledger rows read per call (about 90-110 ms on the 25 MB ledger); older evidence is not searched
 ALIVE_S = 10     # GET /chat's alive: the listener writes listen.json every poll
 JEV_TOOLS = ("decided", "reply.decided", "zone.decided", "blob.labelled")
 
