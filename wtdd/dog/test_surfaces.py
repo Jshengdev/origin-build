@@ -84,7 +84,7 @@ class Surfaces(unittest.TestCase):
 
     def run_scene(self, vox: np.ndarray, n: int = N):
         from . import session
-        from .test_occupancy import stop
+        from .test_occupancy import CAL, stop
         s = session.DogSession()
         try:
             asyncio.run(self.body.lidar_on(s._on_frame))
@@ -92,6 +92,9 @@ class Surfaces(unittest.TestCase):
                 self.body._on_lidar(fx.decode_wire(fx.wire(vox, ORIGIN, 1000.0 + k)))
             s.body = self.body
             served = (s.grid_px(), s.lidar())
+            s.cal = dict(CAL)   # calibrated and standing at the window's middle: the follower's live view (_live_px)
+            with mock.patch.object(self.body, "state", lambda: {"position": [0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0]}):
+                self.live = s._live_px()
         finally:
             stop(s)
         return s.grid, served
@@ -117,6 +120,12 @@ class Surfaces(unittest.TestCase):
         self.assertRegex(self.err.getvalue(), r"WARN [^\n]*no floor")
         self.assertEqual(lid["fill"]["free"], 0)
         self.assertEqual(grid["fill"]["no_floor"], 2)
+        self.assertIsNone(self.live, "no floor seen is no live view (the follower goes unchecked), never an empty "
+                                     f"one it reads as clear: got {type(self.live).__name__} of {len(self.live or [])} points")
+
+    def test_a_window_with_floor_is_a_live_view(self):
+        self.run_scene(scene())
+        self.assertGreater(len(self.live or []), 0, "the kept walls are the follower's live view")
 
     def test_served_counts_say_what_was_filled_and_not_drawn(self):
         _, (grid, lid) = self.run_scene(scene())
