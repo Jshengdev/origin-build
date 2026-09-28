@@ -56,7 +56,7 @@ export function useLiveMap(draft?: MapJson | null, floorPlanButton = true, saved
   return { dog, lidar, scale, map, served, fresh, walking, follow, props, notes, refresh: () => setKick((k) => k + 1) };
 }
 
-/** Each grid cell's served top: the floor plan's class_top_m for the cell at the same served position (the grid and the
+/** Each grid cell's served top before #70 served its own (GET /dog/grid top_m): the floor plan's class_top_m for the cell at the same served position (the grid and the
  *  floor plan share one lattice); null where the floor plan has none. Undefined when no tops are served. Kept per pair of
  *  responses, so a render between polls does not join again. */
 const topsSeen = new WeakMap<GridPx, { f: FloorPlanPx; tops: Array<number | null> }>();
@@ -84,7 +84,7 @@ export function shapeLive(x: {
     lamps: (m?.lights ?? []).map((l) => ({ id: l.id, label: l.label ?? l.name ?? l.id, kind: l.kind, pts: l.pts })),
     waypoints: path,
     rooms: m?.rooms,
-    cells: g?.cell_px ? { cells: g.cells_px, cell: g.cell_px, hits: g.hits, threshold: g.threshold, tops: cellTops(g, f) } : undefined,
+    cells: g?.cell_px ? { cells: g.cells_px, cell: g.cell_px, hits: g.hits, threshold: g.threshold, tops: g.top_m ?? cellTops(g, f), topsWhy: g.top_why } : undefined,
     scan: x.lidar?.points_px,
     scanZ: x.lidar?.z_m,
     tie: d?.cal?.map,
