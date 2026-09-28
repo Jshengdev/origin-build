@@ -39,7 +39,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
   - POST `/map`'s 400 and 409 (`not saved: ...`);
   - POST `/dog/scout`'s 400, 404 and 409;
   - POST `/routines`'s 400, 404 and 409;
-  - GET `/record`'s 404 (`no shift <id>: no row is stamped with it; shifts: ...`);
+  - GET `/record`'s 404 (`no shift <id>: no row is stamped with it; shifts: ...`), and GET `/images`'s 404 (the same words) and 400 (`no kind '<k>': one of look, ask, scout, blob`);
   - every 404 for an unknown path or picture.
 - An unknown path is 404: `{error: "no <path>"}` on GET (the static fallback), `{error: "not found"}` on POST.
 - **Anything a route does not catch** is 500 in its method's envelope, with one `[wtdd:api] <METHOD> <path> FAILED`
@@ -71,8 +71,8 @@ their inconsistencies: a client builds against these, and a change to one is a c
   confirm is 404. What works live is dismissing an auto zone, `id` = its map name (`nogo-<n>`).
 - **The record** is GET `/record?shift=<id>` (default: the run in force) and GET `/record/shifts`. An unknown shift is a
   404 naming the shifts that exist, never an empty record.
-- **Seven GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts`,
-  `/ledger`, `/people` and `/integrations`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
+- **Eight GETs never answer a phone number or an email** (B10): `/chat`, `/evals`, `/record`, `/record/shifts`,
+  `/ledger`, `/people`, `/integrations` and `/images`. Every string value in them, errors included, has a `+<7-15 digits>` handle or an email read `a member`.
   Keys and numbers are untouched, the ledger file keeps the raw values, and the other routes are not redacted.
 - `_version` is `int(mtime)` of `ui/map.json`. Send it back on POST `/map` and `/dog/scout`, or the write is a 409.
 
@@ -93,6 +93,7 @@ their inconsistencies: a client builds against these, and a change to one is a c
 | GET | `/routines` | | `{routines: [{name, dots, stops, saved_at}], loaded}` | 500 `{error}` (a malformed `ui/routines.json`, named) |
 | GET | `/people` | | `{group, people, group_why?, why?}` | 500 `{error}` |
 | GET | `/integrations` | | `{checked_at, integrations}` | 500 `{error}` |
+| GET | `/images` | `shift` (default: the run in force), `trigger`, `kind` (`look`, `ask`, `scout` or `blob`) | `{shift, images, n, why?}` | 404 `{error}` unknown shift, 400 `{error}` unknown kind (plain sentences); 500 `{error}` |
 | GET | `/rules` | | `{labels, escalate, source, threshold, reply_threshold, unconfirmed, lines}` | 500 `{error}` |
 | GET | `/dog/state` | | `{connected, moving, vel, state, map, calibrated, cal, follow, avoid, recheck, corr, rec}` (`cal`: the calibration tie `{map, heading_deg, at}` every projection scales about, or `null` when the dog was never placed) | 500 `{error}` |
 | GET | `/dog/scale` | | `{px_per_m, source}` | 500 `{error}` |
@@ -138,6 +139,14 @@ What the keys hold:
     `to` is the chat guid the flag went to; a 1:1's handle in it reads `a member`.
   - `signed` is null or `{by, at}`.
 - **`/record/shifts`**: `shifts` is newest first; `current` is the run in force.
+- **`/images`**: the photos the run's rows name (`wtdd/images.py`), never a folder listing; the run's rows are `/record`'s.
+  - `images[]` is `{file, url, ts, kind, stop, trigger, caption, shift_id, ok, missing, replaced}`, in time order.
+  - `file` is a basename and `url` is `/pictures/<file>`: this route serves no bytes.
+  - `kind`: `look` (a posted look photo, a `dog.look` frame), `ask` (a flag's or a "not sure" question's photo), `scout`
+    (an auto zone's photo). `blob` lists nothing today: a `blob.labelled` row records no crop path.
+  - `stop` is the map stop index when the trigger names it, else null. `caption` is the post's text or the scout's say.
+  - `missing`: the file is not in `~/Pictures/wtdd`. `replaced`: a newer look wrote the same name after the row (the
+    looks reuse `look-<kind>.jpg`), so the bytes at `url` are not that row's. `why` counts both, or says why `images` is empty.
 - **`/dog/state`**:
   - `state` is null, or the dog's `{mode, gait_type, progress, position, velocity, yaw_speed, body_height, range_obstacle, rpy, n, hz, age_ms}`.
   - `map` is null, or `{p, heading_deg}`.
