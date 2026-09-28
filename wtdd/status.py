@@ -26,7 +26,7 @@ works, from evidence already on this Mac. Reads only: no ledger row, no network 
   newest TAIL rows (ledger.rows); evidence older than that reads "no ... row in the newest TAIL ledger rows" (null), never
   a search of the whole file. An unreadable ledger is false on every integration that needed a row, and an integration
   whose reader raises is false with the error; the others are still answered. One stderr line per call with the counts
-  and the latency, a WARN when any is false.
+  and the latency, a WARN when any is false or none is ok.
 UNVERIFIED on the dog: unitree and lidar are read from a fake Body only (wtdd/test_status.py). The first live GET
 /integrations with the dog connected and the LiDAR on must read both true, and after a dog power cycle unitree must read
 false ("stale") before the next dog command reconnects.
@@ -163,6 +163,6 @@ def integrations(session) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001  (that integration reads false with its reason; the others are still answered)
             out.append({"name": name, "ok": False, "detail": f"{type(e).__name__}: {e}", "as_of": None})
     oks = [i["ok"] for i in out]
-    ledger.log("status", ("WARN " if False in oks else "") + "integrations", ok=oks.count(True), failed=oks.count(False),
+    ledger.log("status", ("WARN " if False in oks or True not in oks else "") + "integrations", ok=oks.count(True), failed=oks.count(False),
                unknown=oks.count(None), ms=round((time.perf_counter() - t0) * 1000))
     return {"checked_at": _at(time.time()), "integrations": out}
