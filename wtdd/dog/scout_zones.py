@@ -103,6 +103,7 @@ STRICT_QUESTION = ("Is there a physical obstacle on the floor here that a small 
 PERSON = "person"        # 07's detector label (COCO) that makes a person zone
 PERSON_R_M = 0.6         # live points this close to a person's pin are the person (legs and body at the band's height)
 PERSON_TTL_S = 20.0      # a person zone is cleared this long after the last window that saw them lit
+PERSON_MERGE_M = 0.5     # a new detector id this close (odometry m) to a live person zone's last pin is that person again
 SUMMARY_S = 30.0         # one gate summary line this often, never per frame
 PAD_PX = 15        # every side of the hull grows this much: > nogo.STEP_PX (10) so hit() cannot step over it
 SCOUT_LABELS = ["table", "sharp_object", "blocked_way", "not_a_hazard"]   # no "opening": a hole is never proposed from a photo
@@ -440,21 +441,32 @@ class Proposals:
 
     def _persons(self, seen: list[dict], data: bytes | None, derr: str | None, live, grid, now: float, wkey: Any) -> int:
         """Every person 07 saw in this window: refreshed (cells, last seen) when lit, made when new and lit (one
-        zone.person row, the photo); then every person zone past PERSON_TTL_S is cleared (one zone.person_cleared row)."""
+        zone.person row, the photo); a new detector id within PERSON_MERGE_M of a live zone's last pin renews that zone (07
+        re-ids one person often: without it one person stacked several zones); then every person zone past PERSON_TTL_S
+        is cleared (one zone.person_cleared row)."""
         made, whys = 0, []
         for o in (o for o in seen if o["label"] == PERSON):
             name = f"person-{o['id'].lstrip('o')}"
             z = self.people.get(o["id"])
             if z and z["window"] == wkey:
                 continue
+            if not z and o.get("hit_m"):   # 07 often gives one person a new id (live 21:23): the nearest live zone is theirs
+                near = [(math.dist(v["hit_m"], o["hit_m"]), k) for k, v in self.people.items()
+                        if v.get("hit_m") and v["window"] != wkey and now < v["last_seen"] + PERSON_TTL_S]
+                if near and min(near)[0] <= PERSON_MERGE_M:
+                    with self._lock:   # re-keyed under the new id, its name kept: renewed, never a second zone
+                        z = self.people.pop(min(near)[1])
+                        z["object_id"] = o["id"]
+                        self.people[o["id"]] = z
             cells, pts = lit(live, o["hit_m"], PERSON_R_M, grid, connected=False) if grid is not None else ([], 0)
             if not cells:
                 whys.append(f"{name} ({o['id']}) seen but {'no live LiDAR view' if live is None else f'no lit LiDAR point within {PERSON_R_M} m of the pin'}: no person zone")
                 continue
             if z:
-                z.update(cells=cells, points_n=pts, last_seen=now, window=wkey, p=float(o["p"]))
+                z.update(cells=cells, points_n=pts, last_seen=now, window=wkey, p=float(o["p"]), hit_m=list(o["hit_m"]))
                 continue
             z = {"name": name, "object_id": o["id"], "p": float(o["p"]), "cells": cells, "points_n": pts, "res": grid.resolution,
+                 "hit_m": list(o["hit_m"]),
                  "photo": self._photo(data, name, derr), "first_seen": now, "last_seen": now, "window": wkey}
             with self._lock:
                 self.people[o["id"]] = z

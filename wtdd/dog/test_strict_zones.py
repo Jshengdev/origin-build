@@ -196,6 +196,20 @@ class Person(Base):
         self.assertEqual([z for z in p.state(CAL)["zones"] if z["kind"] == "person"], [])
         self.assertEqual(len(self.tool("zone.person_cleared")), 1)
 
+    def test_f_one_person_given_a_new_id_renews_their_zone_never_stacks(self):
+        # live 21:23: 07 gave the same person new ids (o8, o10, o12 ...) and each id stacked its own zone (3 people, 6 zones)
+        p = self.props()
+        self.feed(p, [obj("o8", "person", 0.6, PERSON_AT)], n=1)
+        again = [PERSON_AT[0] + 0.2, PERSON_AT[1]]            # the same person, a new id, 0.2 m on
+        self.feed(p, [obj("o10", "person", 0.6, again)], n=1)
+        zs = [z for z in p.state(CAL)["zones"] if z["kind"] == "person"]
+        self.assertEqual([z["name"] for z in zs], ["person-8"], "one person, one zone: renewed under its first name, not stacked")
+        self.assertEqual(len(self.tool("zone.person")), 1, "a renewal is no new zone.person row")
+        other = [PERSON_AT[0], PERSON_AT[1] + 1.5]            # someone else, 1.5 m away: their own zone
+        self.feed(p, [obj("o10", "person", 0.6, again), obj("o12", "person", 0.6, other)], n=1, live=LIVE + square(other, 0.1))
+        names = sorted(z["name"] for z in p.state(CAL)["zones"] if z["kind"] == "person")
+        self.assertEqual(names, ["person-12", "person-8"])
+
     def test_f_a_person_with_no_lit_point_is_no_zone(self):
         p = self.props()
         self.feed(p, [obj("o3", "person", 0.9, PERSON_AT)], n=2, live=WALL)
