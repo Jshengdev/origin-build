@@ -174,6 +174,18 @@ class Round(unittest.TestCase):
                 self.assertNotIn(("look", None), self.events, "the dog looked (and could ask who dis) after Stop")
                 self.assertTrue(self.posts[-1][1].startswith("dog done (stopped)"), self.posts[-1])
 
+    def test_stop_pressed_before_the_walk_begins_starts_no_walk(self):
+        """Stop during the picture or "dog doin": /dog/stop finds no follower yet and walk() clears field.stop as it
+        starts, so the round went on to follow the whole route, look again and post a plain "dog done"."""
+        def fire(name: str, **kw) -> dict:
+            field.STOP.write_text("x")   # the dashboard's /field/stop lands while the picture is made
+            return self._tool(name, **kw)
+        self.enterContext(mock.patch("wtdd.tools.call", fire))
+        self.round([state(1), state(len(PATH) - 1, active=False, done=True)])   # unfixed: the follower walks the route to its end
+        self.assertNotIn(("POST", "/dog/follow"), self.events, "the dog was sent walking after Stop")
+        self.assertNotIn(("look", None), self.events)
+        self.assertTrue(self.posts[-1][1].startswith("dog done (stopped)"), self.posts[-1])
+
     def test_a_stop_left_from_an_earlier_walk_does_not_skip_the_look(self):
         """Guards the fix's clock (passes before it): field.stop is cleared only when a walk starts, so one left from
         before this wake (the follow refused, the walk never began) is not this round's Stop. A bare STOP.exists() fails."""
