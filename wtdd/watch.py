@@ -7,7 +7,7 @@ are not rows.
 
   python -m wtdd.watch                              live from the API, 4 frames a second
   python -m wtdd.watch --source ~/Pictures/wtdd/dog-live.jpg --once     one file, prints the detections
-  python -m wtdd.watch --source look-down.jpg --once --out look-down-boxed.jpg   dog_say's one-shot: the boxed copy of the frame it posts
+  python -m wtdd.watch --source look-down-<stamp>.jpg --once --out look-down-<stamp>-boxed.jpg   dog_say's one-shot: the boxed copy of the frame it posts
 
 Facts. cv2 lives here and never in the API process (its ffmpeg clashes with PyAV's). COCO names cup, bowl, bottle,
 wine glass, chair, couch, person, backpack, handbag, suitcase, laptop, cell phone, book ... and does NOT name socks,
