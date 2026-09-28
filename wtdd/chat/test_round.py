@@ -6,7 +6,7 @@ wake_show and field.walk run for real against a fake API: requests.get / request
 is an exception is raised as that read's failure, a callable is called first). Light writes are recorded, never sent
 (field._write); the look is stubbed (dog_say.look_and_see); posts are collected by the poster. Offline like test_chat:
 WTDD_LEDGER / WTDD_MEMORY point at scratch files before the package is imported; field.MAP (a scratch copy of
-wtdd/fixtures/map_route.json, its first 11 dots), FIELD and STOP, and the listener's PENDING, STATE and HEARTBEAT are patched to scratch
+wtdd/fixtures/map_route.json, its first 11 dots), FIELD, STOP and YIELD, and the listener's PENDING, STATE and HEARTBEAT are patched to scratch
 paths, so no check touches the checkout's map, its live walk file, a light, the dog or the chat. JEV_API_KEY and the
 on-call keys are forced empty (a .env key must not make these live). Each check was seen failing before its fix (the
 PR's Proof table names the RED and fix commits)."""
@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -91,6 +92,7 @@ class Round(unittest.TestCase):
         for p in (mock.patch.dict(os.environ, {"WTDD_ROUND": "dog"}),
                   mock.patch.object(field, "MAP", MAP), mock.patch.object(field, "FIELD", _TMP / "field.json"),
                   mock.patch.object(field, "STOP", _TMP / "field.stop"), mock.patch.object(field, "HZ", 200.0),
+                  mock.patch.object(field, "YIELD", _TMP / "field.yield", create=True),
                   mock.patch.object(field, "_write", self._write),
                   mock.patch.object(L, "PENDING", _TMP / "pending.json"), mock.patch.object(L, "STATE", _TMP / "state.json"),
                   mock.patch.object(L, "HEARTBEAT", _TMP / "listen.json"),
@@ -230,6 +232,44 @@ class Round(unittest.TestCase):
         self.assertIn(("POST", "/dog/resume"), self.events)
         self.assertTrue(self.posts[-1][1].startswith("dog done (couldn't walk the path: RuntimeError: the dog's follow ended with: waypoint 6"),
                         self.posts[-1])
+
+
+    # lights 2: Lights on the dashboard (walk_path source=dog follower=False: the lights follow the hand-driven dog) was
+    # running when a round woke, and its walk was refused as busy: "dog done (couldn't walk the path: a walk is already running)"
+
+    def test_a_round_takes_over_a_lights_follow_without_pressing_stop(self):
+        wrote: list[str] = []
+
+        class Watched(type(_TMP)):   # field.STOP: wake_show reads any write of it since the wake as Stop pressed
+            def write_text(self, *a, **k):
+                wrote.append("write_text")
+                return super().write_text(*a, **k)
+
+            def touch(self, *a, **k):
+                wrote.append("touch")
+                return super().touch(*a, **k)
+        self.enterContext(mock.patch.object(field, "STOP", Watched(_TMP / "field.stop")))
+        api = Api([state(1), state(2), state(2, active=False, done=True)], self.events)   # the round's follower
+        idle = {"map": {"p": PATH[0]}, "follow": {}}                                      # the lights walk's reads: no follower
+        main, lit = threading.current_thread(), []
+        get = lambda url, **kw: api.get(url, **kw) if threading.current_thread() is main else SimpleNamespace(json=lambda: idle)   # noqa: E731
+        with mock.patch.object(requests, "get", get), mock.patch.object(requests, "post", api.post):
+            t = threading.Thread(target=lambda: lit.append(field.walk(source="dog", follower=False)), daemon=True)
+            t.start()
+            for _ in range(300):     # the Lights walk is live (its field.json is fresh) before the wake
+                if field.FIELD.exists():
+                    break
+                time.sleep(0.01)
+            self.l.wake_show(msg("what the dog doin"))
+            during = list(wrote)
+            if t.is_alive():         # unfixed: the lights walk never yields; end it by a plain write, outside the watch
+                type(_TMP)(field.STOP).write_text("x")
+            t.join(5)
+        self.assertEqual(self.posts[-1][1], "dog done", "the round did not walk (or read Stop): " + str(self.posts[-1]))
+        self.assertEqual(during, [], "the round wrote field.stop to end the lights walk: that is Stop pressed")
+        self.assertIn(("look", None), self.events)
+        self.assertEqual([r["args"]["follower"] for r in self.rows("field.walk")], [False, True], "the lights walk's row, then the round's")
+        self.assertTrue(lit and lit[0].get("yielded"), f"the lights walk did not end yielded: {lit}")
 
 
 class Wake(unittest.TestCase):
