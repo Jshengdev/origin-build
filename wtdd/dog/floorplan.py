@@ -32,6 +32,8 @@ Heights (S13, the remote's 2.5D view). A classified cell's top is its highest la
 (z_ref + layer * resolution, the z FLOOR, GROUND and TALL are in: above the floor only where z = 0 is the floor,
 UNVERIFIED below); a segment's top is the highest over the cells it took. GET /dog/floorplan serves both rounded to
 0.05 (to_px). Measured layers only: a grid with no height profile (saved before item 15) serves none, never zeros.
+profile() and m05() are shared with GET /dog/grid's top_m (occupancy.response), so a cell's height on the grid and in
+class_top_m cannot disagree.
 
 Known limit, ours by design: a shelf or a cabinet standing against a wall is grounded and straight, so it is a wall
 here (the fixture's 2 m shelf is class 1 and the tests say so). Only goal 16's label may move such a run to grey; a
