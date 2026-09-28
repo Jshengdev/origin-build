@@ -23,8 +23,8 @@ from unittest import mock
 _TMP = Path(tempfile.mkdtemp(prefix="wtdd-round-test-"))
 os.environ["WTDD_LEDGER"] = str(_TMP / "ledger.jsonl")
 os.environ["WTDD_MEMORY"] = str(_TMP / "memory.db")
-for _k in ("JEV_API_KEY", "WTDD_ON_CALL_GUID", "WTDD_ON_CALL_HANDLE", "WTDD_ALARM", "WTDD_AGENT", "WTDD_ALLOW_SELF",
-           "WTDD_COMMANDS", "WTDD_TRIGGERS", "WTDD_ROUND_AVOID"):
+for _k in ("JEV_API_KEY", "JEV_MODEL", "JEV_LIVE", "WTDD_REPLY_THRESHOLD", "WTDD_DECIDE_THRESHOLD", "WTDD_ON_CALL_GUID",
+           "WTDD_ON_CALL_HANDLE", "WTDD_ALARM", "WTDD_AGENT", "WTDD_ALLOW_SELF", "WTDD_COMMANDS", "WTDD_TRIGGERS", "WTDD_ROUND_AVOID"):
     os.environ[_k] = ""   # config.maybe() reads an empty value as unset: the defaults, never a live call
 
 import requests  # noqa: E402
@@ -255,6 +255,54 @@ class Reply(unittest.TestCase):
                 mock.patch.object(self.l, "read", read):
             self.assertTrue(self.l.await_verdict(L.VERDICT_WAIT_S), "the answer to the re-ask came after the hold ended")
         self.assertEqual([t for _, t in self.posts], [L.REASK, "ok, standing down"])
+
+
+
+class Keys(unittest.TestCase):
+    """ask 5 = lights 2: chat/__main__.post claims a key before it sends, so a send that fails after its claim has
+    consumed the key. The poster here claims the same way (a second post under one key is the PermissionError claim()
+    raises) and fails the keys in `fail` after the claim, as an unconfirmed photo does."""
+
+    def setUp(self):
+        self.posts: list[tuple[str, str | None]] = []
+        self.claimed: set[str] = set()
+        self.fail: set[str] = set()
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            self.l = L.Listener(GROUP, self._post, listen_s=60)
+        for p in (mock.patch.object(L, "PENDING", _TMP / "pending-keys.json"), mock.patch.object(L, "STATE", _TMP / "state-keys.json"),
+                  mock.patch.object(field, "MAP", MAP), mock.patch.dict(os.environ, {"WTDD_ROUND": "entity", "WTDD_AGENT": "1"}),
+                  mock.patch("wtdd.tools.dog_say.look_and_see", return_value=dict(SEEN)),
+                  mock.patch("wtdd.tools.call", return_value={"file": "/tmp/fire.jpg"}),
+                  mock.patch("wtdd.agent.ask", return_value={"text": "a reply", "calls": []}), mock.patch.object(L.time, "sleep")):
+            self.enterContext(p)
+
+    def _post(self, guid: str, key: str, kind: str, text: str | None, file: str | None) -> None:
+        if key in self.claimed:
+            raise PermissionError(f"gate refused: trigger {key!r} already claimed")
+        self.claimed.add(key)
+        if key in self.fail:
+            raise RuntimeError("unconfirmed send: no read-back within 10s")
+        self.posts.append((key, text))
+
+    def test_a_failed_photo_at_a_stop_is_posted_under_say_fail_and_on_stop_returns(self):
+        self.fail.add("say:K1:5")
+        self.l.look_and_say(msg("what the dog doin", "K1"), 5)   # field.walk's on_stop: it must return, not raise
+        self.assertEqual(self.posts, [("say-fail:K1:5", "couldn't look: RuntimeError: unconfirmed send: no read-back within 10s")])
+
+    def test_a_failed_picture_is_posted_under_fire_fail_and_the_round_goes_on(self):
+        self.fail.add("fire:K2")
+        with mock.patch.object(field, "walk", lambda **kw: {"seconds": 0.0, "writes": 0, "errors": 0, "rooms": [], "stops": []}):
+            self.l.wake_show(msg("what the dog doin", "K2"))
+        self.assertEqual([k for k, _ in self.posts], ["fire-fail:K2", "doin:K2", "say:K2", "done:K2"])
+        self.assertTrue(self.posts[0][1].startswith("couldn't make the picture: RuntimeError"), self.posts[0])
+
+    def test_a_failed_reply_is_posted_under_ai_fail(self):
+        self.fail.update({"ai:K3", "ai:K4"})
+        with mock.patch.object(self.l, "read", return_value=[]):
+            self.l.chat(msg("yo dog who was that", "K3"))               # a chat turn
+            self.l.armed_until = time.time() + 60
+            self.l.handle(msg("tell me a joke", "K4"))                  # an armed ask with WTDD_AGENT=1
+        self.assertEqual([k for k, _ in self.posts], ["ai-fail:K3", "ai-fail:K4"])
 
 
 if __name__ == "__main__":
