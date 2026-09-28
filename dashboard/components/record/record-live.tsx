@@ -35,7 +35,8 @@ export function RecordLive() {
   // of the served runs; otherwise "No run yet" (no /record read, no false 404). A 404 for a listed run stays FAILED.
   const listed = shifts.data?.shifts ?? [];
   const shiftId = picked ?? (shifts.data && listed.includes(shifts.data.current) ? shifts.data.current : null);
-  const rec = usePoll<RecordJson>(shiftId ? `/record?shift=${encodeURIComponent(shiftId)}` : null, 4000);
+  const [kick, setKick] = useState(0);   // a sign re-reads the record at once, so "Signed by" shows without a 4 s wait
+  const rec = usePoll<RecordJson>(shiftId ? `/record?shift=${encodeURIComponent(shiftId)}` : null, 4000, kick);
   const evals = usePoll<Evals>("/evals", 10000);
   const sessions = usePoll<Sessions>("/sessions", 10000);
   const [result, setResult] = useState<Result>(null);
@@ -57,6 +58,7 @@ export function RecordLive() {
     const r = await post("/tools/record_sign", { by: by.trim(), shift_id: shiftId });
     setBusy(false);
     setResult({ what: `Sign ${shiftId}`, ok: r.ok, error: r.error });   // a second signature's refusal is shown as the API wrote it
+    setKick((k) => k + 1);
   };
 
   const d = rec.data ? redactDeep(rec.data) : undefined;   // the record is filmed: no handle or email ever reaches the page
@@ -68,7 +70,7 @@ export function RecordLive() {
           : run.data && <SignalChip tone="neutral">Run in force · {run.data.shift_id}</SignalChip>}
         <span className="ml-auto flex items-center gap-2">
           <Select value={shiftId ?? ""} onValueChange={setPicked} disabled={!shifts.data?.shifts.length}>
-            <SelectTrigger aria-label="Run" className="h-9 w-[190px] border-input bg-card text-[13px] shadow-none"><SelectValue placeholder={shifts.error ? "runs · FAILED" : "No runs yet"} /></SelectTrigger>
+            <SelectTrigger aria-label="Run" className="h-9 w-[250px] border-input bg-card text-[13px] shadow-none"><SelectValue placeholder={shifts.error ? "runs · FAILED" : "No runs yet"} /></SelectTrigger>
             <SelectMenu>
               {(shifts.data?.shifts ?? []).map((s) => <SelectItem key={s} value={s} className="text-[13px]">{s}{s === shifts.data?.current ? " · in force" : ""}</SelectItem>)}
             </SelectMenu>
