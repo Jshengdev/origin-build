@@ -168,6 +168,9 @@ function MapStatus({ map, scale, blobs, grid, plan, objects, lidar, connected, p
       {blobs.error ? bad("names", blobs.error) : blobs.data?.source?.startsWith("fixture") && <span>names · served from a fixture file, not seen tonight</span>}
       {scouted.error && bad("zone photos", scouted.error)}
       {lidar.error ? bad("live scan", lidar.error) : connected && l?.why ? <span>live scan · {l.why}</span> : null}
+      {/* #95: what the surface filter took out of the newest window, as served (the head: "N cells the dog's map filled but never saw: not drawn") */}
+      {l?.fill?.surfaces === "on" && l.fill.dropped != null && <span>surfaces · {l.fill.dropped} columns the dog&apos;s map filled but never saw: not drawn{l.fill.kept != null && l.fill.voxels != null ? ` (kept ${l.fill.kept} of ${l.fill.voxels} voxels)` : ""}</span>}
+      {l?.surfaces === "off" && <span>surfaces · off (WTDD_SURFACES=0): the columns the dog&apos;s map filled are drawn as seen</span>}
     </>
   );
 }

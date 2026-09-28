@@ -41,7 +41,10 @@ export interface FloorPlanPx {
 }
 /** GET /dog/lidar. `known` is S13's. `z_m` (#67): each point's measured height in metres, parallel to points_px (the
  *  highest z of its column inside the 0.10-1.00 m band, rounded to 0.05); absent with no frame. */
-export interface LidarPx { on: boolean; n: number; age_ms?: number | null; frame?: { id?: string } | null; points_px: XY[]; why?: string; error?: string; known?: boolean[]; z_m?: Array<number | null> }
+/** #95: `fill` is the newest window's surface filter counts (wtdd/dog/lidar.py keep): the dog's voxel map fills space it
+ *  cannot see as solid columns; only columns bordering floor it saw free are kept. `surfaces` "off" = WTDD_SURFACES=0. */
+export interface LidarFill { surfaces: "on" | "off"; occupied?: number; free?: number; surface?: number; dropped?: number; voxels?: number; kept?: number }
+export interface LidarPx { surfaces?: "on" | "off"; fill?: LidarFill | null; on: boolean; n: number; age_ms?: number | null; frame?: { id?: string } | null; points_px: XY[]; why?: string; error?: string; known?: boolean[]; z_m?: Array<number | null> }
 /** GET /routines (#71): the named routes, and the one whose path, stops and actions are the map's now (else null). */
 export interface RoutinesJson { routines: Array<{ name: string; dots: number; stops: number[]; saved_at: string }>; loaded: string | null }
 /** GET /people (feat/people-cards): the group (its name, member count, last message) and one line per member: an opaque id,
