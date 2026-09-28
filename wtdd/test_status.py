@@ -214,6 +214,33 @@ class Integrations(Api):
         self.assertIsNone(st["jev"]["ok"], st["jev"])
         self.assertIn("stub", st["jev"]["detail"])
 
+    def test_jev_reads_only_rows_a_jev_call_wrote(self):
+        # a failed "name blobs" press that never reached Jev (dog off) writes blob.labelled with app unitree: not a Jev call
+        self.plant(_row("2026-09-27T20:04:00", "zone.decided", "openrouter"),
+                   _row("2026-09-27T20:05:00", "blob.labelled", "unitree", ok=False, err="RuntimeError: dog unreachable"))
+        _, st = self.status()
+        self.assertEqual((st["jev"]["ok"], st["jev"]["as_of"]), (True, "2026-09-27T20:04:00"), st["jev"])
+
+    def test_lidar_on_with_every_frame_rejected_is_false(self):
+        self.s.body = FakeBody(frames=0, errors=3)
+        _, st = self.status()
+        self.assertIs(st["lidar"]["ok"], False, st["lidar"])
+        self.assertIn("rejected", st["lidar"]["detail"])
+
+    def test_a_handle_is_redacted_before_the_error_is_cut(self):
+        # cut at 160 first, "+15550003333" at 153 would leave "+155500": 6 digits, which PRIVATE no longer matches
+        self.plant(_row("2026-09-27T20:04:00", "reply.decided", "openrouter", ok=False, err="x" * 153 + PHONE))
+        text, st = self.status()
+        self.assertIs(st["jev"]["ok"], False, st["jev"])
+        self.assertNotIn(PHONE[1:7], text)
+
+    def test_zero_ok_is_a_warn(self):
+        with mock.patch.object(ledger, "log") as log:
+            _, st = self.status()
+        self.assertNotIn(True, [i["ok"] for i in st.values()])
+        said = [c.args[1] for c in log.call_args_list if c.args[0] == "status"]
+        self.assertIn("WARN integrations", said, "ok=0 is a WARN (zero of anything)")
+
     def test_an_unreadable_ledger_is_named_and_the_rest_still_answer(self):
         self.s.body = FakeBody()
         self.led.write_text(json.dumps(_row("2026-09-27T20:02:00", "lights.set", "hue")) + "\n{not json\n")
