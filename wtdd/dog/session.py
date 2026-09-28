@@ -883,12 +883,15 @@ class DogSession:
     def _live_px(self) -> list | None:
         """S6: the newest LiDAR window's floor-to-head band in map pixels, every point, through the correction and the
         tie (what the page draws as blue dots); None when there is no live view: no body or stream, a window older than
-        LIVE_MAX_AGE_MS, no pose, or not calibrated."""
+        LIVE_MAX_AGE_MS, the newest window saw no floor (lidar.keep kept nothing), no pose, or not calibrated."""
         b = self.body
         if b is None or self.cal is None:
             return None
         lp, st = b.lidar_points(), b.state()
         if lp.get("points") is None or lp.get("age_ms") is None or lp["age_ms"] > LIVE_MAX_AGE_MS:
+            return None
+        f = lp.get("fill") or {}
+        if f.get("surfaces") == "on" and f.get("free") == 0:   # no floor seen: lidar.keep kept nothing, which is not a clear view
             return None
         if not st or not st.get("position") or not st.get("rpy"):
             return None
