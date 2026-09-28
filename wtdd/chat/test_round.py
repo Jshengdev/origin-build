@@ -231,6 +231,30 @@ class Round(unittest.TestCase):
         self.assertTrue(self.posts[-1][1].startswith("dog done (couldn't walk the path: RuntimeError: the dog's follow ended with: waypoint 6"),
                         self.posts[-1])
 
+    # checkpoint photos (#97): Stop on the dashboard while the dog looks at a stop of its Walk/Run (walk_path act, say on)
+
+    def test_stop_pressed_during_a_checkpoint_look_skips_its_post_and_ends_the_walk(self):
+        m = json.loads(MAP.read_text())
+        m["stops"], m["actions"] = [5], {"5": {"look": "tilt", "say": True}}
+        MAP.write_text(json.dumps(m))
+        posted: list = []
+
+        def look(look: str = "tilt", stop: int | None = None) -> dict:
+            field.STOP.write_text("x")   # POST /field/stop (and /dog/stop) land while the dog is mid-look
+            return self._look(look, stop)
+
+        from wtdd.tools import walk_path
+        api = Api([state(3), state(5, stopped_at=5), state(6)], self.events)   # the follower would walk on after the stop
+        with mock.patch.object(requests, "get", api.get), mock.patch.object(requests, "post", api.post), \
+                mock.patch("wtdd.commands._via_api", return_value=None), mock.patch("wtdd.dog.session.DogSession.get"), \
+                mock.patch("wtdd.tools.dog_say.look_and_see", look), \
+                mock.patch("wtdd.tools.chat_post.run", lambda **kw: posted.append(kw) or {"rowid": 1}):
+            out = walk_path.run(source="dog", act=True)
+        self.assertEqual([e for e in self.events if e[0] == "look"], [("look", 5)], "the look itself finishes")
+        self.assertEqual(posted, [], "the stop's photo was posted to the group after Stop")
+        self.assertEqual([(a["stop"], a.get("stopped")) for a in out["actions"]], [(5, "stopped before the post")])
+        self.assertEqual((out["stops"], self.events.count(("GET", "/dog/state"))), ([5], 2), "the walk ends at the Stop")
+
 
 class Wake(unittest.TestCase):
     """ask 8: handle() with WTDD_WAKE_SHOW=1 and the round stubbed (it only moves chat.db's MAX(ROWID) and outlasts
