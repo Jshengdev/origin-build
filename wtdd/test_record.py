@@ -136,6 +136,13 @@ class Unsigned(Guard):
         self.assertEqual(self.rec["acked_ms"], [14000, 556000])
         self.assertEqual(self.rec["acked_median_ms"], 285000)
 
+    def test_a_flag_is_resolved_by_the_housemates_name_when_the_listener_wrote_one(self):
+        """Preflight: with HOUSEMATES filled the listener writes the answerer's first name to intruder.verdict args.by;
+        the record's resolved.by is that name, and the raw handle (args.from) only when no name was written."""
+        rows = [{**r, "args": {**r["args"], "by": "Teri"}} if r["tool"] == "intruder.verdict" else r for r in ledger.rows()]
+        self.assertEqual(record.build(A, rows=rows, site=EMPTY_SITE)["flags"][0]["resolved"]["by"], "Teri")
+        self.assertEqual(self.rec["flags"][0]["resolved"]["by"], "+15550002222")
+
     def test_refusals_and_failures_are_listed_not_hidden(self):
         ref, bad = self.rec["refusals"], self.rec["failures"]
         self.assertEqual([x["tool"] for x in ref], ["chat.claim"])
