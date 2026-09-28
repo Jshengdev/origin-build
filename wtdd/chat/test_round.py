@@ -352,5 +352,23 @@ class Heartbeat(unittest.TestCase):
         self.assertTrue(seen[0]["pending"], "the open question never reached listen.json ('waiting for who dis' cannot show)")
 
 
+
+class Senders(unittest.TestCase):
+    """ask 10: with HOUSEMATES filled in, a member writing under another handle (an Apple ID email, not the listed
+    phone) was dropped with no line at all: her wake did nothing and her answer read as "not the verdict"."""
+
+    def test_an_unlisted_sender_is_one_masked_warn(self):
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            l = L.Listener(GROUP, lambda *a: None, listen_s=60)
+        m = msg("what the dog doin", sender="teri.b@example.com")
+        with mock.patch.dict(L.HOUSEMATES, {"+15550001111": "Teri"}), mock.patch.object(L, "log") as log:
+            self.assertFalse(l.allowed(m))
+            self.assertFalse(l.allowed({**m, "guid": "W2", "text": "thats teri"}))
+        warns = [c for c in log.call_args_list if "HOUSEMATES" in c.args[1]]
+        self.assertEqual(len(warns), 1, f"one WARN per unlisted sender, not per message: {log.call_args_list}")
+        self.assertTrue(warns[0].args[1].startswith("WARN"), warns[0])
+        self.assertNotIn("teri.b@example.com", str(warns[0]), "the handle is masked")
+
+
 if __name__ == "__main__":
     unittest.main()
