@@ -116,8 +116,8 @@ export function OverviewLive() {
                 title="Align the scan to the plan: drag the dog's ring to where it is and its cone tip to where it faces, and set the scale"
                 onClick={() => { setCalibrating(!calibrating); setPlacing(false); setStretching(false); }}>{calibrating ? "Done calibrating" : "Calibrate"}</ActionButton>
               {calibrating && <>
-                <ActionButton intent={placing ? "person" : "secondary"} size="sm" disabled={busy || !d?.connected}
-                  title={d?.connected ? "Tap the map where the dog is, then drag its cone tip to where it faces" : "The dog is not connected"}
+                <ActionButton intent={placing ? "person" : "secondary"} size="sm" disabled={busy}
+                  title={d?.connected ? "Tap the map where the dog is, then drag its cone tip to where it faces" : "Tap the map where the dog is: the first calibrate connects the dog"}
                   onClick={() => { setPlacing(!placing); setStretching(false); }}>{placing ? "Tap where the dog is" : "Place the dog"}</ActionButton>
                 <ActionButton intent={stretching ? "person" : "secondary"} size="sm" disabled={busy || !scale.data || !(d?.cal?.map ?? d?.map)}
                   title={!scale.data ? "The scale did not load" : !(d?.cal?.map ?? d?.map) ? "Place the dog first" : "Press on a wall of the scan and drag it onto its line on the plan"}

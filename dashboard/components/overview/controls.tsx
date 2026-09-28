@@ -4,7 +4,7 @@
  * the head's scope: a LiDAR switch and a drive switch).
  *
  * LiDAR: POST /dog/lidar {on}; the switch shows GET /dog/lidar's served `on`, never an optimistic one, and a refusal is a
- * FAILED line. Like today's remote it works only while the dog is connected (a page never connects it on its own).
+ * FAILED line. A page never connects the dog on its own; a press does: {on: true} while disconnected is the first command, which connects it (the head: a cold start).
  *
  * Drive: S1's rules from today's remote (origin-build ui/index.html 179-208), ported as they are:
  *   disarmed on every page load; W A S D Q E drive only while armed; never while typing in an input, textarea, select or
@@ -106,9 +106,9 @@ export function LidarSwitch({ lidar, connected, onResult }: { lidar?: LidarPx; c
     onResult({ what: `LiDAR ${on ? "off" : "on"}`, ok: r.ok, error: r.error });   // the switch itself follows GET /dog/lidar
   };
   return (
-    <ActionButton intent="secondary" size="sm" aria-pressed={on} disabled={busy || !connected}
-      title={connected ? "POST /dog/lidar; the switch shows the served state" : "The dog is not connected"} onClick={flip}>
-      {connected ? (on ? "LiDAR on" : "LiDAR off") : "LiDAR"}
+    <ActionButton intent="secondary" size="sm" aria-pressed={on} disabled={busy}
+      title={connected ? "POST /dog/lidar; the switch shows the served state" : "POST /dog/lidar {on: true}: the first press connects the dog"} onClick={flip}>
+      {on ? "LiDAR on" : "LiDAR off"}
     </ActionButton>
   );
 }
