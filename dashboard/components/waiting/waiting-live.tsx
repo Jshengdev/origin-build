@@ -9,8 +9,9 @@
  * (cached, or source stub) says so. The page computes nothing: acked_ms is written in seconds, as served.
  * "Reset chat" (Johnny: "put it to the castle now, it's ok, just make sure there's a reset chat button"): POST /chat/reset
  * {by}, on a second press within 4 s (the first only arms it and asks), in the name the page keeps for sign-offs, else
- * "Johnny". It answers {ok, dropped, pending_was} and writes one chat.reset row: the line is "closed <the trigger that was
- * open>" or "nothing open", as served, or FAILED with the reason. Nothing is posted to the group.
+ * "Johnny". It answers {ok, dropped, pending_was: {trigger, kind} | null} and writes one chat.reset row; the line is built
+ * from those fields: "reset · closed the open <kind> (<trigger>)" or "reset · nothing was open", or FAILED with the
+ * reason. Nothing is posted to the group.
  */
 import { createContext, useContext, useEffect, useState } from "react";
 import { ActionButton, Avatar, Module, SignalChip, WaitingChip } from "@/components/wtdd";
@@ -105,8 +106,8 @@ function ResetChat() {
     setArmed(false); setBusy(true);
     const r = await post("/chat/reset", { by: by() });
     setBusy(false);
-    const was = typeof r.pending_was === "string" && r.pending_was ? redact(r.pending_was) : null;
-    setResult(r.ok ? { what: `Reset chat · ${r.dropped && was ? `closed ${was}` : r.dropped ? "closed the open question" : "nothing open"}`, ok: true }
+    const was = (r.pending_was ?? null) as { trigger?: string; kind?: string } | null;
+    setResult(r.ok ? { what: r.dropped ? `Reset chat · reset · closed the open ${redact(was?.kind ?? "question")}${was?.trigger ? ` (${redact(was.trigger)})` : ""}` : "Reset chat · reset · nothing was open", ok: true }
       : { what: "Reset chat", ok: false, error: redact(r.error ?? "no answer") });
   };
   return (
