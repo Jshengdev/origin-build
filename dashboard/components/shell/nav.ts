@@ -4,7 +4,7 @@ export interface NavEntry { href: string; label: string; icon: LucideIcon; key: 
 
 /**
  * `key` is the second key of the G-then-key shortcut. Johnny, 17:15: Overview · Paths · Routines · Waiting · Record ·
- * Settings ("keep routines and settings because we need to come back to them"). Routines and Settings are not wired yet
+ * Settings ("keep routines and settings because we need to come back to them"). Settings is not wired yet
  * and say so on the page (components/shell/sample-frame.tsx).
  */
 export const NAV: NavEntry[] = [
