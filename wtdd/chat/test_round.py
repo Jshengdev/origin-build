@@ -316,5 +316,41 @@ class Keys(unittest.TestCase):
         self.assertEqual([k for k, _ in self.posts], ["ai-fail:K3", "ai-fail:K4"])
 
 
+
+class Heartbeat(unittest.TestCase):
+    """ask 6 = lights 3: listen.json is GET /chat's "alive" (age under 10 s) and its "waiting for who dis"; a round runs
+    inside one poll(), so a heartbeat written only by poll() goes stale for the whole round."""
+
+    def test_the_heartbeat_stays_fresh_through_a_round_and_shows_its_open_question(self):
+        hb, pend = _TMP / "listen-hb.json", _TMP / "pending-hb.json"
+        with mock.patch.object(L.db, "max_rowid", return_value=0):
+            l = L.Listener(GROUP, lambda *a: None, listen_s=60)
+        seen: list[dict] = []
+
+        class Over(Exception):
+            pass
+
+        def a_round(m: dict) -> None:   # the walk, then a question opened and its hold, all inside one poll()
+            time.sleep(0.3)
+            pend.write_text(json.dumps({"kind": "who_dis", "t": time.time(), "trigger": "alarm:hb", "chat": GROUP}))
+            time.sleep(0.3)
+            seen.append({**json.loads(hb.read_text()), "read_at": time.time()})
+
+        batches = [[msg("what the dog doin")]]
+
+        def read() -> list[dict]:
+            if not batches:
+                raise Over   # the second poll: the round is over, end run()
+            return batches.pop(0)
+
+        with mock.patch.object(L, "HEARTBEAT", hb), mock.patch.object(L, "PENDING", pend), \
+                mock.patch.object(l, "read", read), mock.patch.object(l, "handle", a_round):
+            with self.assertRaises(Over):
+                l.run(every=0.05)
+            time.sleep(0.2)   # any beat still in flight lands on the scratch file, before the paths are unpatched
+        self.assertLess(seen[0]["read_at"] - seen[0]["t"], 0.2, "listen.json went stale during the round (the chip reads 'listener down')")
+        self.assertTrue(seen[0]["pending"], "the open question never reached listen.json ('waiting for who dis' cannot show)")
+
+
 if __name__ == "__main__":
     unittest.main()
