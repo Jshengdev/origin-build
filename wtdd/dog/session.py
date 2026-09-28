@@ -238,6 +238,8 @@ class DogSession:
         st = self.body.state() if self.body else None
         return {"connected": self.body is not None, "moving": self.moving, "vel": list(self.vel), "state": st,
                 "map": self.map_pose(st), "calibrated": self.cal is not None, "follow": self.follow_state,
+                "cal": {"map": [float(v) for v in self.cal["map"]], "heading_deg": round(math.degrees(self.cal["heading"]), 1),
+                        "at": self.cal.get("at")} if self.cal else None,   # the tie every projection scales about (the page's scale slider)
                 "avoid": self.body._avoid if self.body else None, "recheck": self.recheck, "corr": localize.describe(self.corr),
                 "rec": {"active": True, "n": len(self.rec["points"]), "points": self.rec["points"], "marks": [m["p"] for m in self.rec["marks"]],
                         "actions": [m["action"] for m in self.rec["marks"]]} if self.rec else None}

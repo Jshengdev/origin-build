@@ -18,7 +18,7 @@
   GET  /record/shifts             {shifts: [every shift id stamped on a row, newest first], current: shift.current()} (a read, no row)
   POST /map/restore               ui/route-saved.json's path and stops back into the map (GET /route-saved.json serves it: the guide while drawing)
   POST /field/stop                end the running walk (any source) at its next tick
-  GET  /dog/state                 the shared dog session's state (+ map pose, follow status); POST /dog/drive {x,y,z}, /dog/stop
+  GET  /dog/state                 the shared dog session's state (+ map pose, follow status, cal: the calibration tie {map, heading_deg, at} or null); POST /dog/drive {x,y,z}, /dog/stop
   POST /dog/calibrate {p, heading_deg | toward}   the dog is at map point p now, facing heading_deg (or facing point `toward`)
   POST /dog/follow {reach_px?}    follow ui/map.json's path from the nearest waypoint, pausing at its stops; /dog/resume continues
   POST /dog/avoid {on}            the dog's obstacle avoidance on/off with read-back (the follower turns it on itself)
