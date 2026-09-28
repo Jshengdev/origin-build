@@ -3,7 +3,9 @@ The demo's two routes (kitchen → bedroom 2, bedroom 2 → living room) are sav
 actions under a name (POST /routines {action: save, name}), listed (GET /routines), loaded back into the map with one
 call each (load) and deleted (delete). A load replaces the route and nothing else (rooms, lights, zones, labels, policy,
 entity and note untouched), keeps the map it replaced as map.prev.json and advances _version, so an open page's stale
-POST /map is still a 409. Each action is one routine.saved / routine.loaded / routine.deleted row with the state before
+POST /map is still a 409; it answers the map now (GET /map's body), which the page holds in place of its copy. A version
+only goes up, even for a load in the second of the last write. A load while a walk runs (field.json younger than BUSY_S)
+is a 409 that writes nothing: the chat round reads the map's actions at every stop. Each action is one routine.saved / routine.loaded / routine.deleted row with the state before
 and after. The refusals are a 400 (a name that is not 1 to 40 characters, an empty path, an unknown action) or a 404
 naming the routines that exist, each on its failed row (an unknown action has no row: it names no step); a malformed
 routines.json is a 500 naming it, never an empty list. The real handler on an ephemeral port in this process; the ledger
@@ -25,7 +27,7 @@ _TMP = Path(tempfile.mkdtemp(prefix="wtdd-routines-test-"))
 LEDGER = _TMP / "ledger.jsonl"
 os.environ["WTDD_LEDGER"] = str(LEDGER)
 
-from wtdd import api, ledger  # noqa: E402
+from wtdd import api, field, ledger  # noqa: E402
 
 MP = _TMP / "ui" / "map.json"
 FILE = MP.with_name("routines.json")
@@ -124,6 +126,7 @@ class Routines(unittest.TestCase):
         _, now = self.call("GET", "/map")
         self.assertGreater(now["_version"], page["_version"])
         self.assertEqual((out["_version"], out["loaded"]), (now["_version"], K2B))
+        self.assertEqual(out["map"], now)   # the map to hold: the page replaces its copy with it, never adopts _version alone
         self.assertEqual(self.call("GET", "/routines")[1]["loaded"], K2B)
         code, err = self.call("POST", "/map", page)   # the stale page saves its old route with its old _version
         self.assertEqual(code, 409, err)
@@ -132,6 +135,43 @@ class Routines(unittest.TestCase):
         self.assertTrue(row["ok"], row)
         self.assertEqual((row["state_before"]["loaded"], row["state_after"]["loaded"]), (B2L, K2B))
         self.assertEqual((row["state_before"]["_version"], row["state_after"]["_version"]), (page["_version"], now["_version"]))
+
+    def test_a_load_in_the_second_of_the_last_write_still_moves_the_version_up(self):
+        self.save(K2B)
+        self.put({**REST, **BED2_LIVING})
+        self.save(B2L)
+        t = int(time.time()) + 3   # the map's version at or past the load's second (the case int(mtime) alone cannot move)
+        os.utime(MP, (t, t))
+        _, page = self.call("GET", "/map")
+        _, one = self.call("POST", "/routines", {"action": "load", "name": K2B})
+        _, two = self.call("POST", "/routines", {"action": "load", "name": B2L})
+        self.assertEqual(page["_version"], t)
+        self.assertGreater(one["_version"], page["_version"])   # strictly up, so the page's poll sees the load
+        self.assertGreater(two["_version"], one["_version"])
+        self.assertEqual(self.call("GET", "/map")[1]["_version"], two["_version"])
+        self.assertEqual(self.call("POST", "/map", page)[0], 409)   # the page read in that second is stale, and refused
+
+    def test_a_load_while_a_walk_runs_is_a_409_and_writes_nothing(self):
+        self.save(K2B)
+        self.put({**REST, **BED2_LIVING})
+        self.save(B2L)
+        before = MP.read_text()
+        self.addCleanup((_TMP / "field.json").unlink, missing_ok=True)
+        with mock.patch.object(field, "FIELD", _TMP / "field.json"):   # a scratch field.json: never the worktree's
+            field.FIELD.write_text("{}")   # a walk (the remote's or the chat round's) wrote it just now
+            code, out = self.call("POST", "/routines", {"action": "load", "name": K2B})
+            self.assertEqual((code, out["ok"]), (409, False), out)
+            self.assertIn("a walk is running", out["error"])
+            self.assertIn("/field/stop", out["error"])
+            self.assertEqual(MP.read_text(), before)   # the route under way is still the map's: its stops' actions stay
+            self.assertFalse(MP.with_name("map.prev.json").exists())
+            (row,) = self.rows("routine.loaded")
+            self.assertFalse(row["ok"])
+            self.assertIn("a walk is running", row["response_or_error"])
+            t = time.time() - 10   # a field.json older than BUSY_S is a killed process's leftover, not a walk
+            os.utime(field.FIELD, (t, t))
+            code, out = self.call("POST", "/routines", {"action": "load", "name": K2B})
+            self.assertEqual((code, out["loaded"]), (200, K2B), out)
 
     def test_delete_drops_the_name_and_leaves_the_map(self):
         self.save(K2B)
